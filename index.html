@@ -412,6 +412,42 @@
   .perm-allow { background: var(--tool); color: var(--bg); }
   .perm-deny { background: var(--error); color: white; }
 
+  /* --- Queue bar --- */
+  .queue-bar:empty { display: none; }
+  .queue-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .queue-label {
+    color: var(--accent);
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .queue-text {
+    color: var(--text2);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .queue-cancel {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .queue-cancel:active { background: var(--surface2); }
+
   /* --- Input --- */
   .input-area {
     padding: 12px 16px;
@@ -546,6 +582,7 @@
     </div>
   </div>
 
+  <div class="queue-bar" id="queue-bar"></div>
   <div class="input-area">
     <form hx-post="/send" hx-swap="none" hx-on::after-request="this.reset()">
       <div class="input-row">

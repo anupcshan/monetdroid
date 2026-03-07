@@ -92,8 +92,8 @@ type Session struct {
 	Running        bool
 	CreatedAt      time.Time
 	JSONLPath      string
-	Log            []ServerMsg
-	QueuedMsgs     []string
+	Log        []ServerMsg
+	QueuedText string // pending message to send when current turn finishes
 	CostAccum      CostInfo // accumulated cost for this session
 	permChans      map[string]chan PermResponse
 	writeJSON      func(interface{})
@@ -765,8 +765,6 @@ func renderMsg(msg ServerMsg) string {
 	switch msg.Type {
 	case "user_message":
 		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, esc(msg.Text))
-	case "queued_message":
-		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble" style="opacity:0.6"><span style="font-size:10px;opacity:0.7">queued ·</span> %s</div></div>`, esc(msg.Text))
 	case "text":
 		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, renderMarkdown(msg.Text))
 	case "tool_use":
@@ -862,6 +860,16 @@ func renderCostBar(s *Session) string {
 		text += fmt.Sprintf(" · context %s", fmtK(c.ContextUsed))
 	}
 	return text
+}
+
+func renderQueueBar(sessionID, text string) string {
+	if text == "" {
+		return oobSwap("queue-bar", "innerHTML", "")
+	}
+	return oobSwap("queue-bar", "innerHTML", fmt.Sprintf(
+		`<div class="queue-content"><span class="queue-label">queued:</span> <span class="queue-text">%s</span><form hx-post="/cancel-queue" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><button type="submit" class="queue-cancel">✕</button></form></div>`,
+		esc(text), esc(sessionID),
+	))
 }
 
 func fmtK(n int) string {
@@ -1097,17 +1105,17 @@ func (h *Hub) startTurn(s *Session, text string) {
 	}
 	go func() {
 		runClaudeTurn(s, text, logBroadcast)
-		for {
-			s.mu.Lock()
-			if len(s.QueuedMsgs) == 0 {
-				s.mu.Unlock()
-				return
-			}
-			next := s.QueuedMsgs[0]
-			s.QueuedMsgs = s.QueuedMsgs[1:]
-			s.mu.Unlock()
+		// Run queued message if any
+		s.mu.Lock()
+		next := s.QueuedText
+		s.QueuedText = ""
+		s.mu.Unlock()
+		if next != "" {
+			// Clear queue display
+			h.broadcastToSession(s.ID, formatSSE("htmx", renderQueueBar(s.ID, "")))
 			s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
+			h.broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 			runClaudeTurn(s, next, logBroadcast)
 		}
 	}()
@@ -1121,6 +1129,7 @@ func (h *Hub) replaySession(cid string, s *Session) {
 	running := s.Running
 	permMode := s.PermissionMode
 	cwd := s.Cwd
+	queuedText := s.QueuedText
 	s.mu.Unlock()
 
 	// Render all messages
@@ -1154,6 +1163,7 @@ func (h *Hub) replaySession(cid string, s *Session) {
 		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, esc(label), esc(s.ID))
 	}
 	parts = append(parts, oobSwap("mode-bar", "innerHTML", modeHTML))
+	parts = append(parts, renderQueueBar(s.ID, queuedText))
 
 	event := formatSSE("htmx", strings.Join(parts, "\n"))
 	h.sendToClient(cid, event)
@@ -1255,10 +1265,15 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	if s.Running {
-		s.QueuedMsgs = append(s.QueuedMsgs, text)
+		if s.QueuedText != "" {
+			s.QueuedText += "\n" + text
+		} else {
+			s.QueuedText = text
+		}
+		queued := s.QueuedText
 		s.mu.Unlock()
-		s.Append(ServerMsg{Type: "queued_message", SessionID: s.ID, Text: text})
-		h.broadcast(ServerMsg{Type: "queued_message", SessionID: s.ID, Text: text})
+		// Update queue display for all viewers
+		h.broadcastToSession(s.ID, formatSSE("htmx", renderQueueBar(s.ID, queued)))
 	} else {
 		s.mu.Unlock()
 		h.startTurn(s, text)
@@ -1496,6 +1511,18 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(buf.String()))
 }
 
+func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.FormValue("session_id")
+	s := h.sessions.Get(sessionID)
+	if s != nil {
+		s.mu.Lock()
+		s.QueuedText = ""
+		s.mu.Unlock()
+		h.broadcastToSession(sessionID, formatSSE("htmx", renderQueueBar(sessionID, "")))
+	}
+	w.WriteHeader(204)
+}
+
 // --- Main ---
 
 func main() {
@@ -1512,6 +1539,7 @@ func main() {
 	http.HandleFunc("/mode", hub.handleMode)
 	http.HandleFunc("/switch", hub.handleSwitch)
 	http.HandleFunc("/load", hub.handleLoad)
+	http.HandleFunc("/cancel-queue", hub.handleCancelQueue)
 	http.HandleFunc("/drawer", hub.handleDrawer)
 
 	log.Printf("Monet Droid listening on %s", *addr)
