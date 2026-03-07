@@ -2,74 +2,45 @@ package main
 
 import (
 	"bufio"
-	"embed"
+	"crypto/rand"
+	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 //go:embed index.html
-var staticFiles embed.FS
+var indexHTML string
 
-// --- Protocol types ---
+// --- Internal types ---
 
-// Client -> Server
-type ClientMsg struct {
-	Type      string `json:"type"`
-	SessionID string `json:"session_id,omitempty"`
-	Text      string `json:"text,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	// History loading
-	DirKey    string `json:"dir_key,omitempty"`
-	HistoryID string `json:"history_id,omitempty"`
-	// Permission response
-	PermID         string      `json:"perm_id,omitempty"`
-	PermAllow      bool        `json:"perm_allow,omitempty"`
-	PermSuggestion interface{} `json:"perm_suggestion,omitempty"` // the chosen suggestion object, or null
-	PermMode       string      `json:"perm_mode,omitempty"`
-}
-
-// Server -> Client
 type ServerMsg struct {
-	Type      string        `json:"type"`
-	SessionID string        `json:"session_id,omitempty"`
-	Text      string        `json:"text,omitempty"`
-	Tool      string        `json:"tool,omitempty"`
-	Input     interface{}   `json:"input,omitempty"`
-	Output    string        `json:"output,omitempty"`
-	Error     string        `json:"error,omitempty"`
-	Sessions  []SessionInfo `json:"sessions,omitempty"`
-	Cost      *CostInfo     `json:"cost,omitempty"`
-	// History
-	History     []HistoryGroup   `json:"history,omitempty"`
-	HistoryMsgs []HistoryMessage `json:"history_msgs,omitempty"`
-	// Permission
+	Type            string      `json:"type"`
+	SessionID       string      `json:"session_id,omitempty"`
+	Text            string      `json:"text,omitempty"`
+	Tool            string      `json:"tool,omitempty"`
+	Input           interface{} `json:"input,omitempty"`
+	Output          string      `json:"output,omitempty"`
+	Error           string      `json:"error,omitempty"`
+	Cost            *CostInfo   `json:"cost,omitempty"`
 	PermID          string      `json:"perm_id,omitempty"`
 	PermTool        string      `json:"perm_tool,omitempty"`
 	PermInput       interface{} `json:"perm_input,omitempty"`
 	PermReason      string      `json:"perm_reason,omitempty"`
 	PermSuggestions interface{} `json:"perm_suggestions,omitempty"`
 	PermMode        string      `json:"perm_mode,omitempty"`
-}
-
-type SessionInfo struct {
-	ID           string `json:"id"`
-	ClaudeID     string `json:"claude_id"`
-	Cwd          string `json:"cwd"`
-	MessageCount int    `json:"message_count"`
-	Running      bool   `json:"running"`
-	CreatedAt    string `json:"created_at"`
 }
 
 type CostInfo struct {
@@ -93,64 +64,46 @@ type HistorySession struct {
 }
 
 type HistoryMessage struct {
-	Type   string      `json:"type"` // "user", "assistant", "tool_use", "tool_result"
+	Type   string      `json:"type"`
 	Text   string      `json:"text,omitempty"`
 	Tool   string      `json:"tool,omitempty"`
 	Input  interface{} `json:"input,omitempty"`
 	Output string      `json:"output,omitempty"`
 }
 
+type SessionUsage struct {
+	ContextUsed   int
+	ContextWindow int
+}
+
 // --- Session management ---
 
 type PermResponse struct {
 	Allow       bool
-	Permissions []interface{} // updatedPermissions to send back
+	Permissions []interface{}
 }
 
 type Session struct {
 	ID             string
-	ClaudeID       string // Claude's session_id from first response
+	ClaudeID       string
 	Cwd            string
-	PermissionMode string // current permission mode
+	PermissionMode string
 	MessageCount   int
 	Running        bool
 	CreatedAt      time.Time
-	JSONLPath      string      // path to history JSONL (for resumed sessions)
-	Log            []ServerMsg // all messages for this session (for replay)
-	QueuedMsgs     []string    // messages queued while session is busy
-	// Permission handling
-	permChans map[string]chan PermResponse
-	writeJSON func(interface{}) // write to claude's stdin
-	mu        sync.Mutex
+	JSONLPath      string
+	Log            []ServerMsg
+	QueuedMsgs     []string
+	CostAccum      CostInfo // accumulated cost for this session
+	permChans      map[string]chan PermResponse
+	writeJSON      func(interface{})
+	mu             sync.Mutex
 }
 
-// Append adds a message to the session log (caller must NOT hold s.mu)
 func (s *Session) Append(msg ServerMsg) {
 	s.mu.Lock()
 	s.Log = append(s.Log, msg)
 	s.mu.Unlock()
-}
-
-// Replay sends the full session log to a client, followed by current state
-func (s *Session) Replay(c *Client) {
-	s.mu.Lock()
-	log := make([]ServerMsg, len(s.Log))
-	copy(log, s.Log)
-	running := s.Running
-	permMode := s.PermissionMode
-	s.mu.Unlock()
-	for _, msg := range log {
-		c.Send(msg)
-	}
-	// Send final state so client knows where things stand
-	if running {
-		c.Send(ServerMsg{Type: "running", SessionID: s.ID})
-	} else {
-		c.Send(ServerMsg{Type: "done", SessionID: s.ID})
-	}
-	if permMode != "" && permMode != "default" {
-		c.Send(ServerMsg{Type: "permission_mode", SessionID: s.ID, PermMode: permMode})
-	}
 }
 
 type SessionManager struct {
@@ -168,11 +121,7 @@ func (sm *SessionManager) Create(cwd string) *Session {
 	defer sm.mu.Unlock()
 	sm.counter++
 	id := fmt.Sprintf("s%d", sm.counter)
-	s := &Session{
-		ID:        id,
-		Cwd:       cwd,
-		CreatedAt: time.Now(),
-	}
+	s := &Session{ID: id, Cwd: cwd, CreatedAt: time.Now()}
 	sm.sessions[id] = s
 	return s
 }
@@ -194,21 +143,12 @@ func (sm *SessionManager) FindByJSONLPath(path string) *Session {
 	return nil
 }
 
-func (sm *SessionManager) List() []SessionInfo {
+func (sm *SessionManager) List() []*Session {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	out := make([]SessionInfo, 0, len(sm.sessions))
+	out := make([]*Session, 0, len(sm.sessions))
 	for _, s := range sm.sessions {
-		s.mu.Lock()
-		out = append(out, SessionInfo{
-			ID:           s.ID,
-			ClaudeID:     s.ClaudeID,
-			Cwd:          s.Cwd,
-			MessageCount: s.MessageCount,
-			Running:      s.Running,
-			CreatedAt:    s.CreatedAt.Format(time.RFC3339),
-		})
-		s.mu.Unlock()
+		out = append(out, s)
 	}
 	return out
 }
@@ -238,7 +178,6 @@ func runClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 		"--permission-prompt-tool", "stdio",
 		"--permission-mode", "default",
 	}
-
 	if claudeID != "" {
 		args = append(args, "--resume", claudeID)
 	}
@@ -249,22 +188,22 @@ func runClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("stdin pipe error: %v", err)})
+		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("stdin pipe: %v", err)})
 		return
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("stdout pipe error: %v", err)})
+		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("stdout pipe: %v", err)})
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("stderr pipe error: %v", err)})
+		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("stderr pipe: %v", err)})
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("start error: %v", err)})
+		broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("start: %v", err)})
 		return
 	}
 
@@ -276,32 +215,22 @@ func runClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 	s.mu.Lock()
 	s.writeJSON = writeJSON
 	s.mu.Unlock()
-
 	defer func() {
 		s.mu.Lock()
 		s.writeJSON = nil
 		s.mu.Unlock()
 	}()
 
-	// Send initialize request
 	writeJSON(map[string]interface{}{
-		"type":       "control_request",
-		"request_id": "init_1",
-		"request":    map[string]interface{}{"subtype": "initialize"},
+		"type": "control_request", "request_id": "init_1",
+		"request": map[string]interface{}{"subtype": "initialize"},
 	})
-
-	// Send user message
 	writeJSON(map[string]interface{}{
-		"type":       "user",
-		"session_id": "",
-		"message": map[string]interface{}{
-			"role":    "user",
-			"content": prompt,
-		},
+		"type": "user", "session_id": "",
+		"message":            map[string]interface{}{"role": "user", "content": prompt},
 		"parent_tool_use_id": nil,
 	})
 
-	// Drain stderr in background
 	go func() {
 		sc := bufio.NewScanner(stderr)
 		for sc.Scan() {
@@ -317,7 +246,6 @@ func runClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 		if line == "" {
 			continue
 		}
-
 		var event map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			log.Printf("[parse error][%s] %s: %s", s.ID, err, line[:min(len(line), 200)])
@@ -325,38 +253,28 @@ func runClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 		}
 
 		eventType, _ := event["type"].(string)
-
 		switch eventType {
 		case "control_request":
-			// Permission request from Claude
 			requestID, _ := event["request_id"].(string)
 			request, _ := event["request"].(map[string]interface{})
 			subtype, _ := request["subtype"].(string)
-
 			if subtype == "can_use_tool" {
 				toolName, _ := request["tool_name"].(string)
 				toolInput := request["input"]
 				reason, _ := request["decision_reason"].(string)
 				suggestions := request["permission_suggestions"]
 
-				// Create response channel
 				ch := make(chan PermResponse, 1)
 				s.mu.Lock()
 				s.permChans[requestID] = ch
 				s.mu.Unlock()
 
-				// Send permission request to browser
 				broadcast(ServerMsg{
-					Type:            "permission_request",
-					SessionID:       s.ID,
-					PermID:          requestID,
-					PermTool:        toolName,
-					PermInput:       toolInput,
-					PermReason:      reason,
-					PermSuggestions: suggestions,
+					Type: "permission_request", SessionID: s.ID,
+					PermID: requestID, PermTool: toolName, PermInput: toolInput,
+					PermReason: reason, PermSuggestions: suggestions,
 				})
 
-				// Wait for browser response (with timeout)
 				var resp PermResponse
 				select {
 				case resp = <-ch:
@@ -368,46 +286,32 @@ func runClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 				delete(s.permChans, requestID)
 				s.mu.Unlock()
 
-				// Send control response to Claude
 				if resp.Allow {
-					respPayload := map[string]interface{}{
-						"behavior":     "allow",
-						"updatedInput": toolInput,
-					}
+					payload := map[string]interface{}{"behavior": "allow", "updatedInput": toolInput}
 					if len(resp.Permissions) > 0 {
-						respPayload["updatedPermissions"] = resp.Permissions
+						payload["updatedPermissions"] = resp.Permissions
 					}
 					writeJSON(map[string]interface{}{
 						"type": "control_response",
 						"response": map[string]interface{}{
-							"subtype":    "success",
-							"request_id": requestID,
-							"response":   respPayload,
+							"subtype": "success", "request_id": requestID, "response": payload,
 						},
 					})
 				} else {
 					writeJSON(map[string]interface{}{
 						"type": "control_response",
 						"response": map[string]interface{}{
-							"subtype":    "success",
-							"request_id": requestID,
-							"response": map[string]interface{}{
-								"behavior": "deny",
-								"message":  "User denied this action",
-							},
+							"subtype": "success", "request_id": requestID,
+							"response": map[string]interface{}{"behavior": "deny", "message": "User denied this action"},
 						},
 					})
 				}
 			}
-
 		case "control_response":
-			// Response to our initialize request, ignore
-
+			// ignore
 		case "result":
 			handleStreamEvent(s, event, broadcast)
-			// Close stdin so claude exits
 			stdin.Close()
-
 		default:
 			handleStreamEvent(s, event, broadcast)
 		}
@@ -416,7 +320,6 @@ func runClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 	if err := cmd.Wait(); err != nil {
 		log.Printf("[claude exit][%s] %v", s.ID, err)
 	}
-
 	broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 }
 
@@ -425,7 +328,6 @@ func handleStreamEvent(s *Session, event map[string]interface{}, broadcast func(
 
 	switch eventType {
 	case "system":
-		// Capture session_id from init message
 		if sid, ok := event["session_id"].(string); ok && sid != "" {
 			s.mu.Lock()
 			if s.ClaudeID == "" {
@@ -461,7 +363,6 @@ func handleStreamEvent(s *Session, event map[string]interface{}, broadcast func(
 				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: name, Input: input})
 			}
 		}
-		// Extract usage/cost info
 		if usage, ok := msg["usage"].(map[string]interface{}); ok {
 			inTok, _ := usage["input_tokens"].(float64)
 			outTok, _ := usage["output_tokens"].(float64)
@@ -471,17 +372,12 @@ func handleStreamEvent(s *Session, event map[string]interface{}, broadcast func(
 			if inTok > 0 || outTok > 0 {
 				broadcast(ServerMsg{
 					Type: "cost", SessionID: s.ID,
-					Cost: &CostInfo{
-						InputTokens:  int(inTok),
-						OutputTokens: int(outTok),
-						ContextUsed:  contextUsed,
-					},
+					Cost: &CostInfo{InputTokens: int(inTok), OutputTokens: int(outTok), ContextUsed: contextUsed},
 				})
 			}
 		}
 
 	case "result":
-		// Final result message
 		if text, ok := event["result"].(string); ok && text != "" {
 			broadcast(ServerMsg{Type: "result", SessionID: s.ID, Text: text})
 		}
@@ -490,15 +386,11 @@ func handleStreamEvent(s *Session, event map[string]interface{}, broadcast func(
 			s.ClaudeID = sid
 			s.mu.Unlock()
 		}
-		// Extract context window from modelUsage
 		if mu, ok := event["modelUsage"].(map[string]interface{}); ok {
 			for _, v := range mu {
 				if info, ok := v.(map[string]interface{}); ok {
 					if cw, ok := info["contextWindow"].(float64); ok && cw > 0 {
-						broadcast(ServerMsg{
-							Type: "cost", SessionID: s.ID,
-							Cost: &CostInfo{ContextWindow: int(cw)},
-						})
+						broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: &CostInfo{ContextWindow: int(cw)}})
 					}
 					break
 				}
@@ -506,7 +398,6 @@ func handleStreamEvent(s *Session, event map[string]interface{}, broadcast func(
 		}
 
 	case "user":
-		// Tool results - extract output
 		msg, ok := event["message"].(map[string]interface{})
 		if !ok {
 			return
@@ -579,29 +470,16 @@ func scanHistory() ([]HistoryGroup, error) {
 				cwd = sessionCwd
 			}
 			sessions = append(sessions, HistorySession{
-				ID:      sessionID,
-				Summary: summary,
-				ModTime: info.ModTime().Format(time.RFC3339),
-				ModUnix: info.ModTime().Unix(),
+				ID: sessionID, Summary: summary,
+				ModTime: info.ModTime().Format(time.RFC3339), ModUnix: info.ModTime().Unix(),
 			})
 		}
-
 		if cwd == "" {
-			// Fallback: derive from directory name (best-effort)
 			cwd = "/" + strings.ReplaceAll(entry.Name(), "-", "/")
 		}
-
-		sort.Slice(sessions, func(i, j int) bool {
-			return sessions[i].ModUnix > sessions[j].ModUnix
-		})
-
-		groups = append(groups, HistoryGroup{
-			Dir:      cwd,
-			DirKey:   entry.Name(),
-			Sessions: sessions,
-		})
+		sort.Slice(sessions, func(i, j int) bool { return sessions[i].ModUnix > sessions[j].ModUnix })
+		groups = append(groups, HistoryGroup{Dir: cwd, DirKey: entry.Name(), Sessions: sessions})
 	}
-
 	sort.Slice(groups, func(i, j int) bool {
 		if len(groups[i].Sessions) == 0 {
 			return false
@@ -611,22 +489,17 @@ func scanHistory() ([]HistoryGroup, error) {
 		}
 		return groups[i].Sessions[0].ModUnix > groups[j].Sessions[0].ModUnix
 	})
-
 	return groups, nil
 }
 
-// getSessionInfo reads the first few lines of a JSONL file to extract
-// the first user message (as summary) and the cwd.
 func getSessionInfo(fpath string) (summary, cwd string) {
 	f, err := os.Open(fpath)
 	if err != nil {
 		return "", ""
 	}
 	defer f.Close()
-
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 256*1024), 256*1024)
-
 	for i := 0; i < 30 && scanner.Scan(); i++ {
 		var obj map[string]interface{}
 		if err := json.Unmarshal([]byte(scanner.Text()), &obj); err != nil {
@@ -666,23 +539,14 @@ func extractTextContent(content interface{}) string {
 	return ""
 }
 
-type SessionUsage struct {
-	ContextUsed   int `json:"context_used"`
-	ContextWindow int `json:"context_window"`
-}
-
-// parseSessionMessages reads a JSONL file and returns all displayable messages,
-// the Claude session ID, and usage stats.
 func parseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, usage SessionUsage, err error) {
 	f, err := os.Open(jsonlPath)
 	if err != nil {
 		return nil, "", usage, err
 	}
 	defer f.Close()
-
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -692,14 +556,10 @@ func parseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		if err := json.Unmarshal([]byte(line), &obj); err != nil {
 			continue
 		}
-
-		// Skip sidechains
 		if sc, ok := obj["isSidechain"].(bool); ok && sc {
 			continue
 		}
-
 		msgType, _ := obj["type"].(string)
-
 		switch msgType {
 		case "user":
 			if sid, ok := obj["sessionId"].(string); ok && sid != "" {
@@ -709,8 +569,7 @@ func parseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			if !ok {
 				continue
 			}
-			content := msg["content"]
-			switch c := content.(type) {
+			switch c := msg["content"].(type) {
 			case string:
 				if c != "" {
 					msgs = append(msgs, HistoryMessage{Type: "user", Text: c})
@@ -740,13 +599,11 @@ func parseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					}
 				}
 			}
-
 		case "assistant":
 			msg, ok := obj["message"].(map[string]interface{})
 			if !ok {
 				continue
 			}
-			// Track latest usage for context
 			if u, ok := msg["usage"].(map[string]interface{}); ok {
 				inTok, _ := u["input_tokens"].(float64)
 				outTok, _ := u["output_tokens"].(float64)
@@ -769,17 +626,14 @@ func parseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 				blockType, _ := b["type"].(string)
 				switch blockType {
 				case "text":
-					text, _ := b["text"].(string)
-					if text != "" {
+					if text, _ := b["text"].(string); text != "" {
 						msgs = append(msgs, HistoryMessage{Type: "assistant", Text: text})
 					}
 				case "tool_use":
 					name, _ := b["name"].(string)
-					input := b["input"]
-					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: name, Input: input})
+					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: name, Input: b["input"]})
 				}
 			}
-
 		case "result":
 			if sid, ok := obj["session_id"].(string); ok && sid != "" {
 				claudeID = sid
@@ -796,51 +650,441 @@ func parseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			}
 		}
 	}
-
 	return msgs, claudeID, usage, scanner.Err()
 }
 
-// --- WebSocket hub ---
+// --- HTML rendering ---
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+var (
+	reCodeBlock  = regexp.MustCompile("(?s)```\\w*\n(.*?)```")
+	reCodeBlock2 = regexp.MustCompile("(?s)```(.*?)```")
+	reInlineCode = regexp.MustCompile("`([^`]+)`")
+	reBold       = regexp.MustCompile(`\*\*(.+?)\*\*`)
+)
+
+func esc(s string) string { return html.EscapeString(s) }
+
+func renderMarkdown(text string) string {
+	s := esc(text)
+	s = reCodeBlock.ReplaceAllString(s, "<pre>$1</pre>")
+	s = reCodeBlock2.ReplaceAllString(s, "<pre>$1</pre>")
+	s = reInlineCode.ReplaceAllString(s, "<code>$1</code>")
+	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
+	s = strings.ReplaceAll(s, "\n", "<br>")
+	return s
 }
 
-type Client struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+func formatToolInput(tool string, input interface{}) string {
+	m, ok := input.(map[string]interface{})
+	if !ok {
+		j, _ := json.MarshalIndent(input, "", "  ")
+		return string(j)
+	}
+	filePath, _ := m["file_path"].(string)
+	if filePath == "" {
+		filePath, _ = m["path"].(string)
+	}
+	switch tool {
+	case "Bash":
+		cmd, _ := m["command"].(string)
+		if cmd != "" {
+			return cmd
+		}
+	case "Read", "FileRead":
+		if filePath != "" {
+			return filePath
+		}
+	case "Write", "FileWrite":
+		content, _ := m["content"].(string)
+		if len(content) > 200 {
+			content = content[:200]
+		}
+		return filePath + "\n" + content
+	case "Edit", "FileEdit":
+		var lines []string
+		lines = append(lines, filePath)
+		if old, _ := m["old_string"].(string); old != "" {
+			lines = append(lines, "--- old ---", old)
+		}
+		if new_, _ := m["new_string"].(string); new_ != "" {
+			lines = append(lines, "+++ new +++", new_)
+		}
+		return strings.Join(lines, "\n")
+	case "Grep":
+		if p, _ := m["pattern"].(string); p != "" {
+			return p
+		}
+	case "Glob":
+		if p, _ := m["pattern"].(string); p != "" {
+			return p
+		}
+	}
+	j, _ := json.MarshalIndent(input, "", "  ")
+	return string(j)
 }
 
-func (c *Client) Send(msg ServerMsg) {
+func formatPermDetail(tool string, input interface{}) string {
+	m, ok := input.(map[string]interface{})
+	if !ok {
+		j, _ := json.MarshalIndent(input, "", "  ")
+		return string(j)
+	}
+	filePath, _ := m["file_path"].(string)
+	if filePath == "" {
+		filePath, _ = m["path"].(string)
+	}
+	switch tool {
+	case "Bash":
+		cmd, _ := m["command"].(string)
+		desc, _ := m["description"].(string)
+		if desc != "" {
+			return desc + "\n\n" + cmd
+		}
+		return cmd
+	case "Edit", "FileEdit":
+		var lines []string
+		lines = append(lines, filePath)
+		if old, _ := m["old_string"].(string); old != "" {
+			lines = append(lines, "--- old ---", old)
+		}
+		if new_, _ := m["new_string"].(string); new_ != "" {
+			lines = append(lines, "+++ new +++", new_)
+		}
+		return strings.Join(lines, "\n")
+	case "Write", "FileWrite":
+		content, _ := m["content"].(string)
+		return filePath + "\n\n" + content
+	case "Read", "FileRead":
+		return filePath
+	}
+	j, _ := json.MarshalIndent(input, "", "  ")
+	return string(j)
+}
+
+func renderMsg(msg ServerMsg) string {
+	switch msg.Type {
+	case "user_message":
+		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, esc(msg.Text))
+	case "queued_message":
+		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble" style="opacity:0.6"><span style="font-size:10px;opacity:0.7">queued ·</span> %s</div></div>`, esc(msg.Text))
+	case "text":
+		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, renderMarkdown(msg.Text))
+	case "tool_use":
+		detail := formatToolInput(msg.Tool, msg.Input)
+		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, esc(msg.Tool), esc(detail))
+	case "tool_result":
+		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-result-chip"><summary class="tool-result-summary">result</summary><div class="tool-result-full">%s</div></details></div>`, esc(msg.Output))
+	case "error":
+		return fmt.Sprintf(`<div class="msg"><div class="msg-error">✗ %s</div></div>`, esc(msg.Error))
+	case "permission_request":
+		return renderPermission(msg)
+	case "result":
+		return "" // result text is already sent as a text event
+	}
+	return ""
+}
+
+func renderPermission(msg ServerMsg) string {
+	detail := formatPermDetail(msg.PermTool, msg.PermInput)
+	var suggBtns strings.Builder
+	if suggestions, ok := msg.PermSuggestions.([]interface{}); ok {
+		for _, s := range suggestions {
+			sm, ok := s.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			var label string
+			switch sm["type"] {
+			case "setMode":
+				mode, _ := sm["mode"].(string)
+				if mode == "acceptEdits" {
+					label = "Accept Edits"
+				} else {
+					label = mode
+				}
+			case "addDirectories":
+				dirs, _ := sm["directories"].([]interface{})
+				var ds []string
+				for _, d := range dirs {
+					if ds_, ok := d.(string); ok {
+						ds = append(ds, ds_)
+					}
+				}
+				label = "Add " + strings.Join(ds, ", ")
+			default:
+				t, _ := sm["type"].(string)
+				label = t
+			}
+			sJSON, _ := json.Marshal(s)
+			fmt.Fprintf(&suggBtns,
+				`<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><input type="hidden" name="suggestion" value="%s"><button type="submit" class="perm-allow" style="width:100%%;font-size:11px">%s</button></form>`,
+				esc(msg.SessionID), esc(msg.PermID), esc(string(sJSON)), esc(label),
+			)
+		}
+	}
+
+	return fmt.Sprintf(`<div class="perm-prompt" id="perm-%s">
+<div class="perm-header">Permission Required</div>
+<div class="perm-tool">⚙ %s</div>
+%s
+<div class="perm-detail">%s</div>
+<div class="perm-actions" id="perm-actions-%s">
+<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form>
+<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow</button></form>
+%s
+</div></div>`,
+		esc(msg.PermID), esc(msg.PermTool),
+		func() string {
+			if msg.PermReason != "" {
+				return fmt.Sprintf(`<div class="perm-reason">%s</div>`, esc(msg.PermReason))
+			}
+			return ""
+		}(),
+		esc(detail), esc(msg.PermID),
+		esc(msg.SessionID), esc(msg.PermID),
+		esc(msg.SessionID), esc(msg.PermID),
+		suggBtns.String(),
+	)
+}
+
+func renderCostBar(s *Session) string {
+	s.mu.Lock()
+	c := s.CostAccum
+	s.mu.Unlock()
+	if c.InputTokens == 0 && c.OutputTokens == 0 && c.ContextUsed == 0 {
+		return ""
+	}
+	text := fmt.Sprintf("↓%s ↑%s", fmtK(c.InputTokens), fmtK(c.OutputTokens))
+	if c.ContextUsed > 0 && c.ContextWindow > 0 {
+		pct := 100 * c.ContextUsed / c.ContextWindow
+		text += fmt.Sprintf(" · context %s/%s (%d%%)", fmtK(c.ContextUsed), fmtK(c.ContextWindow), pct)
+	} else if c.ContextUsed > 0 {
+		text += fmt.Sprintf(" · context %s", fmtK(c.ContextUsed))
+	}
+	return text
+}
+
+func fmtK(n int) string {
+	if n >= 1000000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1000000)
+	}
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func timeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return fmt.Sprintf("%dmo ago", int(d.Hours()/24/30))
+	}
+}
+
+func shortPath(p string) string {
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(p, home) {
+		return "~" + p[len(home):]
+	}
+	return p
+}
+
+// --- SSE format ---
+
+func formatSSE(event, data string) string {
+	var buf strings.Builder
+	buf.WriteString("event: ")
+	buf.WriteString(event)
+	buf.WriteString("\n")
+	for _, line := range strings.Split(data, "\n") {
+		buf.WriteString("data: ")
+		buf.WriteString(line)
+		buf.WriteString("\n")
+	}
+	buf.WriteString("\n")
+	return buf.String()
+}
+
+func oobSwap(id, strategy, content string) string {
+	return fmt.Sprintf(`<div id="%s" hx-swap-oob="%s">%s</div>`, id, strategy, content)
+}
+
+// --- SSE Hub ---
+
+type SSEClient struct {
+	id        string
+	sessionID string
+	events    chan string
+	done      chan struct{}
+	mu        sync.Mutex
+}
+
+func (c *SSEClient) Send(event string) {
+	select {
+	case c.events <- event:
+	default:
+		// drop if buffer full
+	}
+}
+
+func (c *SSEClient) ActiveSession() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	c.conn.WriteJSON(msg)
+	return c.sessionID
+}
+
+func (c *SSEClient) SetSession(id string) {
+	c.mu.Lock()
+	c.sessionID = id
+	c.mu.Unlock()
 }
 
 type Hub struct {
-	clients  map[*Client]bool
+	clients  map[string]*SSEClient
 	sessions *SessionManager
 	mu       sync.RWMutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:  make(map[*Client]bool),
+		clients:  make(map[string]*SSEClient),
 		sessions: NewSessionManager(),
 	}
 }
 
-func (h *Hub) addClient(c *Client) {
+func (h *Hub) getOrCreateClient(cid string) *SSEClient {
 	h.mu.Lock()
-	h.clients[c] = true
+	defer h.mu.Unlock()
+	if c, ok := h.clients[cid]; ok {
+		return c
+	}
+	c := &SSEClient{id: cid, events: make(chan string, 64), done: make(chan struct{})}
+	h.clients[cid] = c
+	return c
+}
+
+func (h *Hub) removeClient(cid string) {
+	h.mu.Lock()
+	delete(h.clients, cid)
 	h.mu.Unlock()
 }
 
-func (h *Hub) removeClient(c *Client) {
-	h.mu.Lock()
-	delete(h.clients, c)
-	h.mu.Unlock()
+func (h *Hub) broadcastToSession(sessionID string, event string) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	sent := 0
+	for _, c := range h.clients {
+		if c.ActiveSession() == sessionID {
+			c.Send(event)
+			sent++
+		}
+	}
+	if sent == 0 {
+		log.Printf("[broadcastToSession] no clients viewing session %s (total clients: %d)", sessionID, len(h.clients))
+	}
+}
+
+func (h *Hub) sendToClient(cid string, event string) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if c, ok := h.clients[cid]; ok {
+		c.Send(event)
+	}
+}
+
+// broadcast sends a ServerMsg to all clients viewing that session.
+// Also handles cost accumulation on the session.
+func (h *Hub) broadcast(msg ServerMsg) {
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		return
+	}
+	s := h.sessions.Get(sessionID)
+
+	// Accumulate cost
+	if msg.Type == "cost" && msg.Cost != nil && s != nil {
+		s.mu.Lock()
+		s.CostAccum.InputTokens += msg.Cost.InputTokens
+		s.CostAccum.OutputTokens += msg.Cost.OutputTokens
+		if msg.Cost.ContextUsed > 0 {
+			s.CostAccum.ContextUsed = msg.Cost.ContextUsed
+		}
+		if msg.Cost.ContextWindow > 0 {
+			s.CostAccum.ContextWindow = msg.Cost.ContextWindow
+		}
+		s.mu.Unlock()
+	}
+
+	// Render message HTML
+	msgHTML := renderMsg(msg)
+
+	// Build SSE event with OOB swaps
+	var parts []string
+	if msgHTML != "" {
+		parts = append(parts, oobSwap("messages", "beforeend", msgHTML))
+	}
+
+	// Include cost bar update
+	if msg.Type == "cost" && s != nil {
+		costText := renderCostBar(s)
+		parts = append(parts, oobSwap("cost-bar", "innerHTML", costText))
+	}
+
+	thinkingHTML := `<div class="thinking-indicator" id="thinking"><span></span><span></span><span></span></div>`
+	emptyThinking := oobSwap("thinking", "outerHTML", `<div id="thinking"></div>`)
+
+	// Running/done indicator
+	if msg.Type == "running" {
+		parts = append(parts, oobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
+		parts = append(parts, oobSwap("messages", "beforeend", thinkingHTML))
+	}
+	if msg.Type == "done" {
+		parts = append(parts, oobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
+		parts = append(parts, emptyThinking)
+	}
+	// Replace thinking with message, then re-add thinking after tool results
+	if msgHTML != "" {
+		parts = append(parts, oobSwap("thinking", "outerHTML", ""))
+		if msg.Type == "tool_use" || msg.Type == "tool_result" {
+			// Claude is still working — re-add thinking after this message
+			parts = append(parts, oobSwap("messages", "beforeend", thinkingHTML))
+		}
+	}
+
+	// Permission mode
+	if msg.Type == "permission_mode" {
+		var modeHTML string
+		if msg.PermMode != "" && msg.PermMode != "default" {
+			names := map[string]string{
+				"acceptEdits":       "Auto-accepting edits",
+				"plan":              "Plan mode (read-only)",
+				"bypassPermissions": "All permissions bypassed",
+				"dontAsk":           "Don't ask mode",
+			}
+			label := names[msg.PermMode]
+			if label == "" {
+				label = msg.PermMode
+			}
+			modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, esc(label), esc(sessionID))
+		}
+		parts = append(parts, oobSwap("mode-bar", "innerHTML", modeHTML))
+	}
+
+	if len(parts) == 0 {
+		return
+	}
+	event := formatSSE("htmx", strings.Join(parts, "\n"))
+	log.Printf("[broadcast][%s] type=%s parts=%d", sessionID, msg.Type, len(parts))
+	h.broadcastToSession(sessionID, event)
 }
 
 func (h *Hub) startTurn(s *Session, text string) {
@@ -853,7 +1097,6 @@ func (h *Hub) startTurn(s *Session, text string) {
 	}
 	go func() {
 		runClaudeTurn(s, text, logBroadcast)
-		// Drain queued messages
 		for {
 			s.mu.Lock()
 			if len(s.QueuedMsgs) == 0 {
@@ -863,7 +1106,6 @@ func (h *Hub) startTurn(s *Session, text string) {
 			next := s.QueuedMsgs[0]
 			s.QueuedMsgs = s.QueuedMsgs[1:]
 			s.mu.Unlock()
-			// Convert queued to active
 			s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			runClaudeTurn(s, next, logBroadcast)
@@ -871,210 +1113,387 @@ func (h *Hub) startTurn(s *Session, text string) {
 	}()
 }
 
-func (h *Hub) broadcast(msg ServerMsg) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for c := range h.clients {
-		c.Send(msg)
+// replaySession sends the full session state to a specific client
+func (h *Hub) replaySession(cid string, s *Session) {
+	s.mu.Lock()
+	log_ := make([]ServerMsg, len(s.Log))
+	copy(log_, s.Log)
+	running := s.Running
+	permMode := s.PermissionMode
+	cwd := s.Cwd
+	s.mu.Unlock()
+
+	// Render all messages
+	var msgsHTML strings.Builder
+	for _, msg := range log_ {
+		msgsHTML.WriteString(renderMsg(msg))
+	}
+
+	// Build one big SSE event with all OOB swaps
+	var parts []string
+	parts = append(parts, oobSwap("session-label", "innerHTML", esc(shortPath(cwd))))
+	parts = append(parts, oobSwap("messages", "innerHTML", msgsHTML.String()))
+	parts = append(parts, oobSwap("cost-bar", "innerHTML", renderCostBar(s)))
+
+	if running {
+		parts = append(parts, oobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
+	} else {
+		parts = append(parts, oobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
+	}
+
+	var modeHTML string
+	if permMode != "" && permMode != "default" {
+		names := map[string]string{
+			"acceptEdits": "Auto-accepting edits", "plan": "Plan mode (read-only)",
+			"bypassPermissions": "All permissions bypassed", "dontAsk": "Don't ask mode",
+		}
+		label := names[permMode]
+		if label == "" {
+			label = permMode
+		}
+		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, esc(label), esc(s.ID))
+	}
+	parts = append(parts, oobSwap("mode-bar", "innerHTML", modeHTML))
+
+	event := formatSSE("htmx", strings.Join(parts, "\n"))
+	h.sendToClient(cid, event)
+}
+
+// --- HTTP handlers ---
+
+func getCID(w http.ResponseWriter, r *http.Request) string {
+	cookie, err := r.Cookie("cid")
+	if err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	b := make([]byte, 16)
+	rand.Read(b)
+	cid := hex.EncodeToString(b)
+	http.SetCookie(w, &http.Cookie{Name: "cid", Value: cid, Path: "/", MaxAge: 86400 * 365})
+	return cid
+}
+
+func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
+	getCID(w, r) // ensure cookie is set
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(indexHTML))
+}
+
+func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	cid := getCID(w, r)
+	client := h.getOrCreateClient(cid)
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	// Send initial heartbeat
+	fmt.Fprint(w, formatSSE("heartbeat", "connected"))
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			h.removeClient(cid)
+			return
+		case event := <-client.events:
+			log.Printf("[sse][%s] sending %d bytes", cid[:8], len(event))
+			fmt.Fprint(w, event)
+			flusher.Flush()
+		case <-time.After(30 * time.Second):
+			fmt.Fprint(w, formatSSE("heartbeat", "ping"))
+			flusher.Flush()
+		}
 	}
 }
 
-func (h *Hub) handleClient(c *Client) {
-	defer func() {
-		h.removeClient(c)
-		c.conn.Close()
-	}()
-	h.addClient(c)
+func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
+	cid := getCID(w, r)
+	cwd := r.FormValue("cwd")
+	if cwd == "" {
+		home, _ := os.UserHomeDir()
+		cwd = home
+	}
+	if strings.HasPrefix(cwd, "~/") {
+		home, _ := os.UserHomeDir()
+		cwd = home + cwd[1:]
+	}
 
-	// Send current sessions on connect
-	c.Send(ServerMsg{Type: "sessions", Sessions: h.sessions.List()})
+	s := h.sessions.Create(cwd)
 
-	for {
-		var msg ClientMsg
-		if err := c.conn.ReadJSON(&msg); err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("ws error: %v", err)
-			}
-			return
-		}
+	client := h.getOrCreateClient(cid)
+	client.SetSession(s.ID)
+	h.replaySession(cid, s)
 
-		switch msg.Type {
-		case "new_session":
-			cwd := msg.Cwd
-			if cwd == "" {
-				home, _ := os.UserHomeDir()
-				cwd = home
-			}
-			// Expand ~
-			if strings.HasPrefix(cwd, "~/") {
-				home, _ := os.UserHomeDir()
-				cwd = home + cwd[1:]
-			}
-			s := h.sessions.Create(cwd)
-			c.Send(ServerMsg{Type: "session_created", SessionID: s.ID, Text: cwd})
-			h.broadcast(ServerMsg{Type: "sessions", Sessions: h.sessions.List()})
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(204)
+}
 
-		case "message":
-			s := h.sessions.Get(msg.SessionID)
-			if s == nil {
-				c.Send(ServerMsg{Type: "error", Error: "unknown session"})
-				continue
-			}
-			s.mu.Lock()
-			if s.Running {
-				s.QueuedMsgs = append(s.QueuedMsgs, msg.Text)
-				s.mu.Unlock()
-				// Log queued message and notify all clients
-				s.Append(ServerMsg{Type: "queued_message", SessionID: s.ID, Text: msg.Text})
-				h.broadcast(ServerMsg{Type: "queued_message", SessionID: s.ID, Text: msg.Text})
-				continue
-			}
-			s.mu.Unlock()
-			h.startTurn(s, msg.Text)
+func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
+	cid := getCID(w, r)
+	text := r.FormValue("text")
+	if text == "" {
+		w.WriteHeader(204)
+		return
+	}
 
-		case "permission_response":
-			s := h.sessions.Get(msg.SessionID)
-			if s == nil {
-				continue
-			}
-			s.mu.Lock()
-			ch, ok := s.permChans[msg.PermID]
-			s.mu.Unlock()
-			if ok {
-				var perms []interface{}
-				if msg.PermSuggestion != nil {
-					perms = []interface{}{msg.PermSuggestion}
-					// Track mode changes
-					if sm, ok := msg.PermSuggestion.(map[string]interface{}); ok {
-						if sm["type"] == "setMode" {
-							if mode, ok := sm["mode"].(string); ok {
-								s.mu.Lock()
-								s.PermissionMode = mode
-								s.mu.Unlock()
-								h.broadcast(ServerMsg{Type: "permission_mode", SessionID: msg.SessionID, PermMode: mode})
-							}
+	client := h.getOrCreateClient(cid)
+	sessionID := client.ActiveSession()
+	s := h.sessions.Get(sessionID)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	s.mu.Lock()
+	if s.Running {
+		s.QueuedMsgs = append(s.QueuedMsgs, text)
+		s.mu.Unlock()
+		s.Append(ServerMsg{Type: "queued_message", SessionID: s.ID, Text: text})
+		h.broadcast(ServerMsg{Type: "queued_message", SessionID: s.ID, Text: text})
+	} else {
+		s.mu.Unlock()
+		h.startTurn(s, text)
+	}
+
+	w.WriteHeader(204)
+}
+
+func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.FormValue("session_id")
+	permID := r.FormValue("perm_id")
+	allow := r.FormValue("allow") == "true"
+	suggestionJSON := r.FormValue("suggestion")
+
+	s := h.sessions.Get(sessionID)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	s.mu.Lock()
+	ch, ok := s.permChans[permID]
+	s.mu.Unlock()
+
+	if ok {
+		var perms []interface{}
+		if suggestionJSON != "" {
+			var suggestion interface{}
+			if err := json.Unmarshal([]byte(suggestionJSON), &suggestion); err == nil {
+				perms = []interface{}{suggestion}
+				if sm, ok := suggestion.(map[string]interface{}); ok {
+					if sm["type"] == "setMode" {
+						if mode, ok := sm["mode"].(string); ok {
+							s.mu.Lock()
+							s.PermissionMode = mode
+							s.mu.Unlock()
+							h.broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: mode})
 						}
 					}
 				}
-				ch <- PermResponse{Allow: msg.PermAllow, Permissions: perms}
 			}
+		}
+		ch <- PermResponse{Allow: allow, Permissions: perms}
+	}
 
-		case "set_permission_mode":
-			s := h.sessions.Get(msg.SessionID)
-			if s == nil {
-				continue
-			}
+	// Replace the permission buttons with result text
+	var resultHTML string
+	if allow {
+		label := "Allowed"
+		if suggestionJSON != "" {
+			label = "Allowed (with suggestion)"
+		}
+		resultHTML = fmt.Sprintf(`<span style="color:var(--tool);font-size:12px">✓ %s</span>`, esc(label))
+	} else {
+		resultHTML = `<span style="color:var(--error);font-size:12px">✗ Denied</span>`
+	}
+	event := formatSSE("htmx", oobSwap("perm-actions-"+permID, "innerHTML", resultHTML))
+	h.broadcastToSession(sessionID, event)
+
+	w.WriteHeader(204)
+}
+
+func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.FormValue("session_id")
+	mode := r.FormValue("mode")
+
+	s := h.sessions.Get(sessionID)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	s.mu.Lock()
+	s.PermissionMode = mode
+	writeJSON := s.writeJSON
+	s.mu.Unlock()
+
+	if writeJSON != nil {
+		writeJSON(map[string]interface{}{
+			"type": "control_request", "request_id": fmt.Sprintf("mode_%d", time.Now().UnixNano()),
+			"request": map[string]interface{}{"subtype": "set_permission_mode", "mode": mode},
+		})
+	}
+	h.broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: mode})
+
+	w.WriteHeader(204)
+}
+
+func (h *Hub) handleSwitch(w http.ResponseWriter, r *http.Request) {
+	cid := getCID(w, r)
+	sessionID := r.FormValue("session_id")
+
+	s := h.sessions.Get(sessionID)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	client := h.getOrCreateClient(cid)
+	client.SetSession(s.ID)
+	h.replaySession(cid, s)
+
+	w.WriteHeader(204)
+}
+
+func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
+	cid := getCID(w, r)
+	dirKey := r.FormValue("dir_key")
+	historyID := r.FormValue("history_id")
+
+	if strings.Contains(dirKey, "/") || strings.Contains(dirKey, "..") ||
+		strings.Contains(historyID, "/") || strings.Contains(historyID, "..") {
+		w.WriteHeader(204)
+		return
+	}
+
+	home, _ := os.UserHomeDir()
+	jsonlPath := filepath.Join(home, ".claude", "projects", dirKey, historyID+".jsonl")
+
+	// Reuse existing session
+	if s := h.sessions.FindByJSONLPath(jsonlPath); s != nil {
+		client := h.getOrCreateClient(cid)
+		client.SetSession(s.ID)
+		h.replaySession(cid, s)
+		w.WriteHeader(204)
+		return
+	}
+
+	allMsgs, claudeID, sessUsage, err := parseSessionMessages(jsonlPath)
+	if err != nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	cwd := ""
+	if len(allMsgs) > 0 {
+		_, cwd = getSessionInfo(jsonlPath)
+	}
+	if cwd == "" {
+		cwd = "/" + strings.ReplaceAll(dirKey, "-", "/")
+	}
+
+	s := h.sessions.Create(cwd)
+	s.mu.Lock()
+	s.ClaudeID = claudeID
+	s.JSONLPath = jsonlPath
+	// Set cost from history
+	s.CostAccum.ContextUsed = sessUsage.ContextUsed
+	s.CostAccum.ContextWindow = sessUsage.ContextWindow
+	s.mu.Unlock()
+
+	// Populate log
+	for _, m := range allMsgs {
+		sm := ServerMsg{SessionID: s.ID}
+		switch m.Type {
+		case "user":
+			sm.Type = "user_message"
+			sm.Text = m.Text
+		case "assistant":
+			sm.Type = "text"
+			sm.Text = m.Text
+		case "tool_use":
+			sm.Type = "tool_use"
+			sm.Tool = m.Tool
+			sm.Input = m.Input
+		case "tool_result":
+			sm.Type = "tool_result"
+			sm.Output = m.Output
+		default:
+			continue
+		}
+		s.Log = append(s.Log, sm)
+	}
+
+	client := h.getOrCreateClient(cid)
+	client.SetSession(s.ID)
+	h.replaySession(cid, s)
+
+	w.WriteHeader(204)
+}
+
+func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
+	var buf strings.Builder
+
+	// Active sessions
+	sessions := h.sessions.List()
+	if len(sessions) > 0 {
+		buf.WriteString(`<div class="drawer-section-label">Active Sessions</div>`)
+		for _, s := range sessions {
 			s.mu.Lock()
-			s.PermissionMode = msg.PermMode
-			writeJSON := s.writeJSON
+			running := s.Running
+			sp := shortPath(s.Cwd)
+			sid := s.ID
+			mc := s.MessageCount
 			s.mu.Unlock()
-			if writeJSON != nil {
-				// Send control request to change mode
-				writeJSON(map[string]interface{}{
-					"type":       "control_request",
-					"request_id": fmt.Sprintf("mode_%d", time.Now().UnixNano()),
-					"request": map[string]interface{}{
-						"subtype": "set_permission_mode",
-						"mode":    msg.PermMode,
-					},
-				})
+			runHTML := ""
+			if running {
+				runHTML = `<span class="di-running"></span> running`
 			}
-			h.broadcast(ServerMsg{Type: "permission_mode", SessionID: msg.SessionID, PermMode: msg.PermMode})
-
-		case "switch_session":
-			s := h.sessions.Get(msg.SessionID)
-			if s == nil {
-				c.Send(ServerMsg{Type: "error", Error: "unknown session"})
-				continue
-			}
-			c.Send(ServerMsg{Type: "session_created", SessionID: s.ID, Text: s.Cwd})
-			s.Replay(c)
-
-		case "list_sessions":
-			c.Send(ServerMsg{Type: "sessions", Sessions: h.sessions.List()})
-
-		case "list_history":
-			groups, err := scanHistory()
-			if err != nil {
-				c.Send(ServerMsg{Type: "error", Error: fmt.Sprintf("scan history: %v", err)})
-				continue
-			}
-			c.Send(ServerMsg{Type: "history", History: groups})
-
-		case "load_session":
-			// Validate inputs to prevent path traversal
-			if strings.Contains(msg.DirKey, "/") || strings.Contains(msg.DirKey, "..") ||
-				strings.Contains(msg.HistoryID, "/") || strings.Contains(msg.HistoryID, "..") {
-				c.Send(ServerMsg{Type: "error", Error: "invalid session reference"})
-				continue
-			}
-			home, _ := os.UserHomeDir()
-			jsonlPath := filepath.Join(home, ".claude", "projects", msg.DirKey, msg.HistoryID+".jsonl")
-
-			// Reuse existing session if already loaded
-			if s := h.sessions.FindByJSONLPath(jsonlPath); s != nil {
-				c.Send(ServerMsg{Type: "session_created", SessionID: s.ID, Text: s.Cwd})
-				s.Replay(c)
-				continue
-			}
-
-			allMsgs, claudeID, sessUsage, err := parseSessionMessages(jsonlPath)
-			if err != nil {
-				c.Send(ServerMsg{Type: "error", Error: fmt.Sprintf("load session: %v", err)})
-				continue
-			}
-
-			cwd := ""
-			if len(allMsgs) > 0 {
-				_, cwd = getSessionInfo(jsonlPath)
-			}
-			if cwd == "" {
-				cwd = "/" + strings.ReplaceAll(msg.DirKey, "-", "/")
-			}
-
-			s := h.sessions.Create(cwd)
-			s.mu.Lock()
-			s.ClaudeID = claudeID
-			s.JSONLPath = jsonlPath
-			s.mu.Unlock()
-
-			// Populate session log from history
-			for _, m := range allMsgs {
-				sm := ServerMsg{SessionID: s.ID}
-				switch m.Type {
-				case "user":
-					sm.Type = "user_message"
-					sm.Text = m.Text
-				case "assistant":
-					sm.Type = "text"
-					sm.Text = m.Text
-				case "tool_use":
-					sm.Type = "tool_use"
-					sm.Tool = m.Tool
-					sm.Input = m.Input
-				case "tool_result":
-					sm.Type = "tool_result"
-					sm.Output = m.Output
-				default:
-					continue
-				}
-				s.Log = append(s.Log, sm)
-			}
-			if sessUsage.ContextUsed > 0 || sessUsage.ContextWindow > 0 {
-				s.Log = append(s.Log, ServerMsg{
-					Type: "cost", SessionID: s.ID,
-					Cost: &CostInfo{
-						ContextUsed:   sessUsage.ContextUsed,
-						ContextWindow: sessUsage.ContextWindow,
-					},
-				})
-			}
-
-			h.broadcast(ServerMsg{Type: "sessions", Sessions: h.sessions.List()})
-			c.Send(ServerMsg{Type: "session_created", SessionID: s.ID, Text: s.Cwd})
-			s.Replay(c)
+			fmt.Fprintf(&buf,
+				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d turns</div></div>`,
+				esc(sid), esc(sid), esc(sp), runHTML, mc,
+			)
 		}
 	}
+
+	// History
+	groups, err := scanHistory()
+	if err == nil && len(groups) > 0 {
+		buf.WriteString(`<div class="drawer-section-label">History</div>`)
+		for _, group := range groups {
+			sp := shortPath(group.Dir)
+			fmt.Fprintf(&buf, `<details class="history-group"><summary class="history-group-header">%s <span style="color:var(--text2);font-size:10px">(%d)</span></summary><div class="history-group-items">`, esc(sp), len(group.Sessions))
+			for _, sess := range group.Sessions {
+				modTime, _ := time.Parse(time.RFC3339, sess.ModTime)
+				ago := timeAgo(modTime)
+				summary := sess.Summary
+				if summary == "" {
+					summary = "(empty)"
+				}
+				fmt.Fprintf(&buf,
+					`<div class="history-item" hx-post="/load" hx-vals='{"dir_key":"%s","history_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s</div></div>`,
+					esc(group.DirKey), esc(sess.ID), esc(summary), esc(ago),
+				)
+			}
+			buf.WriteString(`</div></details>`)
+		}
+	}
+
+	if len(sessions) == 0 && (err != nil || len(groups) == 0) {
+		buf.WriteString(`<div style="padding:20px;text-align:center;color:var(--text2);font-size:13px">No sessions yet</div>`)
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(buf.String()))
 }
 
 // --- Main ---
@@ -1085,24 +1504,18 @@ func main() {
 
 	hub := NewHub()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data, _ := staticFiles.ReadFile("index.html")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(data)
-	})
-
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Printf("upgrade error: %v", err)
-			return
-		}
-		client := &Client{conn: conn}
-		hub.handleClient(client)
-	})
+	http.HandleFunc("/", hub.handleIndex)
+	http.HandleFunc("/events", hub.handleEvents)
+	http.HandleFunc("/new", hub.handleNewSession)
+	http.HandleFunc("/send", hub.handleSend)
+	http.HandleFunc("/perm", hub.handlePerm)
+	http.HandleFunc("/mode", hub.handleMode)
+	http.HandleFunc("/switch", hub.handleSwitch)
+	http.HandleFunc("/load", hub.handleLoad)
+	http.HandleFunc("/drawer", hub.handleDrawer)
 
 	log.Printf("Monet Droid listening on %s", *addr)
-	log.Printf("open http://localhost%s on your phone", *addr)
+	log.Printf("open http://localhost%s", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal(err)
 	}
