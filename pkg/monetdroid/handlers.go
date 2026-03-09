@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -174,7 +173,6 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			h.RemoveClient(cid)
 			return
 		case event := <-client.events:
-			log.Printf("[sse][%s] sending %d bytes", cid[:8], len(event))
 			fmt.Fprint(w, event)
 			flusher.Flush()
 		case <-time.After(30 * time.Second):

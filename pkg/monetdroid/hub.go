@@ -2,7 +2,6 @@ package monetdroid
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 )
@@ -72,9 +71,6 @@ func (h *Hub) BroadcastToSession(sessionID string, event string) {
 			c.Send(event)
 			sent++
 		}
-	}
-	if sent == 0 {
-		log.Printf("[broadcastToSession] no clients viewing session %s (total clients: %d)", sessionID, len(h.clients))
 	}
 }
 
@@ -159,7 +155,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		return
 	}
 	event := FormatSSE("htmx", strings.Join(parts, "\n"))
-	log.Printf("[broadcast][%s] type=%s parts=%d", sessionID, msg.Type, len(parts))
 	h.BroadcastToSession(sessionID, event)
 }
 
