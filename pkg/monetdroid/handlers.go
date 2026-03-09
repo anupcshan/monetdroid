@@ -444,7 +444,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 		buf.WriteString(`<div class="drawer-section-label">History</div>`)
 		for _, group := range groups {
 			sp := ShortPath(group.Dir)
-			fmt.Fprintf(&buf, `<details class="history-group"><summary class="history-group-header">%s <span style="color:var(--text2);font-size:10px">(%d)</span></summary><div class="history-group-items">`, Esc(sp), len(group.Sessions))
+			fmt.Fprintf(&buf, `<details class="history-group"><summary class="history-group-header">%s <span style="color:var(--text2);font-size:10px">(%d)</span><button class="new-session-btn" hx-post="/new" hx-vals='{"cwd":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()" onclick="event.stopPropagation()">+</button></summary><div class="history-group-items">`, Esc(sp), len(group.Sessions), Esc(group.Dir))
 			for _, sess := range group.Sessions {
 				modTime, _ := time.Parse(time.RFC3339, sess.ModTime)
 				ago := TimeAgo(modTime)
