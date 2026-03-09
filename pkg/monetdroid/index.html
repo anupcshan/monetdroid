@@ -494,6 +494,21 @@
     font-size: 18px;
   }
 
+  .stop-btn {
+    width: 42px;
+    height: 42px;
+    background: var(--error);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 16px;
+  }
+
   /* --- New session (popover) --- */
   #new-session-popover {
     padding: 24px 20px;
@@ -588,6 +603,7 @@
       <div class="input-row">
         <textarea name="text" placeholder="Message Claude Code..." rows="1"></textarea>
         <button type="submit" class="send-btn">↑</button>
+        <span id="stop-btn"></span>
       </div>
     </form>
   </div>

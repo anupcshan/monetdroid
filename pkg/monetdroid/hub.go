@@ -119,12 +119,16 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	thinkingHTML := `<div class="thinking-indicator" id="thinking"><span></span><span></span><span></span></div>`
 	emptyThinking := OobSwap("thinking", "outerHTML", `<div id="thinking"></div>`)
 
+	stopBtnHTML := `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none">◼</button>`
+
 	if msg.Type == "running" {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
+		parts = append(parts, OobSwap("stop-btn", "outerHTML", stopBtnHTML))
 		parts = append(parts, OobSwap("messages", "beforeend", thinkingHTML))
 	}
 	if msg.Type == "done" {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
+		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
 		parts = append(parts, emptyThinking)
 	}
 	if msgHTML != "" {
@@ -160,6 +164,9 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 }
 
 func (h *Hub) StartTurn(s *Session, text string) {
+	s.Mu.Lock()
+	s.Interrupted = false
+	s.Mu.Unlock()
 	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text})
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text})
 	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
@@ -170,10 +177,13 @@ func (h *Hub) StartTurn(s *Session, text string) {
 	go func() {
 		RunClaudeTurn(s, text, logBroadcast)
 		s.Mu.Lock()
+		interrupted := s.Interrupted
 		next := s.QueuedText
-		s.QueuedText = ""
+		if !interrupted {
+			s.QueuedText = ""
+		}
 		s.Mu.Unlock()
-		if next != "" {
+		if !interrupted && next != "" {
 			h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")))
 			s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
@@ -206,8 +216,10 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 
 	if running {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
+		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none">◼</button>`))
 	} else {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
+		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
 	}
 
 	var modeHTML string

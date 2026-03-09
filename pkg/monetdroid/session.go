@@ -13,6 +13,7 @@ type Session struct {
 	PermissionMode string
 	MessageCount   int
 	Running        bool
+	Interrupted    bool
 	CreatedAt      time.Time
 	JSONLPath      string
 	Log            []ServerMsg

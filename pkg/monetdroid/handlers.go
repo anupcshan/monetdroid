@@ -38,6 +38,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/mode", hub.handleMode)
 	mux.HandleFunc("/switch", hub.handleSwitch)
 	mux.HandleFunc("/load", hub.handleLoad)
+	mux.HandleFunc("/stop", hub.handleStop)
 	mux.HandleFunc("/cancel-queue", hub.handleCancelQueue)
 	mux.HandleFunc("/drawer", hub.handleDrawer)
 	return mux
@@ -466,6 +467,32 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(buf.String()))
+}
+
+func (h *Hub) handleStop(w http.ResponseWriter, r *http.Request) {
+	cid := GetCID(w, r)
+	client := h.GetOrCreateClient(cid)
+	sessionID := client.ActiveSession()
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	s.Mu.Lock()
+	writeJSON := s.WriteJSON
+	s.Interrupted = true
+	s.Mu.Unlock()
+
+	if writeJSON != nil {
+		writeJSON(map[string]any{
+			"type":       "control_request",
+			"request_id": fmt.Sprintf("interrupt_%d", time.Now().UnixNano()),
+			"request":    map[string]any{"subtype": "interrupt"},
+		})
+	}
+
+	w.WriteHeader(204)
 }
 
 func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
