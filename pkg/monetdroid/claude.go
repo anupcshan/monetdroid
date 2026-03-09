@@ -7,14 +7,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"time"
 )
 
 // ClaudeCommand is the path to the claude binary. Override in tests.
 var ClaudeCommand = "claude"
 
-// PermissionTimeout is how long to wait for a permission response before auto-denying.
-var PermissionTimeout = 5 * time.Minute
 
 func RunClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 	s.Mu.Lock()
@@ -162,12 +159,7 @@ func handleControlRequest(s *Session, event map[string]any, writeJSON func(any),
 		PermReason: reason, PermSuggestions: suggestions,
 	})
 
-	var resp PermResponse
-	select {
-	case resp = <-ch:
-	case <-time.After(PermissionTimeout):
-		resp = PermResponse{Allow: false}
-	}
+	resp := <-ch
 
 	s.Mu.Lock()
 	delete(s.PermChans, requestID)
