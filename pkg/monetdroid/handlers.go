@@ -288,6 +288,8 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	event := FormatSSE("htmx", OobSwap("perm-actions-"+permID, "innerHTML", resultHTML))
 	h.BroadcastToSession(sessionID, event)
 
+	s.RemovePermission(permID)
+
 	w.WriteHeader(204)
 }
 

@@ -30,6 +30,17 @@ func (s *Session) Append(msg ServerMsg) {
 	s.Mu.Unlock()
 }
 
+func (s *Session) RemovePermission(permID string) {
+	s.Mu.Lock()
+	for i, m := range s.Log {
+		if m.Type == "permission_request" && m.PermID == permID {
+			s.Log = append(s.Log[:i], s.Log[i+1:]...)
+			break
+		}
+	}
+	s.Mu.Unlock()
+}
+
 type SessionManager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex

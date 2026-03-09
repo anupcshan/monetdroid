@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -121,6 +122,25 @@ func TestPermissionFlow(t *testing.T) {
 	// Wait for completion
 	WaitForText(t, page, ".msg-assistant", "hello.txt", 10*time.Second)
 	Screenshot(t, page, "permission_turn_complete")
+
+	// Reload and verify permission prompt is gone (resolved permissions should not reappear)
+	sessions := f.Hub.Sessions.List()
+	if len(sessions) == 0 {
+		t.Fatal("no sessions in hub")
+	}
+	sessions[0].Mu.Lock()
+	claudeID := sessions[0].ClaudeID
+	sessions[0].Mu.Unlock()
+	reloadURL := fmt.Sprintf("%s/?session=%s", f.ServerURL, claudeID)
+	t.Logf("reloading URL: %s", reloadURL)
+	page.MustNavigate(reloadURL).MustWaitStable()
+	WaitForText(t, page, ".msg-assistant", "hello.txt", 10*time.Second)
+	has, _, _ := page.Has(".perm-prompt")
+	if has {
+		Screenshot(t, page, "permission_prompt_after_reload")
+		t.Fatal("permission prompt should not appear after reload")
+	}
+	Screenshot(t, page, "permission_reload_clean")
 }
 
 func TestEditDiff(t *testing.T) {
