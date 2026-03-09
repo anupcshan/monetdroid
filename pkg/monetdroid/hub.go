@@ -93,8 +93,9 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	// Accumulate cost
 	if msg.Type == "cost" && msg.Cost != nil && s != nil {
 		s.Mu.Lock()
-		s.CostAccum.InputTokens += msg.Cost.InputTokens
-		s.CostAccum.OutputTokens += msg.Cost.OutputTokens
+		if msg.Cost.TotalCostUSD > 0 {
+			s.CostAccum.TotalCostUSD = msg.Cost.TotalCostUSD
+		}
 		if msg.Cost.ContextUsed > 0 {
 			s.CostAccum.ContextUsed = msg.Cost.ContextUsed
 		}

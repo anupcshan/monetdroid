@@ -225,6 +225,9 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			if sid, ok := obj["session_id"].(string); ok && sid != "" {
 				claudeID = sid
 			}
+			if totalCost, ok := obj["total_cost_usd"].(float64); ok {
+				usage.TotalCostUSD = totalCost
+			}
 			if mu, ok := obj["modelUsage"].(map[string]any); ok {
 				for _, v := range mu {
 					if info, ok := v.(map[string]any); ok {

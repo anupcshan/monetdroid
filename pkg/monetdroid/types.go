@@ -19,10 +19,9 @@ type ServerMsg struct {
 }
 
 type CostInfo struct {
-	InputTokens   int `json:"input_tokens"`
-	OutputTokens  int `json:"output_tokens"`
-	ContextUsed   int `json:"context_used,omitempty"`
-	ContextWindow int `json:"context_window,omitempty"`
+	TotalCostUSD  float64 `json:"total_cost_usd,omitempty"`
+	ContextUsed   int     `json:"context_used,omitempty"`
+	ContextWindow int     `json:"context_window,omitempty"`
 }
 
 type HistoryGroup struct {
@@ -47,6 +46,7 @@ type HistoryMessage struct {
 }
 
 type SessionUsage struct {
+	TotalCostUSD  float64
 	ContextUsed   int
 	ContextWindow int
 }

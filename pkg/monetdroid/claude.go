@@ -245,10 +245,10 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 			cacheRead, _ := usage["cache_read_input_tokens"].(float64)
 			cacheCreate, _ := usage["cache_creation_input_tokens"].(float64)
 			contextUsed := int(inTok + cacheRead + cacheCreate + outTok)
-			if inTok > 0 || outTok > 0 {
+			if contextUsed > 0 {
 				broadcast(ServerMsg{
 					Type: "cost", SessionID: s.ID,
-					Cost: &CostInfo{InputTokens: int(inTok), OutputTokens: int(outTok), ContextUsed: contextUsed},
+					Cost: &CostInfo{ContextUsed: contextUsed},
 				})
 			}
 		}
@@ -262,15 +262,22 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 			s.ClaudeID = sid
 			s.Mu.Unlock()
 		}
+		cost := &CostInfo{}
+		if totalCost, ok := event["total_cost_usd"].(float64); ok {
+			cost.TotalCostUSD = totalCost
+		}
 		if mu, ok := event["modelUsage"].(map[string]any); ok {
 			for _, v := range mu {
 				if info, ok := v.(map[string]any); ok {
 					if cw, ok := info["contextWindow"].(float64); ok && cw > 0 {
-						broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: &CostInfo{ContextWindow: int(cw)}})
+						cost.ContextWindow = int(cw)
 					}
-					break
 				}
+				break
 			}
+		}
+		if cost.TotalCostUSD > 0 || cost.ContextWindow > 0 {
+			broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: cost})
 		}
 
 	case "user":

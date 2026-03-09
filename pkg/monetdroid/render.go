@@ -203,17 +203,20 @@ func RenderCostBar(s *Session) string {
 	s.Mu.Lock()
 	c := s.CostAccum
 	s.Mu.Unlock()
-	if c.InputTokens == 0 && c.OutputTokens == 0 && c.ContextUsed == 0 {
+	if c.TotalCostUSD == 0 && c.ContextUsed == 0 {
 		return ""
 	}
-	text := fmt.Sprintf("↓%s ↑%s", FmtK(c.InputTokens), FmtK(c.OutputTokens))
+	var parts []string
+	if c.TotalCostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.2f", c.TotalCostUSD))
+	}
 	if c.ContextUsed > 0 && c.ContextWindow > 0 {
 		pct := 100 * c.ContextUsed / c.ContextWindow
-		text += fmt.Sprintf(" · context %s/%s (%d%%)", FmtK(c.ContextUsed), FmtK(c.ContextWindow), pct)
+		parts = append(parts, fmt.Sprintf("context %s/%s (%d%%)", FmtK(c.ContextUsed), FmtK(c.ContextWindow), pct))
 	} else if c.ContextUsed > 0 {
-		text += fmt.Sprintf(" · context %s", FmtK(c.ContextUsed))
+		parts = append(parts, fmt.Sprintf("context %s", FmtK(c.ContextUsed)))
 	}
-	return text
+	return strings.Join(parts, " · ")
 }
 
 func RenderQueueBar(sessionID, text string) string {

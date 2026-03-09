@@ -102,6 +102,7 @@ func (h *Hub) restoreSession(cid, claudeID string) {
 	s.Mu.Lock()
 	s.ClaudeID = loadedClaudeID
 	s.JSONLPath = jsonlPath
+	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
 	s.CostAccum.ContextUsed = sessUsage.ContextUsed
 	s.CostAccum.ContextWindow = sessUsage.ContextWindow
 	s.Mu.Unlock()
@@ -372,6 +373,7 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 	s.Mu.Lock()
 	s.ClaudeID = claudeID
 	s.JSONLPath = jsonlPath
+	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
 	s.CostAccum.ContextUsed = sessUsage.ContextUsed
 	s.CostAccum.ContextWindow = sessUsage.ContextWindow
 	s.Mu.Unlock()
