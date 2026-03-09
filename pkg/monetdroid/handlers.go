@@ -46,8 +46,90 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 
 func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
 	GetCID(w, r)
+	html := indexHTML
+	if qs := r.URL.RawQuery; qs != "" {
+		html = strings.Replace(html, `sse-connect="/events"`, `sse-connect="/events?`+qs+`"`, 1)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(indexHTML))
+	w.Write([]byte(html))
+}
+
+func sessionURL(s *Session) string {
+	s.Mu.Lock()
+	claudeID := s.ClaudeID
+	cwd := s.Cwd
+	s.Mu.Unlock()
+	if claudeID != "" {
+		return "/?session=" + claudeID
+	}
+	return "/?cwd=" + cwd
+}
+
+// restoreSession finds a session by ClaudeID (in memory or on disk) and assigns it to the client.
+func (h *Hub) restoreSession(cid, claudeID string) {
+	client := h.GetOrCreateClient(cid)
+
+	// Check in-memory sessions first
+	if s := h.Sessions.FindByClaudeID(claudeID); s != nil {
+		client.SetSession(s.ID)
+		return
+	}
+
+	// Find JSONL on disk
+	jsonlPath := FindJSONLByClaudeID(claudeID)
+	if jsonlPath == "" {
+		return
+	}
+	if s := h.Sessions.FindByJSONLPath(jsonlPath); s != nil {
+		client.SetSession(s.ID)
+		return
+	}
+
+	allMsgs, loadedClaudeID, sessUsage, err := ParseSessionMessages(jsonlPath)
+	if err != nil {
+		return
+	}
+
+	cwd := ""
+	if len(allMsgs) > 0 {
+		_, cwd = GetSessionInfo(jsonlPath)
+	}
+	if cwd == "" {
+		dirKey := filepath.Base(filepath.Dir(jsonlPath))
+		cwd = "/" + strings.ReplaceAll(dirKey, "-", "/")
+	}
+
+	s := h.Sessions.Create(cwd)
+	s.Mu.Lock()
+	s.ClaudeID = loadedClaudeID
+	s.JSONLPath = jsonlPath
+	s.CostAccum.ContextUsed = sessUsage.ContextUsed
+	s.CostAccum.ContextWindow = sessUsage.ContextWindow
+	s.Mu.Unlock()
+
+	for _, m := range allMsgs {
+		sm := ServerMsg{SessionID: s.ID}
+		switch m.Type {
+		case "user":
+			sm.Type = "user_message"
+			sm.Text = m.Text
+		case "assistant":
+			sm.Type = "text"
+			sm.Text = m.Text
+		case "tool_use":
+			sm.Type = "tool_use"
+			sm.Tool = m.Tool
+			sm.Input = m.Input
+		case "tool_result":
+			sm.Type = "tool_result"
+			sm.Output = m.Output
+		default:
+			continue
+		}
+		s.Log = append(s.Log, sm)
+	}
+
+	client.SetSession(s.ID)
 }
 
 func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +149,23 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprint(w, FormatSSE("heartbeat", "connected"))
 	flusher.Flush()
+
+	// Restore session from query params (forwarded from page URL via sse-connect)
+	if sessionID := r.URL.Query().Get("session"); sessionID != "" {
+		h.restoreSession(cid, sessionID)
+	} else if cwd := r.URL.Query().Get("cwd"); cwd != "" {
+		if strings.HasPrefix(cwd, "~/") {
+			home, _ := os.UserHomeDir()
+			cwd = home + cwd[1:]
+		}
+		s := h.Sessions.Create(cwd)
+		client.SetSession(s.ID)
+	}
+	if sid := client.ActiveSession(); sid != "" {
+		if s := h.Sessions.Get(sid); s != nil {
+			h.ReplaySession(cid, s)
+		}
+	}
 
 	ctx := r.Context()
 	for {
@@ -102,7 +201,7 @@ func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
 	client.SetSession(s.ID)
 	h.ReplaySession(cid, s)
 
-	w.WriteHeader(204)
+	w.Header().Set("HX-Replace-Url", sessionURL(s))
 }
 
 func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +235,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		h.StartTurn(s, text)
 	}
 
-	w.WriteHeader(204)
+	w.Header().Set("HX-Replace-Url", sessionURL(s))
 }
 
 func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
@@ -232,7 +331,7 @@ func (h *Hub) handleSwitch(w http.ResponseWriter, r *http.Request) {
 	client.SetSession(s.ID)
 	h.ReplaySession(cid, s)
 
-	w.WriteHeader(204)
+	w.Header().Set("HX-Replace-Url", sessionURL(s))
 }
 
 func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +404,7 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 	client.SetSession(s.ID)
 	h.ReplaySession(cid, s)
 
-	w.WriteHeader(204)
+	w.Header().Set("HX-Replace-Url", sessionURL(s))
 }
 
 func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
@@ -319,15 +418,22 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			running := s.Running
 			sp := ShortPath(s.Cwd)
 			sid := s.ID
+			claudeID := s.ClaudeID
 			mc := s.MessageCount
 			s.Mu.Unlock()
 			runHTML := ""
 			if running {
 				runHTML = `<span class="di-running"></span> running`
 			}
+			displayID := claudeID
+			if displayID == "" {
+				displayID = "(new)"
+			} else if len(displayID) > 12 {
+				displayID = displayID[:12] + "..."
+			}
 			fmt.Fprintf(&buf,
 				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d turns</div></div>`,
-				Esc(sid), Esc(sid), Esc(sp), runHTML, mc,
+				Esc(sid), Esc(displayID), Esc(sp), runHTML, mc,
 			)
 		}
 	}

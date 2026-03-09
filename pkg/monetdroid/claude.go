@@ -202,10 +202,14 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 	case "system":
 		if sid, ok := event["session_id"].(string); ok && sid != "" {
 			s.Mu.Lock()
-			if s.ClaudeID == "" {
+			wasEmpty := s.ClaudeID == ""
+			if wasEmpty {
 				s.ClaudeID = sid
 			}
 			s.Mu.Unlock()
+			if wasEmpty {
+				broadcast(ServerMsg{Type: "session_id", SessionID: s.ID, Text: sid})
+			}
 		}
 
 	case "assistant":

@@ -67,6 +67,18 @@ func ScanHistory() ([]HistoryGroup, error) {
 	return groups, nil
 }
 
+func FindJSONLByClaudeID(claudeID string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", claudeID+".jsonl"))
+	if len(matches) > 0 {
+		return matches[0]
+	}
+	return ""
+}
+
 func GetSessionInfo(fpath string) (summary, cwd string) {
 	f, err := os.Open(fpath)
 	if err != nil {

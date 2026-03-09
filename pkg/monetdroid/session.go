@@ -66,6 +66,20 @@ func (sm *SessionManager) FindByJSONLPath(path string) *Session {
 	return nil
 }
 
+func (sm *SessionManager) FindByClaudeID(claudeID string) *Session {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	for _, s := range sm.sessions {
+		s.Mu.Lock()
+		cid := s.ClaudeID
+		s.Mu.Unlock()
+		if cid == claudeID {
+			return s
+		}
+	}
+	return nil
+}
+
 func (sm *SessionManager) List() []*Session {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
