@@ -18,7 +18,7 @@ type DiffFile struct {
 }
 
 func GitDiffStat(cwd string) (DiffStat, error) {
-	cmd := exec.Command("git", "diff", "HEAD", "--numstat")
+	cmd := exec.Command("git", "diff", "HEAD", "-w", "--numstat")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
@@ -45,7 +45,7 @@ func GitDiffStat(cwd string) (DiffStat, error) {
 }
 
 func GitDiffFiles(cwd string) ([]DiffFile, error) {
-	cmd := exec.Command("git", "diff", "HEAD", "--name-status")
+	cmd := exec.Command("git", "diff", "HEAD", "-w", "--name-status")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
@@ -66,7 +66,7 @@ func GitDiffFiles(cwd string) ([]DiffFile, error) {
 }
 
 func GitDiffFull(cwd string) (string, error) {
-	cmd := exec.Command("git", "diff", "HEAD")
+	cmd := exec.Command("git", "diff", "HEAD", "-w")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {

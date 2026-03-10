@@ -124,10 +124,20 @@ func FormatPermDetail(tool string, input any) string {
 var chromaFormatter = chromahtml.New()
 var chromaStyle = styles.Get("vim")
 
+func stripTrailingWS(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = strings.TrimRight(l, " \t\r") + "\n"
+	}
+	return out
+}
+
 func RenderEditDiffHTML(filePath, oldStr, newStr string) string {
+	oldLines := stripTrailingWS(difflib.SplitLines(oldStr))
+	newLines := stripTrailingWS(difflib.SplitLines(newStr))
 	ud := difflib.UnifiedDiff{
-		A:        difflib.SplitLines(oldStr),
-		B:        difflib.SplitLines(newStr),
+		A:        oldLines,
+		B:        newLines,
 		FromFile: filePath,
 		ToFile:   filePath,
 		Context:  3,
@@ -174,8 +184,8 @@ func editDiffFromInput(input any) (filePath, oldStr, newStr string, ok bool) {
 
 func editSummary(filePath, oldStr, newStr string) string {
 	ud := difflib.UnifiedDiff{
-		A:       difflib.SplitLines(oldStr),
-		B:       difflib.SplitLines(newStr),
+		A:       stripTrailingWS(difflib.SplitLines(oldStr)),
+		B:       stripTrailingWS(difflib.SplitLines(newStr)),
 		Context: 0,
 	}
 	diffText, _ := difflib.GetUnifiedDiffString(ud)
