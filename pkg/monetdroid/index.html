@@ -603,6 +603,11 @@
     <button class="header-btn" popovertarget="new-session-popover">+</button>
   </div>
 
+  <!-- Swap target for URL updates. When a session gets its ClaudeID, the
+       server OOB-swaps this with a span that triggers an HTMX request to
+       /session-url, which returns HX-Replace-Url to update the browser URL.
+       See Broadcast() in hub.go for the full explanation. -->
+  <span id="url-state"></span>
   <div class="mode-bar" id="mode-bar"></div>
   <div class="cost-bar" id="cost-bar"></div>
 

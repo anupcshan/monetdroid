@@ -41,6 +41,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/stop", hub.handleStop)
 	mux.HandleFunc("/cancel-queue", hub.handleCancelQueue)
 	mux.HandleFunc("/drawer", hub.handleDrawer)
+	mux.HandleFunc("/session-url", handleSessionURL)
 	return mux
 }
 
@@ -507,4 +508,16 @@ func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 		h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")))
 	}
 	w.WriteHeader(204)
+}
+
+// handleSessionURL is the target of an HTMX request triggered by the
+// url-state OOB swap (see Broadcast in hub.go). Its only job is to return
+// the HX-Replace-Url header so the browser URL updates to /?session=<id>.
+// Must return 200 (not 204) — HTMX ignores HX-Replace-Url on 204.
+func handleSessionURL(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session != "" {
+		w.Header().Set("HX-Replace-Url", "/?session="+session)
+	}
+	w.Write(nil)
 }

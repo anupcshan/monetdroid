@@ -1,8 +1,8 @@
 package integration
 
 import (
-	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -123,17 +123,15 @@ func TestPermissionFlow(t *testing.T) {
 	WaitForText(t, page, ".msg-assistant", "hello.txt", 10*time.Second)
 	Screenshot(t, page, "permission_turn_complete")
 
-	// Reload and verify permission prompt is gone (resolved permissions should not reappear)
-	sessions := f.Hub.Sessions.List()
-	if len(sessions) == 0 {
-		t.Fatal("no sessions in hub")
+	// Verify URL was updated to include session ID
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	t.Logf("URL after turn: %s", currentURL)
+	if !strings.Contains(currentURL, "session=") {
+		t.Fatalf("URL should contain session= after turn, got: %s", currentURL)
 	}
-	sessions[0].Mu.Lock()
-	claudeID := sessions[0].ClaudeID
-	sessions[0].Mu.Unlock()
-	reloadURL := fmt.Sprintf("%s/?session=%s", f.ServerURL, claudeID)
-	t.Logf("reloading URL: %s", reloadURL)
-	page.MustNavigate(reloadURL).MustWaitStable()
+
+	// Reload and verify permission prompt is gone (resolved permissions should not reappear)
+	page.MustReload().MustWaitStable()
 	WaitForText(t, page, ".msg-assistant", "hello.txt", 10*time.Second)
 	has, _, _ := page.Has(".perm-prompt")
 	if has {

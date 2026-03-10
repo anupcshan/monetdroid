@@ -138,6 +138,37 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 	}
 
+	// Update the browser URL when a session gets its ClaudeID.
+	//
+	// Problem: New sessions start with /?cwd=... in the URL. The ClaudeID
+	// arrives later (via the "system" init event from claude). If the user
+	// reloads before the URL is updated, handleEvents sees ?cwd= and creates
+	// a brand new empty session, losing all messages.
+	//
+	// Solution: Push a URL update to the browser via HTMX when we learn the
+	// ClaudeID. This is tricky because SSE events can't set response headers
+	// (like HX-Replace-Url) — only HTTP responses can. So we use a two-step
+	// approach:
+	//
+	//   1. OOB swap a <span> into #url-state with hx-trigger="load" and
+	//      hx-get="/session-url?session=<id>". The outerHTML swap causes
+	//      HTMX to process the new element and fire its load trigger.
+	//
+	//   2. The /session-url handler returns 200 with the HX-Replace-Url
+	//      header, which HTMX uses to update the browser URL bar.
+	//
+	// Approaches that DON'T work (tested):
+	//   - hx-trigger="load" with innerHTML OOB swap: HTMX doesn't fire
+	//     load triggers for child elements added via innerHTML OOB swaps.
+	//   - hx-swap="none" on the triggered request: HTMX ignores
+	//     HX-Replace-Url on 204 responses or when hx-swap="none".
+	//   - <img onerror="history.replaceState(...)">: works but is an XSS
+	//     pattern, not a proper HTMX mechanism.
+	if msg.Type == "session_id" {
+		parts = append(parts, fmt.Sprintf(
+			`<span id="url-state" hx-swap-oob="outerHTML" hx-get="/session-url?session=%s" hx-trigger="load" hx-target="#url-state" hx-swap="innerHTML"></span>`, Esc(msg.Text)))
+	}
+
 	if msg.Type == "permission_mode" {
 		var modeHTML string
 		if msg.PermMode != "" && msg.PermMode != "default" {
