@@ -1,10 +1,17 @@
 package monetdroid
 
+// ImageData holds a base64-encoded image for the Messages API content blocks.
+type ImageData struct {
+	MediaType string `json:"media_type"` // e.g. "image/jpeg"
+	Data      string `json:"data"`       // base64-encoded
+}
+
 // ServerMsg is the internal message type stored in session logs.
 type ServerMsg struct {
 	Type            string      `json:"type"`
 	SessionID       string      `json:"session_id,omitempty"`
 	Text            string      `json:"text,omitempty"`
+	Images          []ImageData `json:"images,omitempty"`
 	Tool            string      `json:"tool,omitempty"`
 	Input           interface{} `json:"input,omitempty"`
 	Output          string      `json:"output,omitempty"`
@@ -40,6 +47,7 @@ type HistorySession struct {
 type HistoryMessage struct {
 	Type   string      `json:"type"`
 	Text   string      `json:"text,omitempty"`
+	Images []ImageData `json:"images,omitempty"`
 	Tool   string      `json:"tool,omitempty"`
 	Input  interface{} `json:"input,omitempty"`
 	Output string      `json:"output,omitempty"`

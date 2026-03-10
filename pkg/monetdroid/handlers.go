@@ -3,9 +3,11 @@ package monetdroid
 import (
 	"crypto/rand"
 	_ "embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -115,6 +117,7 @@ func (h *Hub) restoreSession(cid, claudeID string) {
 		case "user":
 			sm.Type = "user_message"
 			sm.Text = m.Text
+			sm.Images = m.Images
 		case "assistant":
 			sm.Type = "text"
 			sm.Text = m.Text
@@ -207,8 +210,35 @@ func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 	cid := GetCID(w, r)
+
+	// Parse multipart form (supports file uploads). 10MB limit.
+	r.ParseMultipartForm(10 << 20)
 	text := r.FormValue("text")
-	if text == "" {
+
+	var images []ImageData
+	if r.MultipartForm != nil {
+		for _, fh := range r.MultipartForm.File["images"] {
+			f, err := fh.Open()
+			if err != nil {
+				continue
+			}
+			data, err := io.ReadAll(f)
+			f.Close()
+			if err != nil {
+				continue
+			}
+			mediaType := fh.Header.Get("Content-Type")
+			if mediaType == "" {
+				mediaType = "image/jpeg"
+			}
+			images = append(images, ImageData{
+				MediaType: mediaType,
+				Data:      base64.StdEncoding.EncodeToString(data),
+			})
+		}
+	}
+
+	if text == "" && len(images) == 0 {
 		w.WriteHeader(204)
 		return
 	}
@@ -233,7 +263,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queued)))
 	} else {
 		s.Mu.Unlock()
-		h.StartTurn(s, text)
+		h.StartTurn(s, text, images)
 	}
 
 	w.Header().Set("HX-Replace-Url", sessionURL(s))
@@ -388,6 +418,7 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 		case "user":
 			sm.Type = "user_message"
 			sm.Text = m.Text
+			sm.Images = m.Images
 		case "assistant":
 			sm.Type = "text"
 			sm.Text = m.Text

@@ -13,7 +13,7 @@ import (
 var ClaudeCommand = "claude"
 
 
-func RunClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
+func RunClaudeTurn(s *Session, prompt string, images []ImageData, broadcast func(ServerMsg)) {
 	s.Mu.Lock()
 	s.Running = true
 	s.MessageCount++
@@ -87,9 +87,33 @@ func RunClaudeTurn(s *Session, prompt string, broadcast func(ServerMsg)) {
 		"type": "control_request", "request_id": "init_1",
 		"request": map[string]any{"subtype": "initialize"},
 	})
+
+	var content any
+	if len(images) > 0 {
+		var blocks []map[string]any
+		for _, img := range images {
+			blocks = append(blocks, map[string]any{
+				"type": "image",
+				"source": map[string]any{
+					"type":       "base64",
+					"media_type": img.MediaType,
+					"data":       img.Data,
+				},
+			})
+		}
+		if prompt != "" {
+			blocks = append(blocks, map[string]any{
+				"type": "text",
+				"text": prompt,
+			})
+		}
+		content = blocks
+	} else {
+		content = prompt
+	}
 	writeJSON(map[string]any{
 		"type": "user", "session_id": "",
-		"message":            map[string]any{"role": "user", "content": prompt},
+		"message":            map[string]any{"role": "user", "content": content},
 		"parent_tool_use_id": nil,
 	})
 

@@ -259,6 +259,28 @@
     line-height: 1.5;
     word-break: break-word;
   }
+  .msg-img-thumb {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: 8px;
+    display: block;
+    margin-bottom: 6px;
+    cursor: pointer;
+  }
+  .img-dialog {
+    background: none;
+    border: none;
+    padding: 0;
+    max-width: 90vw;
+    max-height: 90vh;
+  }
+  .img-dialog::backdrop { background: rgba(0,0,0,0.85); }
+  .img-dialog img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: 8px;
+  }
   .msg-assistant .msg-bubble {
     background: var(--surface2);
     border: 1px solid var(--border);
@@ -512,6 +534,20 @@
     font-size: 18px;
   }
 
+  .img-btn {
+    width: 42px;
+    height: 42px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 16px;
+  }
+
   .stop-btn {
     width: 42px;
     height: 42px;
@@ -622,9 +658,13 @@
 
   <div class="queue-bar" id="queue-bar"></div>
   <div class="input-area">
-    <form hx-post="/send" hx-swap="none" hx-on::after-request="this.reset()">
+    <form hx-post="/send" hx-swap="none" hx-encoding="multipart/form-data" hx-on::after-request="this.reset()">
       <div class="input-row">
         <textarea name="text" placeholder="Message Claude Code..." rows="1"></textarea>
+        <label class="img-btn" title="Attach image">
+          <input type="file" name="images" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden>
+          📎
+        </label>
         <button type="submit" class="send-btn">↑</button>
         <span id="stop-btn"></span>
       </div>

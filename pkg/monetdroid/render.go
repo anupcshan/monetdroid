@@ -118,7 +118,15 @@ func FormatPermDetail(tool string, input any) string {
 func RenderMsg(msg ServerMsg) string {
 	switch msg.Type {
 	case "user_message":
-		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, Esc(msg.Text))
+		var content strings.Builder
+		for i, img := range msg.Images {
+			dlgID := fmt.Sprintf("img-dlg-%s-%d", msg.SessionID, i)
+			src := fmt.Sprintf("data:%s;base64,%s", Esc(img.MediaType), img.Data)
+			fmt.Fprintf(&content, `<img src="%s" class="msg-img-thumb" onclick="document.getElementById('%s').showModal()">`, src, dlgID)
+			fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s"></dialog>`, dlgID, src)
+		}
+		content.WriteString(Esc(msg.Text))
+		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, content.String())
 	case "text":
 		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, RenderMarkdown(msg.Text))
 	case "tool_use":

@@ -162,6 +162,8 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					msgs = append(msgs, HistoryMessage{Type: "user", Text: c})
 				}
 			case []any:
+				var userText string
+				var userImages []ImageData
 				for _, block := range c {
 					b, ok := block.(map[string]any)
 					if !ok {
@@ -171,7 +173,16 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					switch bt {
 					case "text":
 						if t, _ := b["text"].(string); t != "" {
-							msgs = append(msgs, HistoryMessage{Type: "user", Text: t})
+							userText = t
+						}
+					case "image":
+						src, _ := b["source"].(map[string]any)
+						if src != nil {
+							mt, _ := src["media_type"].(string)
+							data, _ := src["data"].(string)
+							if mt != "" && data != "" {
+								userImages = append(userImages, ImageData{MediaType: mt, Data: data})
+							}
 						}
 					case "tool_result":
 						output := ""
@@ -184,6 +195,9 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 						}
 						msgs = append(msgs, HistoryMessage{Type: "tool_result", Output: Truncate(output, 2000)})
 					}
+				}
+				if userText != "" || len(userImages) > 0 {
+					msgs = append(msgs, HistoryMessage{Type: "user", Text: userText, Images: userImages})
 				}
 			}
 		case "assistant":

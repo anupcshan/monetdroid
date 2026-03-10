@@ -194,19 +194,19 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	h.BroadcastToSession(sessionID, event)
 }
 
-func (h *Hub) StartTurn(s *Session, text string) {
+func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	s.Mu.Lock()
 	s.Interrupted = false
 	s.Mu.Unlock()
-	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text})
-	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text})
+	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 	logBroadcast := func(msg ServerMsg) {
 		s.Append(msg)
 		h.Broadcast(msg)
 	}
 	go func() {
-		RunClaudeTurn(s, text, logBroadcast)
+		RunClaudeTurn(s, text, images, logBroadcast)
 		s.Mu.Lock()
 		interrupted := s.Interrupted
 		next := s.QueuedText
@@ -219,7 +219,7 @@ func (h *Hub) StartTurn(s *Session, text string) {
 			s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
-			RunClaudeTurn(s, next, logBroadcast)
+			RunClaudeTurn(s, next, nil, logBroadcast)
 		}
 	}()
 }
