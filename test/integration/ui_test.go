@@ -158,7 +158,7 @@ func TestEditDiff(t *testing.T) {
 
 	// Wait for permission with diff
 	WaitForElement(t, page, ".perm-prompt", 10*time.Second)
-	WaitForText(t, page, ".perm-detail", "old", 5*time.Second)
+	WaitForText(t, page, ".perm-detail", "println", 5*time.Second)
 	Screenshot(t, page, "edit_diff_permission")
 
 	// Allow it

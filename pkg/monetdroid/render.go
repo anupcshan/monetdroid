@@ -1,13 +1,21 @@
 package monetdroid
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"html"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/alecthomas/chroma/v2"
+	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/pmezard/go-difflib/difflib"
 )
 
 var (
@@ -115,6 +123,91 @@ func FormatPermDetail(tool string, input any) string {
 	return string(j)
 }
 
+var chromaFormatter = chromahtml.New()
+var chromaStyle = styles.Get("vim")
+
+func RenderEditDiffHTML(filePath, oldStr, newStr string) string {
+	ud := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(oldStr),
+		B:        difflib.SplitLines(newStr),
+		FromFile: filePath,
+		ToFile:   filePath,
+		Context:  3,
+	}
+	diffText, err := difflib.GetUnifiedDiffString(ud)
+	if err != nil || diffText == "" {
+		// Fallback: show old/new as plain text
+		return ""
+	}
+	return highlightDiff(diffText)
+}
+
+func highlightDiff(diffText string) string {
+	lexer := lexers.Get("diff")
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	lexer = chroma.Coalesce(lexer)
+	iterator, err := lexer.Tokenise(nil, diffText)
+	if err != nil {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := chromaFormatter.Format(&buf, chromaStyle, iterator); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
+func editDiffFromInput(input any) (filePath, oldStr, newStr string, ok bool) {
+	m, mok := input.(map[string]any)
+	if !mok {
+		return
+	}
+	filePath, _ = m["file_path"].(string)
+	if filePath == "" {
+		filePath, _ = m["path"].(string)
+	}
+	oldStr, _ = m["old_string"].(string)
+	newStr, _ = m["new_string"].(string)
+	ok = true
+	return
+}
+
+func editSummary(filePath, oldStr, newStr string) string {
+	ud := difflib.UnifiedDiff{
+		A:       difflib.SplitLines(oldStr),
+		B:       difflib.SplitLines(newStr),
+		Context: 0,
+	}
+	diffText, _ := difflib.GetUnifiedDiffString(ud)
+	added, removed := 0, 0
+	for _, line := range strings.Split(diffText, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			added++
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			removed++
+		}
+	}
+	base := filepath.Base(filePath)
+	return fmt.Sprintf("Edit %s −%d +%d", base, removed, added)
+}
+
+var boringResultSuffixes = []string{
+	"has been updated successfully.",
+	"has been written successfully.",
+}
+
+func isBoringResult(output string) bool {
+	s := strings.TrimSpace(output)
+	for _, suffix := range boringResultSuffixes {
+		if strings.HasSuffix(s, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func RenderMsg(msg ServerMsg) string {
 	switch msg.Type {
 	case "user_message":
@@ -133,6 +226,15 @@ func RenderMsg(msg ServerMsg) string {
 		if msg.Tool == "TodoWrite" {
 			return ""
 		}
+		if msg.Tool == "Edit" || msg.Tool == "FileEdit" {
+			if fp, old, new_, ok := editDiffFromInput(msg.Input); ok {
+				diffHTML := RenderEditDiffHTML(fp, old, new_)
+				if diffHTML != "" {
+					summary := editSummary(fp, old, new_)
+					return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, Esc(summary), diffHTML)
+				}
+			}
+		}
 		detail := FormatToolInput(msg.Tool, msg.Input)
 		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, Esc(msg.Tool), Esc(detail))
 	case "tool_result":
@@ -148,7 +250,15 @@ func RenderMsg(msg ServerMsg) string {
 }
 
 func RenderPermission(msg ServerMsg) string {
-	detail := FormatPermDetail(msg.PermTool, msg.PermInput)
+	var detailHTML string
+	if msg.PermTool == "Edit" || msg.PermTool == "FileEdit" {
+		if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
+			detailHTML = RenderEditDiffHTML(fp, old, new_)
+		}
+	}
+	if detailHTML == "" {
+		detailHTML = Esc(FormatPermDetail(msg.PermTool, msg.PermInput))
+	}
 	var suggBtns strings.Builder
 	if suggestions, ok := msg.PermSuggestions.([]any); ok {
 		for _, s := range suggestions {
@@ -203,7 +313,7 @@ func RenderPermission(msg ServerMsg) string {
 			}
 			return ""
 		}(),
-		Esc(detail), Esc(msg.PermID),
+		detailHTML, Esc(msg.PermID),
 		Esc(msg.SessionID), Esc(msg.PermID),
 		Esc(msg.SessionID), Esc(msg.PermID),
 		suggBtns.String(),

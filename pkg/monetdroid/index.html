@@ -375,6 +375,19 @@
     max-height: 400px;
     overflow: auto;
   }
+  .tool-detail pre,
+  .perm-detail pre {
+    margin: 0;
+    border-radius: 6px;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .perm-detail:has(pre) {
+    background: none;
+    padding: 0;
+  }
   .tool-result-chip {
     background: var(--blue-bg);
     border: 1px solid var(--blue);

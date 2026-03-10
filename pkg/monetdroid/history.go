@@ -133,7 +133,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -193,7 +193,9 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 							j, _ := json.Marshal(rc)
 							output = string(j)
 						}
-						msgs = append(msgs, HistoryMessage{Type: "tool_result", Output: Truncate(output, 2000)})
+						if !isBoringResult(output) {
+							msgs = append(msgs, HistoryMessage{Type: "tool_result", Output: Truncate(output, 2000)})
+						}
 					}
 				}
 				if userText != "" || len(userImages) > 0 {

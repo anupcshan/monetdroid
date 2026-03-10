@@ -12,7 +12,6 @@ import (
 // ClaudeCommand is the path to the claude binary. Override in tests.
 var ClaudeCommand = "claude"
 
-
 func RunClaudeTurn(s *Session, prompt string, images []ImageData, broadcast func(ServerMsg)) {
 	s.Mu.Lock()
 	s.Running = true
@@ -322,7 +321,9 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 					j, _ := json.Marshal(c)
 					output = string(j)
 				}
-				broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, Output: Truncate(output, 2000)})
+				if !isBoringResult(output) {
+					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, Output: Truncate(output, 2000)})
+				}
 			}
 		}
 	}
