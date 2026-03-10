@@ -118,6 +118,7 @@ func (h *Hub) restoreSession(cid, claudeID string) {
 			sm.Type = "user_message"
 			sm.Text = m.Text
 			sm.Images = m.Images
+			s.MessageCount++
 		case "assistant":
 			sm.Type = "text"
 			sm.Text = m.Text
@@ -419,6 +420,7 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 			sm.Type = "user_message"
 			sm.Text = m.Text
 			sm.Images = m.Images
+			s.MessageCount++
 		case "assistant":
 			sm.Type = "text"
 			sm.Text = m.Text
