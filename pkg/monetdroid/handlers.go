@@ -45,6 +45,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/drawer", hub.handleDrawer)
 	mux.HandleFunc("/session-url", handleSessionURL)
 	mux.HandleFunc("/diff", hub.handleDiff)
+	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
 }
 
@@ -560,6 +561,41 @@ func (h *Hub) handleDiff(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(RenderDiffPage(claudeID, cwd, files, fullDiff)))
+}
+
+func (h *Hub) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	b := make([]byte, 8)
+	rand.Read(b)
+	clientID := hex.EncodeToString(b)
+
+	nc := h.AddNotifyClient(clientID)
+	defer h.RemoveNotifyClient(clientID)
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	fmt.Fprint(w, FormatSSE("heartbeat", "connected"))
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-nc.events:
+			fmt.Fprint(w, event)
+			flusher.Flush()
+		case <-time.After(30 * time.Second):
+			fmt.Fprint(w, FormatSSE("heartbeat", "ping"))
+			flusher.Flush()
+		}
+	}
 }
 
 // handleSessionURL is the target of an HTMX request triggered by the

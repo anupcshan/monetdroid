@@ -32,16 +32,48 @@ func (c *SSEClient) SetSession(id string) {
 	c.mu.Unlock()
 }
 
+// NotifyClient receives lightweight notification events (permission prompts, task completion).
+type NotifyClient struct {
+	events chan string
+}
+
 type Hub struct {
-	clients  map[string]*SSEClient
-	Sessions *SessionManager
-	mu       sync.RWMutex
+	clients       map[string]*SSEClient
+	notifyClients map[string]*NotifyClient
+	Sessions      *SessionManager
+	mu            sync.RWMutex
+}
+
+func (h *Hub) AddNotifyClient(id string) *NotifyClient {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c := &NotifyClient{events: make(chan string, 16)}
+	h.notifyClients[id] = c
+	return c
+}
+
+func (h *Hub) RemoveNotifyClient(id string) {
+	h.mu.Lock()
+	delete(h.notifyClients, id)
+	h.mu.Unlock()
+}
+
+func (h *Hub) notifyAll(event string) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, c := range h.notifyClients {
+		select {
+		case c.events <- event:
+		default:
+		}
+	}
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:  make(map[string]*SSEClient),
-		Sessions: NewSessionManager(),
+		clients:       make(map[string]*SSEClient),
+		notifyClients: make(map[string]*NotifyClient),
+		Sessions:      NewSessionManager(),
 	}
 }
 
@@ -150,6 +182,28 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	emptyThinking := OobSwap("thinking", "outerHTML", `<div id="thinking"></div>`)
 
 	stopBtnHTML := `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none">◼</button>`
+
+	// Push to notification clients (Android app)
+	if msg.Type == "permission_request" && s != nil {
+		label := msg.PermTool
+		if msg.PermReason != "" {
+			label = msg.PermTool + ": " + msg.PermReason
+		}
+		s.Mu.Lock()
+		claudeID := s.ClaudeID
+		cwd := s.Cwd
+		s.Mu.Unlock()
+		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, label, claudeID, ShortPath(cwd))
+		h.notifyAll(FormatSSE("permission", data))
+	}
+	if msg.Type == "done" && s != nil {
+		s.Mu.Lock()
+		claudeID := s.ClaudeID
+		cwd := s.Cwd
+		s.Mu.Unlock()
+		data := fmt.Sprintf(`{"text":"task complete","session":%q,"cwd":%q}`, claudeID, ShortPath(cwd))
+		h.notifyAll(FormatSSE("done", data))
+	}
 
 	if msg.Type == "running" {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
