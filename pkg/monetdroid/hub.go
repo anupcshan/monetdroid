@@ -160,6 +160,18 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
 		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
 		parts = append(parts, emptyThinking)
+		// Refresh git diff stat
+		if s != nil {
+			s.Mu.Lock()
+			cwd := s.Cwd
+			s.Mu.Unlock()
+			if ds, err := GitDiffStat(cwd); err == nil {
+				s.Mu.Lock()
+				s.DiffStat = ds
+				s.Mu.Unlock()
+			}
+			parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
+		}
 	}
 	if msgHTML != "" {
 		parts = append(parts, OobSwap("thinking", "outerHTML", ""))
@@ -264,6 +276,15 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 	cwd := s.Cwd
 	queuedText := s.QueuedText
 	s.Mu.Unlock()
+
+	// Refresh git diff stat
+	if cwd != "" {
+		if ds, err := GitDiffStat(cwd); err == nil {
+			s.Mu.Lock()
+			s.DiffStat = ds
+			s.Mu.Unlock()
+		}
+	}
 
 	// Rebuild todos from the last TodoWrite in the log
 	var todos []Todo

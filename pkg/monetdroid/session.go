@@ -21,6 +21,7 @@ type Session struct {
 	CostAccum      CostInfo
 	Todos          []Todo
 	LastTool       string
+	DiffStat       DiffStat
 	PermChans      map[string]chan PermResponse
 	WriteJSON      func(any)
 	Mu             sync.Mutex
