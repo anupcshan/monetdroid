@@ -743,8 +743,29 @@
 <body>
 
 <div class="app" hx-ext="sse" sse-connect="/events">
-  <!-- Hidden element to receive OOB swaps from SSE -->
-  <div sse-swap="htmx" hx-swap="none" style="display:none"></div>
+  <!--
+    SSE swap target: receives all server-sent events and processes OOB swaps.
+    hx-swap="none" means the element itself isn't updated — only OOB elements
+    in the response are swapped into their targets.
+
+    Auto-scroll logic (hx-on:htmx:sse-message):
+      Fires after every SSE message. Uses requestAnimationFrame so the DOM has
+      settled before we measure scroll position.
+
+      Two cases:
+        1. Session replay (innerHTML swap on #messages): the browser resets
+           scrollTop to 0. We detect this and scroll to the bottom so the user
+           sees the end of the conversation.
+        2. Streaming (beforeend swap appending new messages): scrollTop is
+           preserved. We only auto-scroll if the user is already near the
+           bottom (within 200px), so reading earlier messages isn't interrupted.
+  -->
+  <div sse-swap="htmx" hx-swap="none" style="display:none"
+       hx-on:htmx:sse-message="requestAnimationFrame(()=>{
+         var m=document.getElementById('messages');
+         if(m.scrollTop===0||m.scrollHeight-m.scrollTop-m.clientHeight<200)
+           m.scrollTop=m.scrollHeight
+       })"></div>
 
   <div class="header">
     <button class="header-btn" popovertarget="drawer" hx-get="/drawer" hx-target="#drawer-content" hx-swap="innerHTML">☰</button>
@@ -766,8 +787,7 @@
     <div class="todos-body" id="todos-body"></div>
   </details>
 
-  <div class="messages" id="messages"
-       hx-on:htmx:oob-after-swap="if(event.detail.target===this)this.scrollTop=this.scrollHeight">
+  <div class="messages" id="messages">
     <div class="empty-state">
       <div class="empty-icon">⌘</div>
       <p>Start a new session to begin working with Claude Code on your project</p>

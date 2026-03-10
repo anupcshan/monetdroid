@@ -54,6 +54,8 @@ func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
 	html := indexHTML
 	if qs := r.URL.RawQuery; qs != "" {
 		html = strings.Replace(html, `sse-connect="/events"`, `sse-connect="/events?`+qs+`"`, 1)
+		// Hide the empty-state when restoring a session — it gets replaced by replay
+		html = strings.Replace(html, `class="empty-state"`, `class="empty-state" style="display:none"`, 1)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))

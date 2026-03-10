@@ -141,6 +141,55 @@ func TestPermissionFlow(t *testing.T) {
 	Screenshot(t, page, "permission_reload_clean")
 }
 
+func TestSessionReloadScrollsToBottom(t *testing.T) {
+	f := Setup(t, "simple_turn.jsonl")
+	page := f.Page()
+
+	// Create session and do a turn
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	time.Sleep(200 * time.Millisecond)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	time.Sleep(500 * time.Millisecond)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("what does main.go do?")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForText(t, page, ".msg-assistant", "simple Go program", 10*time.Second)
+
+	// Get the session URL
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	if !strings.Contains(currentURL, "session=") {
+		t.Fatalf("URL should contain session=, got: %s", currentURL)
+	}
+
+	// Use a small viewport so the session content overflows
+	page.MustSetViewport(800, 300, 1, false)
+	page.MustNavigate(currentURL).MustWaitStable()
+	WaitForText(t, page, ".msg-assistant", "simple Go program", 10*time.Second)
+	time.Sleep(500 * time.Millisecond)
+
+	scrollTop := page.MustEval(`() => document.getElementById('messages').scrollTop`).Int()
+	scrollHeight := page.MustEval(`() => document.getElementById('messages').scrollHeight`).Int()
+	clientHeight := page.MustEval(`() => document.getElementById('messages').clientHeight`).Int()
+	t.Logf("scroll state: scrollTop=%d scrollHeight=%d clientHeight=%d", scrollTop, scrollHeight, clientHeight)
+
+	// Empty state should NOT be visible
+	emptyVisible := page.MustEval(`() => {
+		const el = document.querySelector('.empty-state');
+		return el && el.offsetParent !== null;
+	}`).Bool()
+	if emptyVisible {
+		Screenshot(t, page, "session_reload_empty_state_visible")
+		t.Fatal("empty state should not be visible when loading a session")
+	}
+
+	if scrollHeight > clientHeight && scrollTop == 0 {
+		Screenshot(t, page, "session_reload_stuck_at_top")
+		t.Fatalf("messages stuck at top — scroll-to-bottom failed: scrollTop=%d scrollHeight=%d clientHeight=%d", scrollTop, scrollHeight, clientHeight)
+	}
+	Screenshot(t, page, "session_reload_scrolled")
+}
+
 func TestEditDiff(t *testing.T) {
 	f := Setup(t, "edit_turn.jsonl")
 	page := f.Page()
