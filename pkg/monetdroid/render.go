@@ -130,6 +130,9 @@ func RenderMsg(msg ServerMsg) string {
 	case "text":
 		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, RenderMarkdown(msg.Text))
 	case "tool_use":
+		if msg.Tool == "TodoWrite" {
+			return ""
+		}
 		detail := FormatToolInput(msg.Tool, msg.Input)
 		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, Esc(msg.Tool), Esc(detail))
 	case "tool_result":
@@ -269,6 +272,74 @@ func ShortPath(p string) string {
 		return "~" + p[len(home):]
 	}
 	return p
+}
+
+// --- Todos rendering ---
+
+func ParseTodos(input any) []Todo {
+	m, ok := input.(map[string]any)
+	if !ok {
+		return nil
+	}
+	arr, ok := m["todos"].([]any)
+	if !ok {
+		return nil
+	}
+	var todos []Todo
+	for _, item := range arr {
+		t, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, _ := t["content"].(string)
+		activeForm, _ := t["activeForm"].(string)
+		status, _ := t["status"].(string)
+		if content != "" {
+			todos = append(todos, Todo{Content: content, ActiveForm: activeForm, Status: status})
+		}
+	}
+	return todos
+}
+
+func RenderTodosSummary(todos []Todo) string {
+	if len(todos) == 0 {
+		return ""
+	}
+	done := 0
+	for _, t := range todos {
+		if t.Status == "completed" {
+			done++
+		}
+	}
+	return fmt.Sprintf("Todos (%d/%d)", done, len(todos))
+}
+
+func RenderTodosBody(todos []Todo) string {
+	if len(todos) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, t := range todos {
+		var icon string
+		var cls string
+		switch t.Status {
+		case "completed":
+			icon = "&#x2713;"
+			cls = "todo-done"
+		case "in_progress":
+			icon = "&#x25CB;"
+			cls = "todo-active"
+		default:
+			icon = "&#x25CB;"
+			cls = "todo-pending"
+		}
+		label := t.Content
+		if t.Status == "in_progress" && t.ActiveForm != "" {
+			label = t.ActiveForm
+		}
+		fmt.Fprintf(&b, `<div class="todo-item %s"><span class="todo-icon">%s</span> %s</div>`, cls, icon, Esc(label))
+	}
+	return b.String()
 }
 
 // --- SSE format helpers ---

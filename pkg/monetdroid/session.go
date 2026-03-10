@@ -19,6 +19,8 @@ type Session struct {
 	Log            []ServerMsg
 	QueuedText     string
 	CostAccum      CostInfo
+	Todos          []Todo
+	LastTool       string
 	PermChans      map[string]chan PermResponse
 	WriteJSON      func(any)
 	Mu             sync.Mutex

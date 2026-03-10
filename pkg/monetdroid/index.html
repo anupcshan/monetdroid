@@ -234,6 +234,38 @@
   }
   .cost-bar:empty { display: none; }
 
+  /* --- Todos panel --- */
+  .todos-panel {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+  .todos-panel:not([open]) .todos-summary:empty ~ .todos-body { display: none; }
+  .todos-summary:empty { display: none; }
+  .todos-summary {
+    padding: 8px 16px;
+    color: var(--accent);
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+  .todos-summary::marker { content: ''; }
+  .todos-summary::before { content: '▶ '; font-size: 9px; color: var(--text2); }
+  .todos-panel[open] .todos-summary::before { content: '▼ '; }
+  .todos-body {
+    padding: 0 16px 8px;
+  }
+  .todo-item {
+    padding: 2px 0;
+    color: var(--text2);
+  }
+  .todo-done { color: var(--tool); }
+  .todo-done .todo-icon { color: var(--tool); }
+  .todo-active { color: var(--accent); }
+  .todo-active .todo-icon { color: var(--accent); }
+  .todo-pending .todo-icon { color: var(--text2); }
+
   /* --- Messages --- */
   .messages {
     flex: 1;
@@ -646,6 +678,11 @@
   <span id="url-state"></span>
   <div class="mode-bar" id="mode-bar"></div>
   <div class="cost-bar" id="cost-bar"></div>
+
+  <details class="todos-panel" id="todos-panel">
+    <summary class="todos-summary" id="todos-summary"></summary>
+    <div class="todos-body" id="todos-body"></div>
+  </details>
 
   <div class="messages" id="messages"
        hx-on:htmx:oob-after-swap="if(event.detail.target===this)this.scrollTop=this.scrollHeight">

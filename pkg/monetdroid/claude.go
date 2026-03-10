@@ -252,6 +252,9 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 			case "tool_use":
 				name, _ := b["name"].(string)
 				input := b["input"]
+				s.Mu.Lock()
+				s.LastTool = name
+				s.Mu.Unlock()
 				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: name, Input: input})
 			}
 		}

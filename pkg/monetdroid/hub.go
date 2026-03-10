@@ -105,11 +105,41 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		s.Mu.Unlock()
 	}
 
+	// Update todos from TodoWrite tool_use events
+	if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
+		if todos := ParseTodos(msg.Input); todos != nil {
+			s.Mu.Lock()
+			s.Todos = todos
+			s.Mu.Unlock()
+		}
+	}
+
+	// Suppress tool_result for TodoWrite (the result is just a confirmation string)
+	suppressResult := false
+	if msg.Type == "tool_result" && s != nil {
+		s.Mu.Lock()
+		suppressResult = s.LastTool == "TodoWrite"
+		s.Mu.Unlock()
+	}
+
 	msgHTML := RenderMsg(msg)
+	if suppressResult {
+		msgHTML = ""
+	}
 
 	var parts []string
 	if msgHTML != "" {
 		parts = append(parts, OobSwap("messages", "beforeend", msgHTML))
+	}
+
+	// OOB-swap the todos panel children (summary + body) to preserve open/closed state
+	if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
+		s.Mu.Lock()
+		todos := make([]Todo, len(s.Todos))
+		copy(todos, s.Todos)
+		s.Mu.Unlock()
+		parts = append(parts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
+		parts = append(parts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
 	}
 
 	if msg.Type == "cost" && s != nil {
@@ -235,8 +265,28 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 	queuedText := s.QueuedText
 	s.Mu.Unlock()
 
-	var msgsHTML strings.Builder
+	// Rebuild todos from the last TodoWrite in the log
+	var todos []Todo
 	for _, msg := range log_ {
+		if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
+			if t := ParseTodos(msg.Input); t != nil {
+				todos = t
+			}
+		}
+	}
+	s.Mu.Lock()
+	s.Todos = todos
+	s.Mu.Unlock()
+
+	var msgsHTML strings.Builder
+	lastTool := ""
+	for _, msg := range log_ {
+		if msg.Type == "tool_use" {
+			lastTool = msg.Tool
+		}
+		if msg.Tool == "TodoWrite" || (msg.Type == "tool_result" && lastTool == "TodoWrite") {
+			continue
+		}
 		msgsHTML.WriteString(RenderMsg(msg))
 	}
 
@@ -266,6 +316,8 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(label), Esc(s.ID))
 	}
 	parts = append(parts, OobSwap("mode-bar", "innerHTML", modeHTML))
+	parts = append(parts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
+	parts = append(parts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
 	parts = append(parts, RenderQueueBar(s.ID, queuedText))
 
 	event := FormatSSE("htmx", strings.Join(parts, "\n"))

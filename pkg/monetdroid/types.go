@@ -59,6 +59,12 @@ type SessionUsage struct {
 	ContextWindow int
 }
 
+type Todo struct {
+	Content    string `json:"content"`
+	ActiveForm string `json:"activeForm"`
+	Status     string `json:"status"` // pending, in_progress, completed
+}
+
 type PermResponse struct {
 	Allow       bool
 	Permissions []interface{}
