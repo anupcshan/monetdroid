@@ -7,7 +7,6 @@ import (
 	"html"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -16,25 +15,24 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/pmezard/go-difflib/difflib"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	gmhtml "github.com/yuin/goldmark/renderer/html"
 )
 
-var (
-	reCodeBlock  = regexp.MustCompile("(?s)```\\w*\n(.*?)```")
-	reCodeBlock2 = regexp.MustCompile("(?s)```(.*?)```")
-	reInlineCode = regexp.MustCompile("`([^`]+)`")
-	reBold       = regexp.MustCompile(`\*\*(.+?)\*\*`)
+var md = goldmark.New(
+	goldmark.WithExtensions(extension.Table, extension.Strikethrough, extension.TaskList),
+	goldmark.WithRendererOptions(gmhtml.WithUnsafe()),
 )
 
 func Esc(s string) string { return html.EscapeString(s) }
 
 func RenderMarkdown(text string) string {
-	s := Esc(text)
-	s = reCodeBlock.ReplaceAllString(s, "<pre>$1</pre>")
-	s = reCodeBlock2.ReplaceAllString(s, "<pre>$1</pre>")
-	s = reInlineCode.ReplaceAllString(s, "<code>$1</code>")
-	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
-	s = strings.ReplaceAll(s, "\n", "<br>")
-	return s
+	var buf bytes.Buffer
+	if err := md.Convert([]byte(text), &buf); err != nil {
+		return Esc(text)
+	}
+	return strings.ReplaceAll(buf.String(), "<a ", `<a target="_blank" rel="noopener" `)
 }
 
 func FormatToolInput(tool string, input any) string {
@@ -218,7 +216,7 @@ func RenderMsg(msg ServerMsg) string {
 			fmt.Fprintf(&content, `<img src="%s" class="msg-img-thumb" onclick="document.getElementById('%s').showModal()">`, src, dlgID)
 			fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s"></dialog>`, dlgID, src)
 		}
-		content.WriteString(Esc(msg.Text))
+		content.WriteString(strings.ReplaceAll(Esc(msg.Text), "\n", "<br>"))
 		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, content.String())
 	case "text":
 		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, RenderMarkdown(msg.Text))
@@ -457,6 +455,10 @@ func RenderTodosBody(todos []Todo) string {
 // --- SSE format helpers ---
 
 func FormatSSE(event, data string) string {
+	// Strip \r — SSE treats \r as a line terminator, so stray CRs
+	// (e.g. from CRLF textarea submissions) would split data lines
+	// and silently drop content.
+	data = strings.ReplaceAll(data, "\r", "")
 	var buf strings.Builder
 	buf.WriteString("event: ")
 	buf.WriteString(event)

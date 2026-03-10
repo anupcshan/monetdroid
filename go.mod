@@ -6,6 +6,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/go-rod/rod v0.116.2
 	github.com/pmezard/go-difflib v1.0.0
+	github.com/yuin/goldmark v1.7.16
 )
 
 require (
