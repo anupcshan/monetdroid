@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/alecthomas/chroma/v2"
@@ -24,6 +25,8 @@ var md = goldmark.New(
 	goldmark.WithExtensions(extension.Table, extension.Strikethrough, extension.TaskList),
 	goldmark.WithRendererOptions(gmhtml.WithUnsafe()),
 )
+
+var imgDlgSeq atomic.Int64
 
 func Esc(s string) string { return html.EscapeString(s) }
 
@@ -233,8 +236,8 @@ func RenderMsg(msg ServerMsg) string {
 	switch msg.Type {
 	case "user_message":
 		var content strings.Builder
-		for i, img := range msg.Images {
-			dlgID := fmt.Sprintf("img-dlg-%s-%d", msg.SessionID, i)
+		for _, img := range msg.Images {
+			dlgID := fmt.Sprintf("img-dlg-%d", imgDlgSeq.Add(1))
 			src := fmt.Sprintf("data:%s;base64,%s", Esc(img.MediaType), img.Data)
 			fmt.Fprintf(&content, `<img src="%s" class="msg-img-thumb" onclick="document.getElementById('%s').showModal()">`, src, dlgID)
 			fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s"></dialog>`, dlgID, src)
