@@ -64,7 +64,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 
 	// Check docker is available
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not found, skipping container test")
+		t.Fatal("docker not found — integration tests require docker")
 	}
 
 	// Build docker image (once per test run)
