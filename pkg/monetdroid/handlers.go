@@ -99,7 +99,7 @@ func (h *Hub) restoreSession(cid, claudeID string) {
 
 	cwd := ""
 	if len(allMsgs) > 0 {
-		_, cwd = GetSessionInfo(jsonlPath)
+		_, cwd, _ = GetSessionInfo(jsonlPath)
 	}
 	if cwd == "" {
 		dirKey := filepath.Base(filepath.Dir(jsonlPath))
@@ -402,7 +402,7 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 
 	cwd := ""
 	if len(allMsgs) > 0 {
-		_, cwd = GetSessionInfo(jsonlPath)
+		_, cwd, _ = GetSessionInfo(jsonlPath)
 	}
 	if cwd == "" {
 		cwd = "/" + strings.ReplaceAll(dirKey, "-", "/")
@@ -459,22 +459,27 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			running := s.Running
 			sp := ShortPath(s.Cwd)
 			sid := s.ID
-			claudeID := s.ClaudeID
 			mc := s.MessageCount
+			summary := ""
+			for _, m := range s.Log {
+				if m.Type == "user_message" && m.Text != "" {
+					summary = m.Text
+					break
+				}
+			}
 			s.Mu.Unlock()
+			if summary == "" {
+				summary = "(new)"
+			} else if len(summary) > 80 {
+				summary = summary[:80] + "…"
+			}
 			runHTML := ""
 			if running {
 				runHTML = `<span class="di-running"></span> running`
 			}
-			displayID := claudeID
-			if displayID == "" {
-				displayID = "(new)"
-			} else if len(displayID) > 12 {
-				displayID = displayID[:12] + "..."
-			}
 			fmt.Fprintf(&buf,
 				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d turns</div></div>`,
-				Esc(sid), Esc(displayID), Esc(sp), runHTML, mc,
+				Esc(sid), Esc(summary), Esc(sp), runHTML, mc,
 			)
 		}
 	}
@@ -492,9 +497,13 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				if summary == "" {
 					summary = "(empty)"
 				}
+				turnsStr := ""
+				if sess.NumTurns > 0 {
+					turnsStr = fmt.Sprintf(" · %d turns", sess.NumTurns)
+				}
 				fmt.Fprintf(&buf,
-					`<div class="history-item" hx-post="/load" hx-vals='{"dir_key":"%s","history_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s</div></div>`,
-					Esc(group.DirKey), Esc(sess.ID), Esc(summary), Esc(ago),
+					`<div class="history-item" hx-post="/load" hx-vals='{"dir_key":"%s","history_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s%s</div></div>`,
+					Esc(group.DirKey), Esc(sess.ID), Esc(summary), Esc(ago), turnsStr,
 				)
 			}
 			buf.WriteString(`</div></details>`)

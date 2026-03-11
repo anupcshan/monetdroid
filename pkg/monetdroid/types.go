@@ -38,10 +38,11 @@ type HistoryGroup struct {
 }
 
 type HistorySession struct {
-	ID      string `json:"id"`
-	Summary string `json:"summary"`
-	ModTime string `json:"mod_time"`
-	ModUnix int64  `json:"mod_unix"`
+	ID       string `json:"id"`
+	Summary  string `json:"summary"`
+	ModTime  string `json:"mod_time"`
+	ModUnix  int64  `json:"mod_unix"`
+	NumTurns int    `json:"num_turns"`
 }
 
 type HistoryMessage struct {

@@ -40,12 +40,15 @@ func ScanHistory() ([]HistoryGroup, error) {
 				continue
 			}
 			sessionID := strings.TrimSuffix(filepath.Base(sf), ".jsonl")
-			summary, sessionCwd := GetSessionInfo(sf)
+			summary, sessionCwd, numTurns := GetSessionInfo(sf)
 			if cwd == "" && sessionCwd != "" {
 				cwd = sessionCwd
 			}
+			if numTurns == 0 {
+				continue
+			}
 			sessions = append(sessions, HistorySession{
-				ID: sessionID, Summary: summary,
+				ID: sessionID, Summary: summary, NumTurns: numTurns,
 				ModTime: info.ModTime().Format(time.RFC3339), ModUnix: info.ModTime().Unix(),
 			})
 		}
@@ -79,15 +82,15 @@ func FindJSONLByClaudeID(claudeID string) string {
 	return ""
 }
 
-func GetSessionInfo(fpath string) (summary, cwd string) {
+func GetSessionInfo(fpath string) (summary string, cwd string, numTurns int) {
 	f, err := os.Open(fpath)
 	if err != nil {
-		return "", ""
+		return "", "", 0
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
-	for i := 0; i < 30 && scanner.Scan(); i++ {
+	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+	for scanner.Scan() {
 		var obj map[string]any
 		if err := json.Unmarshal([]byte(scanner.Text()), &obj); err != nil {
 			continue
@@ -96,11 +99,10 @@ func GetSessionInfo(fpath string) (summary, cwd string) {
 			cwd = c
 		}
 		if obj["type"] == "user" {
-			if msg, ok := obj["message"].(map[string]any); ok {
-				summary = ExtractTextContent(msg["content"])
-				if summary != "" {
-					summary = Truncate(summary, 120)
-					return
+			numTurns++
+			if summary == "" {
+				if msg, ok := obj["message"].(map[string]any); ok {
+					summary = Truncate(ExtractTextContent(msg["content"]), 120)
 				}
 			}
 		}
