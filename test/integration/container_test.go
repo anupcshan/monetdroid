@@ -19,7 +19,8 @@ func testMode() string {
 }
 
 func TestEmptyState(t *testing.T) {
-	f := SetupWithContainer(t, "simple_turn.jsonl", testMode())
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 	page := f.Page()
 
 	WaitForText(t, page, ".empty-state", "Start a new session", 5*time.Second)
@@ -27,7 +28,8 @@ func TestEmptyState(t *testing.T) {
 }
 
 func TestCreateSession(t *testing.T) {
-	f := SetupWithContainer(t, "simple_turn.jsonl", testMode())
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 	page := f.Page()
 
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
@@ -42,8 +44,27 @@ func TestCreateSession(t *testing.T) {
 	Screenshot(t, page, "session_created")
 }
 
-func TestSimpleTurn(t *testing.T) {
-	f := SetupWithContainer(t, "simple_turn.jsonl", testMode())
+func TestMultiTurn(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
+
+	// Write files for claude to explore
+	os.WriteFile(filepath.Join(f.WorkDir, "main.go"), []byte(`package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`), 0o644)
+	os.WriteFile(filepath.Join(f.WorkDir, "util.go"), []byte(`package main
+
+// Add returns the sum of two integers.
+func Add(a, b int) int {
+	return a + b
+}
+`), 0o644)
+
 	page := f.Page()
 
 	// Create session
@@ -53,22 +74,41 @@ func TestSimpleTurn(t *testing.T) {
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
 	time.Sleep(500 * time.Millisecond)
 
-	// Send a simple message
-	page.MustElement(`textarea[name="text"]`).MustInput("Say hello in exactly 3 words")
+	// First turn: ask about the files
+	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
 	page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for user message to appear
-	WaitForText(t, page, ".msg-user", "Say hello in exactly 3 words", 30*time.Second)
+	WaitForText(t, page, ".msg-user", "Read main.go", 30*time.Second)
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, ".tool-chip", 10*time.Second)
+	Screenshot(t, page, "multi_turn_first_response")
 
-	// Wait for assistant response
-	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
-	Screenshot(t, page, "simple_turn_response")
+	// Wait for first turn to fully complete (stop button disappears)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
 	// Cost bar should show
 	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
+
+	// Second turn: follow-up question referencing the first turn's context
+	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go use the Add function from util.go? Show me how")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for second user message to render
+	_, err := page.Timeout(30 * time.Second).ElementR(".msg-user", "Add function")
+	if err != nil {
+		t.Fatalf("second user message never appeared: %v", err)
+	}
+
+	// Wait for second assistant response (it will reference Add/main.go)
+	_, err = page.Timeout(120 * time.Second).ElementR(".msg-assistant", "Add")
+	if err != nil {
+		t.Fatalf("second assistant response never appeared: %v", err)
+	}
+	Screenshot(t, page, "multi_turn_second_response")
 }
 
 func TestToolUse(t *testing.T) {
+	t.Parallel()
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 
 	// Write some files into workdir for claude to explore
@@ -120,6 +160,7 @@ const Version = "1.0.0"
 }
 
 func TestPermissionFlow(t *testing.T) {
+	t.Parallel()
 	f := SetupWithContainer(t, "permission_flow.jsonl", testMode())
 	page := f.Page()
 
@@ -168,6 +209,7 @@ func TestPermissionFlow(t *testing.T) {
 }
 
 func TestEditDiff(t *testing.T) {
+	t.Parallel()
 	f := SetupWithContainer(t, "edit_diff.jsonl", testMode())
 
 	// Create a file for claude to edit
@@ -207,19 +249,48 @@ func main() {
 }
 
 func TestSessionReload(t *testing.T) {
-	f := SetupWithContainer(t, "simple_turn.jsonl", testMode())
+	t.Parallel()
+	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
+
+	// Write files (same as TestMultiTurn — needed for tool execution)
+	os.WriteFile(filepath.Join(f.WorkDir, "main.go"), []byte(`package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`), 0o644)
+	os.WriteFile(filepath.Join(f.WorkDir, "util.go"), []byte(`package main
+
+// Add returns the sum of two integers.
+func Add(a, b int) int {
+	return a + b
+}
+`), 0o644)
+
 	page := f.Page()
 
-	// Create session and do a turn
+	// Create session and do two turns (generates enough content to overflow)
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	time.Sleep(200 * time.Millisecond)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
 	time.Sleep(500 * time.Millisecond)
 
-	page.MustElement(`textarea[name="text"]`).MustInput("Say hello in exactly 3 words")
+	// First turn
+	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
 	page.MustElement(`.send-btn`).MustClick()
-	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Second turn
+	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go use the Add function from util.go? Show me how")
+	page.MustElement(`.send-btn`).MustClick()
+	if _, err := page.Timeout(120 * time.Second).ElementR(".msg-assistant", "Add"); err != nil {
+		t.Fatalf("second assistant response never appeared: %v", err)
+	}
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
 	// Get the session URL
 	currentURL := page.MustEval(`() => window.location.href`).String()
@@ -227,7 +298,7 @@ func TestSessionReload(t *testing.T) {
 		t.Fatalf("URL should contain session=, got: %s", currentURL)
 	}
 
-	// Use a small viewport so the session content overflows
+	// Reload with small viewport — multi-turn content should overflow
 	page.MustSetViewport(800, 300, 1, false)
 	page.MustNavigate(currentURL).MustWaitStable()
 	WaitForElement(t, page, ".msg-assistant", 10*time.Second)
@@ -238,17 +309,14 @@ func TestSessionReload(t *testing.T) {
 	clientHeight := page.MustEval(`() => document.getElementById('messages').clientHeight`).Int()
 	t.Logf("scroll state: scrollTop=%d scrollHeight=%d clientHeight=%d", scrollTop, scrollHeight, clientHeight)
 
-	// Empty state should NOT be visible
-	emptyVisible := page.MustEval(`() => {
-		const el = document.querySelector('.empty-state');
-		return el && el.offsetParent !== null;
-	}`).Bool()
-	if emptyVisible {
-		Screenshot(t, page, "session_reload_empty_state_visible")
-		t.Fatal("empty state should not be visible when loading a session")
+	// Content should overflow at 300px height
+	if scrollHeight <= clientHeight {
+		Screenshot(t, page, "session_reload_no_overflow")
+		t.Fatalf("expected content to overflow at 300px: scrollHeight=%d clientHeight=%d", scrollHeight, clientHeight)
 	}
 
-	if scrollHeight > clientHeight && scrollTop == 0 {
+	// Should be scrolled to bottom, not stuck at top
+	if scrollTop == 0 {
 		Screenshot(t, page, "session_reload_stuck_at_top")
 		t.Fatalf("messages stuck at top: scrollTop=%d scrollHeight=%d clientHeight=%d", scrollTop, scrollHeight, clientHeight)
 	}

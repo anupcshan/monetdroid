@@ -88,18 +88,33 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 
 	workDir := t.TempDir()
 
-	// Override BuildClaudeCmd to run claude in a container
-	monetdroid.BuildClaudeCmd = func(cwd string, args []string) *exec.Cmd {
+	// Named docker volume for persistent claude home across container invocations.
+	// Needed for --resume to find the session file from a previous turn.
+	volName := fmt.Sprintf("monetdroid-test-%s-%d", t.Name(), time.Now().UnixNano())
+	out, err := exec.Command("docker", "volume", "create", volName).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker volume create: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		exec.Command("docker", "volume", "rm", volName).Run()
+	})
+
+	// Start server
+	hub := monetdroid.NewHub()
+
+	// Set BuildClaudeCmd on the hub to run claude in a container
+	hub.BuildClaudeCmd = func(cwd string, args []string) *exec.Cmd {
 		dockerArgs := []string{
 			"run", "--rm", "-i",
 			"--network=host",
 			"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
 			"-v", cwd + ":/work",
 			"-w", "/work",
+			"-v", volName + ":/root/.claude",
 		}
 
 		if mode == "record" {
-			// Mount credentials for subscription auth
+			// Bind-mount credentials into the persistent claude home for subscription auth
 			home, _ := os.UserHomeDir()
 			credsFile := filepath.Join(home, ".claude", ".credentials.json")
 			if _, err := os.Stat(credsFile); err == nil {
@@ -122,10 +137,6 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 		return cmd
 	}
-	t.Cleanup(func() { monetdroid.BuildClaudeCmd = nil })
-
-	// Start server
-	hub := monetdroid.NewHub()
 	mux := monetdroid.RegisterRoutes(hub)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

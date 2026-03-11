@@ -2,6 +2,7 @@ package monetdroid
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 )
@@ -42,6 +43,10 @@ type Hub struct {
 	notifyClients map[string]*NotifyClient
 	Sessions      *SessionManager
 	mu            sync.RWMutex
+
+	// BuildClaudeCmd overrides how the claude command is constructed.
+	// If nil, defaults to exec.Command("claude", args...) with cwd set.
+	BuildClaudeCmd func(cwd string, args []string) *exec.Cmd
 }
 
 func (h *Hub) AddNotifyClient(id string) *NotifyClient {
@@ -301,8 +306,9 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 		s.Append(msg)
 		h.Broadcast(msg)
 	}
+	buildCmd := h.BuildClaudeCmd
 	go func() {
-		RunClaudeTurn(s, text, images, logBroadcast)
+		RunClaudeTurn(s, text, images, buildCmd, logBroadcast)
 		s.Mu.Lock()
 		interrupted := s.Interrupted
 		next := s.QueuedText
@@ -315,7 +321,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 			s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
-			RunClaudeTurn(s, next, nil, logBroadcast)
+			RunClaudeTurn(s, next, nil, buildCmd, logBroadcast)
 		}
 	}()
 }
