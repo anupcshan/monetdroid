@@ -128,10 +128,10 @@ func ExtractTextContent(content any) string {
 	return ""
 }
 
-func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, usage SessionUsage, err error) {
+func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, usage SessionUsage, err error) {
 	f, err := os.Open(jsonlPath)
 	if err != nil {
-		return nil, "", usage, err
+		return nil, "", "", usage, err
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
@@ -144,6 +144,9 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		var obj map[string]any
 		if err := json.Unmarshal([]byte(line), &obj); err != nil {
 			continue
+		}
+		if c, ok := obj["cwd"].(string); ok && cwd == "" {
+			cwd = c
 		}
 		if sc, ok := obj["isSidechain"].(bool); ok && sc {
 			continue
@@ -258,5 +261,5 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			}
 		}
 	}
-	return msgs, claudeID, usage, scanner.Err()
+	return msgs, claudeID, cwd, usage, scanner.Err()
 }

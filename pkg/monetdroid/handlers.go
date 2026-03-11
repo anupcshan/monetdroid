@@ -72,34 +72,11 @@ func sessionURL(s *Session) string {
 	return "/?cwd=" + cwd
 }
 
-// restoreSession finds a session by ClaudeID (in memory or on disk) and assigns it to the client.
-func (h *Hub) restoreSession(cid, claudeID string) {
-	client := h.GetOrCreateClient(cid)
-
-	// Check in-memory sessions first
-	if s := h.Sessions.FindByClaudeID(claudeID); s != nil {
-		client.SetSession(s.ID)
-		return
-	}
-
-	// Find JSONL on disk
-	jsonlPath := FindJSONLByClaudeID(claudeID)
-	if jsonlPath == "" {
-		return
-	}
-	if s := h.Sessions.FindByJSONLPath(jsonlPath); s != nil {
-		client.SetSession(s.ID)
-		return
-	}
-
-	allMsgs, loadedClaudeID, sessUsage, err := ParseSessionMessages(jsonlPath)
+// loadSessionFromDisk parses a JSONL file and creates an in-memory session.
+func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
+	allMsgs, claudeID, cwd, sessUsage, err := ParseSessionMessages(jsonlPath)
 	if err != nil {
-		return
-	}
-
-	cwd := ""
-	if len(allMsgs) > 0 {
-		_, cwd, _ = GetSessionInfo(jsonlPath)
+		return nil
 	}
 	if cwd == "" {
 		dirKey := filepath.Base(filepath.Dir(jsonlPath))
@@ -108,7 +85,7 @@ func (h *Hub) restoreSession(cid, claudeID string) {
 
 	s := h.Sessions.Create(cwd)
 	s.Mu.Lock()
-	s.ClaudeID = loadedClaudeID
+	s.ClaudeID = claudeID
 	s.JSONLPath = jsonlPath
 	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
 	s.CostAccum.ContextUsed = sessUsage.ContextUsed
@@ -138,8 +115,32 @@ func (h *Hub) restoreSession(cid, claudeID string) {
 		}
 		s.Log = append(s.Log, sm)
 	}
+	return s
+}
 
-	client.SetSession(s.ID)
+// restoreSession finds a session by ClaudeID (in memory or on disk) and assigns it to the client.
+func (h *Hub) restoreSession(cid, claudeID string) {
+	client := h.GetOrCreateClient(cid)
+
+	// Check in-memory sessions first
+	if s := h.Sessions.FindByClaudeID(claudeID); s != nil {
+		client.SetSession(s.ID)
+		return
+	}
+
+	// Find JSONL on disk
+	jsonlPath := FindJSONLByClaudeID(claudeID)
+	if jsonlPath == "" {
+		return
+	}
+	if s := h.Sessions.FindByJSONLPath(jsonlPath); s != nil {
+		client.SetSession(s.ID)
+		return
+	}
+
+	if s := h.loadSessionFromDisk(jsonlPath); s != nil {
+		client.SetSession(s.ID)
+	}
 }
 
 func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -394,51 +395,10 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allMsgs, claudeID, sessUsage, err := ParseSessionMessages(jsonlPath)
-	if err != nil {
+	s := h.loadSessionFromDisk(jsonlPath)
+	if s == nil {
 		w.WriteHeader(204)
 		return
-	}
-
-	cwd := ""
-	if len(allMsgs) > 0 {
-		_, cwd, _ = GetSessionInfo(jsonlPath)
-	}
-	if cwd == "" {
-		cwd = "/" + strings.ReplaceAll(dirKey, "-", "/")
-	}
-
-	s := h.Sessions.Create(cwd)
-	s.Mu.Lock()
-	s.ClaudeID = claudeID
-	s.JSONLPath = jsonlPath
-	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
-	s.CostAccum.ContextUsed = sessUsage.ContextUsed
-	s.CostAccum.ContextWindow = sessUsage.ContextWindow
-	s.Mu.Unlock()
-
-	for _, m := range allMsgs {
-		sm := ServerMsg{SessionID: s.ID}
-		switch m.Type {
-		case "user":
-			sm.Type = "user_message"
-			sm.Text = m.Text
-			sm.Images = m.Images
-			s.MessageCount++
-		case "assistant":
-			sm.Type = "text"
-			sm.Text = m.Text
-		case "tool_use":
-			sm.Type = "tool_use"
-			sm.Tool = m.Tool
-			sm.Input = m.Input
-		case "tool_result":
-			sm.Type = "tool_result"
-			sm.Output = m.Output
-		default:
-			continue
-		}
-		s.Log = append(s.Log, sm)
 	}
 
 	client := h.GetOrCreateClient(cid)
