@@ -12,6 +12,10 @@ import (
 // ClaudeCommand is the path to the claude binary. Override in tests.
 var ClaudeCommand = "claude"
 
+// BuildClaudeCmd, if non-nil, overrides how the claude command is constructed.
+// Used by container-based tests to run claude inside docker.
+var BuildClaudeCmd func(cwd string, args []string) *exec.Cmd
+
 func RunClaudeTurn(s *Session, prompt string, images []ImageData, broadcast func(ServerMsg)) {
 	s.Mu.Lock()
 	s.Running = true
@@ -43,9 +47,14 @@ func RunClaudeTurn(s *Session, prompt string, images []ImageData, broadcast func
 		args = append(args, "--resume", claudeID)
 	}
 
-	cmd := exec.Command(ClaudeCommand, args...)
-	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+	var cmd *exec.Cmd
+	if BuildClaudeCmd != nil {
+		cmd = BuildClaudeCmd(cwd, args)
+	} else {
+		cmd = exec.Command(ClaudeCommand, args...)
+		cmd.Dir = cwd
+		cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
