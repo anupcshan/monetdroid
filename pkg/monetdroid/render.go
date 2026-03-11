@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,7 +15,6 @@ import (
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
-	"github.com/pmezard/go-difflib/difflib"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	gmhtml "github.com/yuin/goldmark/renderer/html"
@@ -124,27 +124,45 @@ func FormatPermDetail(tool string, input any) string {
 var chromaFormatter = chromahtml.New()
 var chromaStyle = styles.Get("vim")
 
-func stripTrailingWS(lines []string) []string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = strings.TrimRight(l, " \t\r") + "\n"
+func runDiff(filePath, oldStr, newStr string, context int) string {
+	oldFile, err := os.CreateTemp("", "diff-old-*")
+	if err != nil {
+		return ""
 	}
-	return out
+	defer os.Remove(oldFile.Name())
+	newFile, err := os.CreateTemp("", "diff-new-*")
+	if err != nil {
+		return ""
+	}
+	defer os.Remove(newFile.Name())
+
+	if !strings.HasSuffix(oldStr, "\n") {
+		oldStr += "\n"
+	}
+	if !strings.HasSuffix(newStr, "\n") {
+		newStr += "\n"
+	}
+	oldFile.WriteString(oldStr)
+	oldFile.Close()
+	newFile.WriteString(newStr)
+	newFile.Close()
+
+	cmd := exec.Command("diff", "-w",
+		fmt.Sprintf("-U%d", context),
+		fmt.Sprintf("--label=%s", filePath),
+		fmt.Sprintf("--label=%s", filePath),
+		oldFile.Name(), newFile.Name())
+	out, _ := cmd.Output()
+	// diff exits 1 when files differ, which is normal
+	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() > 1 {
+		return ""
+	}
+	return string(out)
 }
 
 func RenderEditDiffHTML(filePath, oldStr, newStr string) string {
-	oldLines := stripTrailingWS(difflib.SplitLines(oldStr))
-	newLines := stripTrailingWS(difflib.SplitLines(newStr))
-	ud := difflib.UnifiedDiff{
-		A:        oldLines,
-		B:        newLines,
-		FromFile: filePath,
-		ToFile:   filePath,
-		Context:  3,
-	}
-	diffText, err := difflib.GetUnifiedDiffString(ud)
-	if err != nil || diffText == "" {
-		// Fallback: show old/new as plain text
+	diffText := runDiff(filePath, oldStr, newStr, 3)
+	if diffText == "" {
 		return ""
 	}
 	return highlightDiff(diffText)
@@ -183,12 +201,7 @@ func editDiffFromInput(input any) (filePath, oldStr, newStr string, ok bool) {
 }
 
 func editSummary(filePath, oldStr, newStr string) string {
-	ud := difflib.UnifiedDiff{
-		A:       stripTrailingWS(difflib.SplitLines(oldStr)),
-		B:       stripTrailingWS(difflib.SplitLines(newStr)),
-		Context: 0,
-	}
-	diffText, _ := difflib.GetUnifiedDiffString(ud)
+	diffText := runDiff(filePath, oldStr, newStr, 0)
 	added, removed := 0, 0
 	for _, line := range strings.Split(diffText, "\n") {
 		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
