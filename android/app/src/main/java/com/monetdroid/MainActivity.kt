@@ -4,10 +4,12 @@ import android.Manifest
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -23,9 +25,11 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: SharedPreferences
     private var webView: WebView? = null
+    private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
 
     companion object {
         @Volatile var isForeground = false
+        private const val FILE_CHOOSER_REQUEST = 2
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -127,7 +131,25 @@ class MainActivity : AppCompatActivity() {
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
             webViewClient = WebViewClient()
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    callback: ValueCallback<Array<Uri>>?,
+                    params: FileChooserParams?
+                ): Boolean {
+                    fileUploadCallback?.onReceiveValue(null)
+                    fileUploadCallback = callback
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "image/*"
+                        if (params?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
+                    }
+                    startActivityForResult(intent, FILE_CHOOSER_REQUEST)
+                    return true
+                }
+            }
             setBackgroundColor(0xFF1a1a2e.toInt())
             loadUrl(url)
         }
@@ -146,6 +168,23 @@ class MainActivity : AppCompatActivity() {
             putExtra("server_url", serverUrl)
         }
         ContextCompat.startForegroundService(this, intent)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == FILE_CHOOSER_REQUEST) {
+            val results = if (resultCode == RESULT_OK && data != null) {
+                // Multiple files come as clipData, single file as data
+                val clip = data.clipData
+                if (clip != null) {
+                    Array(clip.itemCount) { clip.getItemAt(it).uri }
+                } else {
+                    data.data?.let { arrayOf(it) }
+                }
+            } else null
+            fileUploadCallback?.onReceiveValue(results)
+            fileUploadCallback = null
+        }
     }
 
     override fun onResume() {
