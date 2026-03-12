@@ -20,6 +20,7 @@ class NotificationService : Service() {
     private var sseThread: Thread? = null
     @Volatile private var running = false
     private var notificationId = 100
+    private val threadLock = Any()  // Guards thread restart
 
     companion object {
         const val CHANNEL_FOREGROUND = "monetdroid_foreground"
@@ -38,22 +39,35 @@ class NotificationService : Service() {
 
         startForeground(1, buildForegroundNotification())
 
-        // Restart SSE connection if server URL changed
-        running = false
-        sseThread?.interrupt()
+        synchronized(threadLock) {
+            // Stop old thread and wait for it to finish
+            running = false
+            sseThread?.interrupt()
+            sseThread?.let {
+                try {
+                    it.join(1000)  // Wait up to 1 second for old thread to exit
+                } catch (e: InterruptedException) {
+                    // Thread was interrupted during join, continue
+                }
+            }
 
-        running = true
-        sseThread = Thread { connectSSE(serverUrl) }.apply {
-            isDaemon = true
-            start()
+            // Start new thread
+            running = true
+            sseThread = Thread { connectSSE(serverUrl) }.apply {
+                isDaemon = true
+                start()
+            }
         }
 
         return START_STICKY
     }
 
     override fun onDestroy() {
-        running = false
-        sseThread?.interrupt()
+        synchronized(threadLock) {
+            running = false
+            sseThread?.interrupt()
+            sseThread = null
+        }
         super.onDestroy()
     }
 
