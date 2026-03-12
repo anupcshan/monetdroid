@@ -298,17 +298,45 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	s.Mu.Lock()
 	s.Interrupted = false
+	proc := s.proc
 	s.Mu.Unlock()
+
+	// Ensure process is alive
+	if proc == nil || proc.IsDead() {
+		logBroadcast := func(msg ServerMsg) {
+			s.Append(msg)
+			h.Broadcast(msg)
+		}
+		var err error
+		proc, err = StartProcess(s, h.BuildClaudeCmd, logBroadcast)
+		if err != nil {
+			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+			return
+		}
+		s.Mu.Lock()
+		s.proc = proc
+		s.Mu.Unlock()
+	}
+
 	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
-	logBroadcast := func(msg ServerMsg) {
-		s.Append(msg)
-		h.Broadcast(msg)
-	}
-	buildCmd := h.BuildClaudeCmd
+
 	go func() {
-		RunClaudeTurn(s, text, images, buildCmd, logBroadcast)
+		if err := proc.SendUserMessage(text, images); err != nil {
+			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+			return
+		}
+
+		// Wait for turn to complete (result event or process death)
+		select {
+		case <-proc.turnDone:
+		case <-proc.dead:
+		}
+
+		h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
+
+		// Handle queued message
 		s.Mu.Lock()
 		interrupted := s.Interrupted
 		next := s.QueuedText
@@ -316,12 +344,21 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 			s.QueuedText = ""
 		}
 		s.Mu.Unlock()
+
 		if !interrupted && next != "" {
 			h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")))
 			s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 			h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
-			RunClaudeTurn(s, next, nil, buildCmd, logBroadcast)
+			if err := proc.SendUserMessage(next, nil); err != nil {
+				h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+				return
+			}
+			select {
+			case <-proc.turnDone:
+			case <-proc.dead:
+			}
+			h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 		}
 	}()
 }

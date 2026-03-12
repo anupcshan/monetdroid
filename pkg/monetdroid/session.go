@@ -23,7 +23,7 @@ type Session struct {
 	LastTool       string
 	DiffStat       DiffStat
 	PermChans      map[string]chan PermResponse
-	WriteJSON      func(any)
+	proc           *ClaudeProcess
 	Mu             sync.Mutex
 }
 
@@ -59,7 +59,12 @@ func (sm *SessionManager) Create(cwd string) *Session {
 	defer sm.mu.Unlock()
 	sm.counter++
 	id := fmt.Sprintf("s%d", sm.counter)
-	s := &Session{ID: id, Cwd: cwd, CreatedAt: time.Now()}
+	s := &Session{
+		ID:        id,
+		Cwd:       cwd,
+		CreatedAt: time.Now(),
+		PermChans: make(map[string]chan PermResponse),
+	}
 	sm.sessions[id] = s
 	return s
 }

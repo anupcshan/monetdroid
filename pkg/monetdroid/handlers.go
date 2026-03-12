@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -342,14 +343,13 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 
 	s.Mu.Lock()
 	s.PermissionMode = mode
-	writeJSON := s.WriteJSON
+	proc := s.proc
 	s.Mu.Unlock()
 
-	if writeJSON != nil {
-		writeJSON(map[string]any{
-			"type": "control_request", "request_id": fmt.Sprintf("mode_%d", time.Now().UnixNano()),
-			"request": map[string]any{"subtype": "set_permission_mode", "mode": mode},
-		})
+	if proc != nil && !proc.IsDead() {
+		if err := proc.SetPermissionMode(mode); err != nil {
+			log.Printf("[mode] error setting permission mode: %v", err)
+		}
 	}
 	h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: mode})
 
@@ -489,16 +489,14 @@ func (h *Hub) handleStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Mu.Lock()
-	writeJSON := s.WriteJSON
+	proc := s.proc
 	s.Interrupted = true
 	s.Mu.Unlock()
 
-	if writeJSON != nil {
-		writeJSON(map[string]any{
-			"type":       "control_request",
-			"request_id": fmt.Sprintf("interrupt_%d", time.Now().UnixNano()),
-			"request":    map[string]any{"subtype": "interrupt"},
-		})
+	if proc != nil && !proc.IsDead() {
+		if err := proc.Interrupt(); err != nil {
+			log.Printf("[stop] error sending interrupt: %v", err)
+		}
 	}
 
 	w.WriteHeader(204)
