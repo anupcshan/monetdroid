@@ -38,6 +38,64 @@ func RenderMarkdown(text string) string {
 	return strings.ReplaceAll(buf.String(), "<a ", `<a target="_blank" rel="noopener" `)
 }
 
+// ToolChipSummary returns a compact one-line summary for the tool chip header.
+func ToolChipSummary(tool string, input any) string {
+	m, _ := input.(map[string]any)
+	if m == nil {
+		return tool
+	}
+	filePath, _ := m["file_path"].(string)
+	if filePath == "" {
+		filePath, _ = m["path"].(string)
+	}
+	short := func(p string) string {
+		return filepath.Base(p)
+	}
+	switch tool {
+	case "Read", "FileRead":
+		if filePath == "" {
+			return "Read"
+		}
+		name := short(filePath)
+		offset, hasOffset := m["offset"].(float64)
+		limit, hasLimit := m["limit"].(float64)
+		if hasOffset && hasLimit {
+			return fmt.Sprintf("Read %s:%d-%d", name, int(offset), int(offset+limit))
+		}
+		if hasOffset {
+			return fmt.Sprintf("Read %s:%d+", name, int(offset))
+		}
+		return "Read " + name
+	case "Write", "FileWrite":
+		if filePath != "" {
+			return "Write " + short(filePath)
+		}
+		return "Write"
+	case "Grep":
+		pattern, _ := m["pattern"].(string)
+		if pattern == "" {
+			return "Grep"
+		}
+		if filePath != "" {
+			return fmt.Sprintf("Grep /%s/ in %s", pattern, short(filePath))
+		}
+		return fmt.Sprintf("Grep /%s/", pattern)
+	case "Glob":
+		pattern, _ := m["pattern"].(string)
+		if pattern != "" {
+			return "Glob " + pattern
+		}
+		return "Glob"
+	case "Bash":
+		cmd, _ := m["command"].(string)
+		if cmd != "" {
+			return cmd
+		}
+		return "Bash"
+	}
+	return tool
+}
+
 func FormatToolInput(tool string, input any) string {
 	m, ok := input.(map[string]any)
 	if !ok {
@@ -262,8 +320,9 @@ func RenderMsg(msg ServerMsg) string {
 				}
 			}
 		}
+		summary := ToolChipSummary(msg.Tool, msg.Input)
 		detail := FormatToolInput(msg.Tool, msg.Input)
-		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, Esc(msg.Tool), Esc(detail))
+		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, Esc(summary), Esc(detail))
 	case "tool_result":
 		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-result-chip"><summary class="tool-result-summary">result</summary><div class="tool-result-full">%s</div></details></div>`, Esc(msg.Output))
 	case "error":

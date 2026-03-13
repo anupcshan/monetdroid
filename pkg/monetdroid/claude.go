@@ -4,6 +4,15 @@ import (
 	"encoding/json"
 )
 
+// suppressResultTools lists tools whose tool_result output should not be
+// shown to the user (the tool_use chip is still rendered).
+var suppressResultTools = map[string]bool{
+	"TodoWrite":       true,
+	"AskUserQuestion": true,
+	"Read":            true,
+	"FileRead":        true,
+}
+
 // handleStreamEvent processes non-control messages from the CLI and broadcasts them.
 func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMsg)) {
 	eventType, _ := event["type"].(string)
@@ -47,7 +56,7 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 				name, _ := b["name"].(string)
 				id, _ := b["id"].(string)
 				input := b["input"]
-				if name == "TodoWrite" || name == "AskUserQuestion" {
+				if suppressResultTools[name] {
 					s.Mu.Lock()
 					s.SuppressedToolIDs[id] = name
 					s.Mu.Unlock()

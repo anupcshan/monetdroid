@@ -388,7 +388,7 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 	var msgsHTML strings.Builder
 	suppressedIDs := make(map[string]bool)
 	for _, msg := range log_ {
-		if msg.Type == "tool_use" && (msg.Tool == "TodoWrite" || msg.Tool == "AskUserQuestion") {
+		if msg.Type == "tool_use" && suppressResultTools[msg.Tool] {
 			suppressedIDs[msg.ToolUseID] = true
 		}
 		if msg.Type == "tool_result" && suppressedIDs[msg.ToolUseID] {
