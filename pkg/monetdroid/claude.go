@@ -45,14 +45,17 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 				}
 			case "tool_use":
 				name, _ := b["name"].(string)
+				id, _ := b["id"].(string)
 				input := b["input"]
-				s.Mu.Lock()
-				s.LastTool = name
-				s.Mu.Unlock()
+				if name == "TodoWrite" || name == "AskUserQuestion" {
+					s.Mu.Lock()
+					s.SuppressedToolIDs[id] = name
+					s.Mu.Unlock()
+				}
 				if name == "AskUserQuestion" {
 					continue // rendered by the permission prompt UI
 				}
-				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: name, Input: input})
+				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: name, ToolUseID: id, Input: input})
 			}
 		}
 		if usage, ok := msg["usage"].(map[string]any); ok {
@@ -111,6 +114,16 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 				continue
 			}
 			if b["type"] == "tool_result" {
+				tuID, _ := b["tool_use_id"].(string)
+				s.Mu.Lock()
+				_, suppressed := s.SuppressedToolIDs[tuID]
+				if suppressed {
+					delete(s.SuppressedToolIDs, tuID)
+				}
+				s.Mu.Unlock()
+				if suppressed {
+					continue
+				}
 				output := ""
 				switch c := b["content"].(type) {
 				case string:
@@ -120,7 +133,7 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 					output = string(j)
 				}
 				if !isBoringResult(output) {
-					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, Output: Truncate(output, 2000)})
+					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: tuID, Output: Truncate(output, 2000)})
 				}
 			}
 		}

@@ -151,18 +151,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 	}
 
-	// Suppress tool_result for TodoWrite/AskUserQuestion
-	suppressResult := false
-	if msg.Type == "tool_result" && s != nil {
-		s.Mu.Lock()
-		suppressResult = s.LastTool == "TodoWrite" || s.LastTool == "AskUserQuestion"
-		s.Mu.Unlock()
-	}
-
 	msgHTML := RenderMsg(msg)
-	if suppressResult {
-		msgHTML = ""
-	}
 
 	var parts []string
 	if msgHTML != "" {
@@ -397,15 +386,13 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 	s.Mu.Unlock()
 
 	var msgsHTML strings.Builder
-	lastTool := ""
+	suppressedIDs := make(map[string]bool)
 	for _, msg := range log_ {
-		if msg.Type == "tool_use" {
-			lastTool = msg.Tool
+		if msg.Type == "tool_use" && (msg.Tool == "TodoWrite" || msg.Tool == "AskUserQuestion") {
+			suppressedIDs[msg.ToolUseID] = true
 		}
-		if msg.Tool == "TodoWrite" || (msg.Type == "tool_result" && lastTool == "TodoWrite") {
-			continue
-		}
-		if msg.Type == "tool_result" && lastTool == "AskUserQuestion" {
+		if msg.Type == "tool_result" && suppressedIDs[msg.ToolUseID] {
+			delete(suppressedIDs, msg.ToolUseID)
 			continue
 		}
 		msgsHTML.WriteString(RenderMsg(msg))

@@ -134,6 +134,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		return nil, "", "", usage, err
 	}
 	defer f.Close()
+	toolNames := make(map[string]string) // tool_use id → tool name
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -198,8 +199,10 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 							j, _ := json.Marshal(rc)
 							output = string(j)
 						}
+						tuID, _ := b["tool_use_id"].(string)
+						toolName := toolNames[tuID]
 						if !isBoringResult(output) {
-							msgs = append(msgs, HistoryMessage{Type: "tool_result", Output: Truncate(output, 2000)})
+							msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: tuID, Output: Truncate(output, 2000)})
 						}
 					}
 				}
@@ -239,7 +242,11 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					}
 				case "tool_use":
 					name, _ := b["name"].(string)
-					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: name, Input: b["input"]})
+					id, _ := b["id"].(string)
+					if id != "" {
+						toolNames[id] = name
+					}
+					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: name, ToolUseID: id, Input: b["input"]})
 				}
 			}
 		case "result":

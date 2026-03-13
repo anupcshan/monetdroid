@@ -108,9 +108,12 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 		case "tool_use":
 			sm.Type = "tool_use"
 			sm.Tool = m.Tool
+			sm.ToolUseID = m.ToolUseID
 			sm.Input = m.Input
 		case "tool_result":
 			sm.Type = "tool_result"
+			sm.Tool = m.Tool
+			sm.ToolUseID = m.ToolUseID
 			sm.Output = m.Output
 		default:
 			continue

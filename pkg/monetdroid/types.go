@@ -13,6 +13,7 @@ type ServerMsg struct {
 	Text            string      `json:"text,omitempty"`
 	Images          []ImageData `json:"images,omitempty"`
 	Tool            string      `json:"tool,omitempty"`
+	ToolUseID       string      `json:"tool_use_id,omitempty"`
 	Input           interface{} `json:"input,omitempty"`
 	Output          string      `json:"output,omitempty"`
 	Error           string      `json:"error,omitempty"`
@@ -46,12 +47,13 @@ type HistorySession struct {
 }
 
 type HistoryMessage struct {
-	Type   string      `json:"type"`
-	Text   string      `json:"text,omitempty"`
-	Images []ImageData `json:"images,omitempty"`
-	Tool   string      `json:"tool,omitempty"`
-	Input  interface{} `json:"input,omitempty"`
-	Output string      `json:"output,omitempty"`
+	Type      string      `json:"type"`
+	Text      string      `json:"text,omitempty"`
+	Images    []ImageData `json:"images,omitempty"`
+	Tool      string      `json:"tool,omitempty"`
+	ToolUseID string      `json:"tool_use_id,omitempty"`
+	Input     interface{} `json:"input,omitempty"`
+	Output    string      `json:"output,omitempty"`
 }
 
 type SessionUsage struct {

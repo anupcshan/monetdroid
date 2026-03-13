@@ -19,10 +19,10 @@ type Session struct {
 	Log            []ServerMsg
 	QueuedText     string
 	CostAccum      CostInfo
-	Todos          []Todo
-	LastTool       string
-	DiffStat       DiffStat
-	PermChans      map[string]chan PermResponse
+	Todos             []Todo
+	SuppressedToolIDs map[string]string // tool_use id → tool name, for suppressing results
+	DiffStat          DiffStat
+	PermChans         map[string]chan PermResponse
 	proc           *ClaudeProcess
 	Mu             sync.Mutex
 }
@@ -60,10 +60,11 @@ func (sm *SessionManager) Create(cwd string) *Session {
 	sm.counter++
 	id := fmt.Sprintf("s%d", sm.counter)
 	s := &Session{
-		ID:        id,
-		Cwd:       cwd,
-		CreatedAt: time.Now(),
-		PermChans: make(map[string]chan PermResponse),
+		ID:                id,
+		Cwd:               cwd,
+		CreatedAt:          time.Now(),
+		SuppressedToolIDs: make(map[string]string),
+		PermChans:          make(map[string]chan PermResponse),
 	}
 	sm.sessions[id] = s
 	return s
