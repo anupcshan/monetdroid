@@ -47,6 +47,10 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/drawer", hub.handleDrawer)
 	mux.HandleFunc("/session-url", handleSessionURL)
 	mux.HandleFunc("/diff", hub.handleDiff)
+	mux.HandleFunc("/label-edit", hub.handleLabelEdit)
+	mux.HandleFunc("/label", hub.handleLabel)
+	mux.HandleFunc("/queue", hub.handleQueue)
+	mux.HandleFunc("/ack", hub.handleAck)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
 }
@@ -88,6 +92,7 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 	s := h.Sessions.Create(cwd)
 	s.Mu.Lock()
 	s.ClaudeID = claudeID
+	s.Label = h.Labels.Get(claudeID)
 	s.JSONLPath = jsonlPath
 	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
 	s.CostAccum.ContextUsed = sessUsage.ContextUsed
@@ -121,6 +126,60 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 		s.Log = append(s.Log, sm)
 	}
 	return s
+}
+
+func (h *Hub) handleLabelEdit(w http.ResponseWriter, r *http.Request) {
+	cid := GetCID(w, r)
+	client := h.GetOrCreateClient(cid)
+	sid := client.ActiveSession()
+	if sid == "" {
+		w.WriteHeader(204)
+		return
+	}
+	s := h.Sessions.Get(sid)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+	s.Mu.Lock()
+	label := s.Label
+	cwd := s.Cwd
+	s.Mu.Unlock()
+	value := label
+	if value == "" {
+		value = ShortPath(cwd)
+	}
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<form id="session-label" hx-post="/label" hx-swap="outerHTML" style="flex:1;display:flex"><input class="session-label-input" name="label" value="%s" autofocus hx-on:keydown="if(event.key==='Escape'){this.closest('form').outerHTML='<div class=\'session-label\' id=\'session-label\' hx-get=\'/label-edit\' hx-target=\'#session-label\' hx-swap=\'outerHTML\'>'+this.dataset.original+'</div>';htmx.process(document.getElementById('session-label'))}" data-original="%s"></input></form>`,
+		Esc(value), Esc(Esc(value)))
+}
+
+func (h *Hub) handleLabel(w http.ResponseWriter, r *http.Request) {
+	cid := GetCID(w, r)
+	client := h.GetOrCreateClient(cid)
+	sid := client.ActiveSession()
+	if sid == "" {
+		w.WriteHeader(204)
+		return
+	}
+	s := h.Sessions.Get(sid)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+	label := strings.TrimSpace(r.FormValue("label"))
+	s.Mu.Lock()
+	s.Label = label
+	claudeID := s.ClaudeID
+	if label == "" {
+		label = ShortPath(s.Cwd)
+	}
+	s.Mu.Unlock()
+	if claudeID != "" {
+		h.Labels.Set(claudeID, s.Label)
+	}
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML">%s</div>`, Esc(label))
 }
 
 // restoreSession finds a session by ClaudeID (in memory or on disk) and assigns it to the client.
@@ -169,6 +228,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// Restore session from query params (forwarded from page URL via sse-connect)
 	if sessionID := r.URL.Query().Get("session"); sessionID != "" {
 		h.restoreSession(cid, sessionID)
+		h.Queue.Ack(sessionID)
 	} else if cwd := r.URL.Query().Get("cwd"); cwd != "" {
 		if strings.HasPrefix(cwd, "~/") {
 			home, _ := os.UserHomeDir()
@@ -179,7 +239,16 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if sid := client.ActiveSession(); sid != "" {
 		if s := h.Sessions.Get(sid); s != nil {
-			h.ReplaySession(cid, s)
+			// Write replay directly to avoid channel race with old SSE connection
+			fmt.Fprint(w, h.BuildReplay(s))
+			flusher.Flush()
+		}
+	} else {
+		// No active session — show the notification queue on the landing page
+		if queueHTML := RenderQueue(h.Queue.List()); queueHTML != "" {
+			fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML",
+				`<div class="queue-header">Needs Attention</div>`+queueHTML)))
+			flusher.Flush()
 		}
 	}
 
@@ -212,6 +281,11 @@ func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s := h.Sessions.Create(cwd)
+	if label := r.FormValue("label"); label != "" {
+		s.Mu.Lock()
+		s.Label = label
+		s.Mu.Unlock()
+	}
 	client := h.GetOrCreateClient(cid)
 	client.SetSession(s.ID)
 	h.ReplaySession(cid, s)
@@ -518,6 +592,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			sp := ShortPath(s.Cwd)
 			sid := s.ID
 			mc := s.MessageCount
+			label := s.Label
 			summary := ""
 			for _, m := range s.Log {
 				if m.Type == "user_message" && m.Text != "" {
@@ -526,7 +601,9 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			s.Mu.Unlock()
-			if summary == "" {
+			if label != "" {
+				summary = label
+			} else if summary == "" {
 				summary = "(new)"
 			} else if len(summary) > 80 {
 				summary = summary[:80] + "…"
@@ -663,6 +740,19 @@ func (h *Hub) handleNotifications(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (h *Hub) handleQueue(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(RenderQueue(h.Queue.List())))
+}
+
+func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
+	claudeID := r.FormValue("claude_id")
+	if claudeID != "" {
+		h.Queue.Ack(claudeID)
+	}
+	w.WriteHeader(204)
 }
 
 // handleSessionURL is the target of an HTMX request triggered by the

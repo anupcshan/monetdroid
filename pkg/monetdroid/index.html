@@ -66,6 +66,19 @@
     white-space: nowrap;
     flex: 1;
     text-align: center;
+    cursor: pointer;
+  }
+  .session-label-input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 4px 8px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    text-align: center;
+    outline: none;
   }
   .header-btn {
     background: var(--surface2);
@@ -755,6 +768,80 @@
   .btn-cancel { background: var(--surface2); color: var(--text); border: 1px solid var(--border) !important; }
   .btn-create { background: var(--accent); color: var(--bg); }
 
+  /* --- Notification queue --- */
+  .queue-header {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 20px 0 12px;
+  }
+  .queue-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 10px;
+  }
+  .queue-completed { border-left: 3px solid var(--tool); }
+  .queue-blocked { border-left: 3px solid var(--accent); }
+  .qi-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 11px;
+  }
+  .queue-completed .qi-status { color: var(--tool); font-weight: 600; }
+  .queue-blocked .qi-status { color: var(--accent); font-weight: 600; }
+  .qi-time { color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+  .qi-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 4px;
+    line-height: 1.4;
+  }
+  .qi-cwd {
+    font-size: 11px;
+    color: var(--text2);
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 6px;
+  }
+  .qi-result {
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.4;
+    margin-bottom: 10px;
+  }
+  .qi-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .qi-dismiss {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+  }
+  .qi-dismiss:hover { border-color: var(--text2); }
+  .qi-open {
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'DM Sans', sans-serif;
+    text-decoration: none;
+  }
+
   /* --- Empty state --- */
   .empty-state {
     display: flex;
@@ -800,7 +887,7 @@
 
   <div class="header">
     <button class="header-btn" popovertarget="drawer" hx-get="/drawer" hx-target="#drawer-content" hx-swap="innerHTML">☰</button>
-    <div class="session-label" id="session-label">no session</div>
+    <div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML">no session</div>
     <span id="running-dot" style="display:none"></span>
     <button class="header-btn" popovertarget="new-session-popover">+</button>
   </div>
@@ -853,6 +940,8 @@
   <h3>New Session</h3>
   <form hx-post="/new" hx-swap="none"
         hx-on::after-request="document.getElementById('new-session-popover').hidePopover()">
+    <label>Label</label>
+    <input type="text" name="label" placeholder="fix auth flaky test">
     <label>Project directory</label>
     <input type="text" name="cwd" placeholder="~/projects/my-app">
     <div class="modal-actions">

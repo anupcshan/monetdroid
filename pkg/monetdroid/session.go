@@ -9,6 +9,7 @@ import (
 type Session struct {
 	ID             string
 	ClaudeID       string
+	Label          string
 	Cwd            string
 	PermissionMode string
 	MessageCount   int

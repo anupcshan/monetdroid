@@ -42,6 +42,8 @@ type Hub struct {
 	clients       map[string]*SSEClient
 	notifyClients map[string]*NotifyClient
 	Sessions      *SessionManager
+	Queue         *NotificationQueue
+	Labels        *LabelStore
 	mu            sync.RWMutex
 
 	// BuildClaudeCmd overrides how the claude command is constructed.
@@ -79,6 +81,8 @@ func NewHub() *Hub {
 		clients:       make(map[string]*SSEClient),
 		notifyClients: make(map[string]*NotifyClient),
 		Sessions:      NewSessionManager(),
+		Queue:         NewNotificationQueue(),
+		Labels:        NewLabelStore(),
 	}
 }
 
@@ -179,30 +183,72 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 
 	// Push to notification clients (Android app)
 	if msg.Type == "permission_request" && s != nil {
-		label := msg.PermTool
+		permLabel := msg.PermTool
 		if msg.PermReason != "" {
-			label = msg.PermTool + ": " + msg.PermReason
+			permLabel = msg.PermTool + ": " + msg.PermReason
 		}
 		s.Mu.Lock()
 		claudeID := s.ClaudeID
 		cwd := s.Cwd
+		sessionLabel := s.Label
 		s.Mu.Unlock()
-		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, label, claudeID, ShortPath(cwd))
+		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, claudeID, ShortPath(cwd))
 		h.notifyAll(FormatSSE("permission", data))
+
+		if claudeID != "" {
+			h.Queue.Enqueue(QueueItem{
+				ClaudeID: claudeID,
+				Label:    sessionLabel,
+				Status:   "blocked",
+				Result:   permLabel,
+				Cwd:      cwd,
+			})
+		}
 	}
 	if msg.Type == "done" && s != nil {
 		s.Mu.Lock()
 		claudeID := s.ClaudeID
 		cwd := s.Cwd
+		label := s.Label
+		// Find last assistant text for result summary
+		var result string
+		for i := len(s.Log) - 1; i >= 0; i-- {
+			if s.Log[i].Type == "text" && s.Log[i].Text != "" {
+				result = s.Log[i].Text
+				break
+			}
+		}
 		s.Mu.Unlock()
 		data := fmt.Sprintf(`{"text":"task complete","session":%q,"cwd":%q}`, claudeID, ShortPath(cwd))
 		h.notifyAll(FormatSSE("done", data))
+
+		if claudeID != "" {
+			if len(result) > 200 {
+				result = result[:200] + "..."
+			}
+			h.Queue.Enqueue(QueueItem{
+				ClaudeID: claudeID,
+				Label:    label,
+				Status:   "completed",
+				Result:   result,
+				Cwd:      cwd,
+			})
+		}
 	}
 
 	if msg.Type == "running" {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
 		parts = append(parts, OobSwap("stop-btn", "outerHTML", stopBtnHTML))
 		parts = append(parts, OobSwap("messages", "beforeend", thinkingHTML))
+		// Remove any "blocked" queue item — session is running again
+		if s != nil {
+			s.Mu.Lock()
+			claudeID := s.ClaudeID
+			s.Mu.Unlock()
+			if claudeID != "" {
+				h.Queue.Ack(claudeID)
+			}
+		}
 	}
 	if msg.Type == "done" {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
@@ -257,6 +303,15 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	if msg.Type == "session_id" {
 		parts = append(parts, fmt.Sprintf(
 			`<span id="url-state" hx-swap-oob="outerHTML" hx-get="/session-url?session=%s" hx-trigger="load" hx-target="#url-state" hx-swap="innerHTML"></span>`, Esc(msg.Text)))
+		// Persist label now that we have the ClaudeID
+		if s != nil {
+			s.Mu.Lock()
+			label := s.Label
+			s.Mu.Unlock()
+			if label != "" {
+				h.Labels.Set(msg.Text, label)
+			}
+		}
 	}
 
 	if msg.Type == "permission_mode" {
@@ -307,6 +362,17 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 		s.Mu.Unlock()
 	}
 
+	// Auto-label from first user message
+	s.Mu.Lock()
+	if s.Label == "" && text != "" {
+		label := text
+		if len(label) > 80 {
+			label = label[:80] + "..."
+		}
+		s.Label = label
+	}
+	s.Mu.Unlock()
+
 	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
@@ -352,13 +418,19 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	}()
 }
 
-// ReplaySession sends the full session state to a specific client.
+// ReplaySession sends the full session state to a specific client via the channel.
 func (h *Hub) ReplaySession(cid string, s *Session) {
+	h.SendToClient(cid, h.BuildReplay(s))
+}
+
+// BuildReplay constructs the full session state as an SSE event string.
+func (h *Hub) BuildReplay(s *Session) string {
 	s.Mu.Lock()
 	log_ := make([]ServerMsg, len(s.Log))
 	copy(log_, s.Log)
 	running := s.Running
 	permMode := s.PermissionMode
+	label := s.Label
 	cwd := s.Cwd
 	queuedText := s.QueuedText
 	s.Mu.Unlock()
@@ -399,7 +471,11 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 	}
 
 	var parts []string
-	parts = append(parts, OobSwap("session-label", "innerHTML", Esc(ShortPath(cwd))))
+	sessionLabel := ShortPath(cwd)
+	if label != "" {
+		sessionLabel = label
+	}
+	parts = append(parts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
 	parts = append(parts, OobSwap("messages", "innerHTML", msgsHTML.String()))
 	parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
 
@@ -428,6 +504,5 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 	parts = append(parts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
 	parts = append(parts, RenderQueueBar(s.ID, queuedText))
 
-	event := FormatSSE("htmx", strings.Join(parts, "\n"))
-	h.SendToClient(cid, event)
+	return FormatSSE("htmx", strings.Join(parts, "\n"))
 }

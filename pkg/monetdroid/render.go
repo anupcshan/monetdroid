@@ -770,6 +770,50 @@ func RenderDiffPage(sessionID, cwd string, files []DiffFile, fullDiff string) st
 	return b.String()
 }
 
+func RenderQueue(items []QueueItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, item := range items {
+		statusIcon := "&#x2713;"
+		statusClass := "queue-completed"
+		statusLabel := "Completed"
+		if item.Status == "blocked" {
+			statusIcon = "&#x25CF;"
+			statusClass = "queue-blocked"
+			statusLabel = "Blocked"
+		}
+		result := item.Result
+		if len(result) > 120 {
+			result = result[:120] + "..."
+		}
+		fmt.Fprintf(&b, `<div class="queue-item %s">`, statusClass)
+		fmt.Fprintf(&b, `<div class="qi-header"><span class="qi-status">%s %s</span><span class="qi-time">%s</span></div>`,
+			statusIcon, Esc(statusLabel), Esc(TimeAgo(parseTime(item.Timestamp))))
+		fmt.Fprintf(&b, `<div class="qi-label">%s</div>`, Esc(item.Label))
+		if item.Cwd != "" {
+			fmt.Fprintf(&b, `<div class="qi-cwd">%s</div>`, Esc(ShortPath(item.Cwd)))
+		}
+		if result != "" {
+			fmt.Fprintf(&b, `<div class="qi-result">%s</div>`, Esc(result))
+		}
+		fmt.Fprintf(&b, `<div class="qi-actions">`+
+			`<form hx-post="/ack" hx-swap="none" hx-on::after-request="this.closest('.queue-item').remove()" style="display:inline">`+
+			`<input type="hidden" name="claude_id" value="%s">`+
+			`<button type="submit" class="qi-dismiss">Dismiss</button></form> `+
+			`<a href="/?session=%s" class="qi-open">Open</a>`+
+			`</div>`, Esc(item.ClaudeID), Esc(item.ClaudeID))
+		b.WriteString(`</div>`)
+	}
+	return b.String()
+}
+
+func parseTime(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339, s)
+	return t
+}
+
 func OobSwap(id, strategy, content string) string {
 	return fmt.Sprintf(`<div id="%s" hx-swap-oob="%s">%s</div>`, id, strategy, content)
 }
