@@ -49,6 +49,9 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 				s.Mu.Lock()
 				s.LastTool = name
 				s.Mu.Unlock()
+				if name == "AskUserQuestion" {
+					continue // rendered by the permission prompt UI
+				}
 				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: name, Input: input})
 			}
 		}

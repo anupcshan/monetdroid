@@ -566,6 +566,19 @@
   .perm-allow { background: var(--tool); color: var(--bg); }
   .perm-deny { background: var(--error); color: white; }
 
+  /* --- Ask User (multiple choice) --- */
+  .ask-question { margin-bottom: 12px; }
+  .ask-header { font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .ask-text { font-size: 13px; color: var(--text); margin-bottom: 8px; }
+  .ask-option { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .ask-option:hover { background: var(--surface2); }
+  .ask-option input { flex-shrink: 0; accent-color: var(--tool); }
+  .ask-label { color: var(--text); font-weight: 500; }
+  .ask-desc { color: var(--text2); font-size: 12px; }
+  .ask-other-text { display: block; width: 100%; margin-top: 4px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 13px; }
+  .ask-other-text:focus { outline: none; border-color: var(--accent); }
+  .ask-answered { font-size: 13px; color: var(--text2); padding: 2px 0; }
+
   /* --- Queue bar --- */
   .queue-bar:empty { display: none; }
   .queue-content {

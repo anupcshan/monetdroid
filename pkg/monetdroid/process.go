@@ -193,7 +193,11 @@ func (p *ClaudeProcess) handleControlRequest(event map[string]any, broadcast fun
 
 	var payload map[string]any
 	if resp.Allow {
-		payload = map[string]any{"behavior": "allow", "updatedInput": toolInput}
+		input := toolInput
+		if resp.UpdatedInput != nil {
+			input = resp.UpdatedInput
+		}
+		payload = map[string]any{"behavior": "allow", "updatedInput": input}
 		if len(resp.Permissions) > 0 {
 			payload["updatedPermissions"] = resp.Permissions
 		}

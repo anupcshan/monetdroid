@@ -250,6 +250,9 @@ func RenderMsg(msg ServerMsg) string {
 		if msg.Tool == "TodoWrite" {
 			return ""
 		}
+		if msg.Tool == "AskUserQuestion" {
+			return RenderAskUserStatic(msg.Input)
+		}
 		if msg.Tool == "Edit" || msg.Tool == "FileEdit" {
 			if fp, old, new_, ok := editDiffFromInput(msg.Input); ok {
 				diffHTML := RenderEditDiffHTML(fp, old, new_)
@@ -274,6 +277,9 @@ func RenderMsg(msg ServerMsg) string {
 }
 
 func RenderPermission(msg ServerMsg) string {
+	if msg.PermTool == "AskUserQuestion" {
+		return RenderAskUser(msg)
+	}
 	var detailHTML string
 	if msg.PermTool == "Edit" || msg.PermTool == "FileEdit" {
 		if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
@@ -342,6 +348,120 @@ func RenderPermission(msg ServerMsg) string {
 		Esc(msg.SessionID), Esc(msg.PermID),
 		suggBtns.String(),
 	)
+}
+
+func RenderAskUser(msg ServerMsg) string {
+	m, ok := msg.PermInput.(map[string]any)
+	if !ok {
+		return ""
+	}
+	questions, _ := m["questions"].([]any)
+	if len(questions) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="perm-prompt ask-user" id="perm-%s">`, Esc(msg.PermID))
+	fmt.Fprintf(&b, `<form hx-post="/perm-answer" hx-swap="none">`)
+	fmt.Fprintf(&b, `<input type="hidden" name="session_id" value="%s">`, Esc(msg.SessionID))
+	fmt.Fprintf(&b, `<input type="hidden" name="perm_id" value="%s">`, Esc(msg.PermID))
+
+	for qi, q := range questions {
+		qm, ok := q.(map[string]any)
+		if !ok {
+			continue
+		}
+		question, _ := qm["question"].(string)
+		header, _ := qm["header"].(string)
+		multiSelect, _ := qm["multiSelect"].(bool)
+		options, _ := qm["options"].([]any)
+
+		b.WriteString(`<div class="ask-question">`)
+		if header != "" {
+			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(header))
+		}
+		fmt.Fprintf(&b, `<div class="ask-text">%s</div>`, Esc(question))
+
+		fieldName := fmt.Sprintf("answer_%d", qi)
+		inputType := "radio"
+		if multiSelect {
+			inputType = "checkbox"
+		}
+
+		for oi, o := range options {
+			om, ok := o.(map[string]any)
+			if !ok {
+				continue
+			}
+			label, _ := om["label"].(string)
+			desc, _ := om["description"].(string)
+			optID := fmt.Sprintf("opt-%s-%d-%d", msg.PermID, qi, oi)
+			fmt.Fprintf(&b, `<label class="ask-option" for="%s">`, optID)
+			fmt.Fprintf(&b, `<input type="%s" id="%s" name="%s" value="%s">`,
+				inputType, optID, Esc(fieldName), Esc(label))
+			fmt.Fprintf(&b, `<span class="ask-label">%s</span>`, Esc(label))
+			if desc != "" {
+				fmt.Fprintf(&b, `<span class="ask-desc">%s</span>`, Esc(desc))
+			}
+			b.WriteString(`</label>`)
+		}
+
+		// "Other" free-text option
+		otherID := fmt.Sprintf("opt-%s-%d-other", msg.PermID, qi)
+		fmt.Fprintf(&b, `<label class="ask-option" for="%s">`, otherID)
+		fmt.Fprintf(&b, `<input type="%s" id="%s" name="%s" value="__other__">`,
+			inputType, otherID, Esc(fieldName))
+		fmt.Fprintf(&b, `<span class="ask-label">Other</span>`)
+		b.WriteString(`</label>`)
+		fmt.Fprintf(&b, `<input type="text" name="%s_other" class="ask-other-text" placeholder="Type your answer...">`,
+			Esc(fieldName))
+
+		b.WriteString(`</div>`)
+	}
+
+	fmt.Fprintf(&b, `<div class="perm-actions" id="perm-actions-%s">`, Esc(msg.PermID))
+	b.WriteString(`<button type="submit" class="perm-allow" style="width:100%">Submit</button>`)
+	b.WriteString(`</div>`)
+	b.WriteString(`</form></div>`)
+	return b.String()
+}
+
+// RenderAskUserStatic renders a read-only Q&A summary for history/replay.
+func RenderAskUserStatic(input interface{}) string {
+	m, ok := input.(map[string]any)
+	if !ok {
+		return ""
+	}
+	questions, _ := m["questions"].([]any)
+	if len(questions) == 0 {
+		return ""
+	}
+	answers, _ := m["answers"].(map[string]any)
+
+	var b strings.Builder
+	b.WriteString(`<div class="perm-prompt ask-user">`)
+	for _, q := range questions {
+		qm, ok := q.(map[string]any)
+		if !ok {
+			continue
+		}
+		question, _ := qm["question"].(string)
+		header, _ := qm["header"].(string)
+
+		b.WriteString(`<div class="ask-question">`)
+		if header != "" {
+			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(header))
+		}
+		if ans, ok := answers[question]; ok {
+			ansStr, _ := ans.(string)
+			fmt.Fprintf(&b, `<div class="ask-answered"><span class="ask-text">%s</span> <span style="color:var(--tool)">%s</span></div>`, Esc(question), Esc(ansStr))
+		} else {
+			fmt.Fprintf(&b, `<div class="ask-text">%s</div>`, Esc(question))
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
 }
 
 func RenderCostBar(s *Session) string {

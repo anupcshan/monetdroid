@@ -38,6 +38,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/new", hub.handleNewSession)
 	mux.HandleFunc("/send", hub.handleSend)
 	mux.HandleFunc("/perm", hub.handlePerm)
+	mux.HandleFunc("/perm-answer", hub.handlePermAnswer)
 	mux.HandleFunc("/mode", hub.handleMode)
 	mux.HandleFunc("/switch", hub.handleSwitch)
 	mux.HandleFunc("/load", hub.handleLoad)
@@ -328,6 +329,100 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 
 	s.RemovePermission(permID)
 
+	w.WriteHeader(204)
+}
+
+func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.FormValue("session_id")
+	permID := r.FormValue("perm_id")
+
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	s.Mu.Lock()
+	ch, ok := s.PermChans[permID]
+	s.Mu.Unlock()
+
+	if !ok {
+		w.WriteHeader(204)
+		return
+	}
+
+	// Reconstruct the original input from the stored permission request
+	var originalInput map[string]any
+	s.Mu.Lock()
+	for _, m := range s.Log {
+		if m.Type == "permission_request" && m.PermID == permID {
+			if mi, ok := m.PermInput.(map[string]any); ok {
+				originalInput = mi
+			}
+			break
+		}
+	}
+	s.Mu.Unlock()
+
+	if originalInput == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	// Build the answers map from form values
+	questions, _ := originalInput["questions"].([]any)
+	answers := make(map[string]string)
+	for qi, q := range questions {
+		qm, ok := q.(map[string]any)
+		if !ok {
+			continue
+		}
+		question, _ := qm["question"].(string)
+		fieldName := fmt.Sprintf("answer_%d", qi)
+		multiSelect, _ := qm["multiSelect"].(bool)
+
+		if multiSelect {
+			// Collect all selected values
+			r.ParseForm()
+			vals := r.Form[fieldName]
+			var selected []string
+			for _, v := range vals {
+				if v == "__other__" {
+					if other := r.FormValue(fieldName + "_other"); other != "" {
+						selected = append(selected, other)
+					}
+				} else {
+					selected = append(selected, v)
+				}
+			}
+			answers[question] = strings.Join(selected, ", ")
+		} else {
+			val := r.FormValue(fieldName)
+			if val == "__other__" {
+				val = r.FormValue(fieldName + "_other")
+			}
+			answers[question] = val
+		}
+	}
+
+	// Build updatedInput with answers
+	updatedInput := make(map[string]any)
+	for k, v := range originalInput {
+		updatedInput[k] = v
+	}
+	updatedInput["answers"] = answers
+
+	ch <- PermResponse{Allow: true, UpdatedInput: updatedInput}
+
+	// Replace the entire ask-user form with a compact answered summary
+	var summaryHTML strings.Builder
+	for question, answer := range answers {
+		fmt.Fprintf(&summaryHTML, `<div class="ask-answered"><span class="ask-text">%s</span> <span style="color:var(--tool)">%s</span></div>`, Esc(question), Esc(answer))
+	}
+	event := FormatSSE("htmx", OobSwap("perm-"+permID, "innerHTML", summaryHTML.String()))
+	h.BroadcastToSession(sessionID, event)
+
+	s.RemovePermission(permID)
 	w.WriteHeader(204)
 }
 

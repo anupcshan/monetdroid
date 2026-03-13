@@ -208,6 +208,51 @@ func TestPermissionFlow(t *testing.T) {
 	}
 }
 
+func TestAskUserQuestion(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "ask_user.jsonl", testMode())
+	page := f.Page()
+
+	// Create session
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	time.Sleep(200 * time.Millisecond)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	time.Sleep(500 * time.Millisecond)
+
+	// Ask something that triggers AskUserQuestion
+	page.MustElement(`textarea[name="text"]`).MustInput("I want to set up a new project. Use the AskUserQuestion tool to ask me what programming language I prefer, with options: Go, Python, Rust, TypeScript")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for the ask-user prompt to appear (radio buttons)
+	WaitForElement(t, page, ".ask-user", 60*time.Second)
+	WaitForElement(t, page, ".ask-option", 10*time.Second)
+	Screenshot(t, page, "ask_user_prompt")
+
+	// Select an option (click the radio button for "Go")
+	goOption, err := page.Timeout(5 * time.Second).ElementR(".ask-label", "^Go$")
+	if err != nil {
+		t.Fatalf("could not find Go option: %v", err)
+	}
+	goOption.MustParent().MustClick()
+	time.Sleep(200 * time.Millisecond)
+	Screenshot(t, page, "ask_user_selected")
+
+	// Submit the answer
+	page.MustElement(".ask-user button[type=submit]").MustClick()
+
+	// Wait for answered summary (form replaced with answer text)
+	WaitForElement(t, page, ".ask-answered", 10*time.Second)
+	Screenshot(t, page, "ask_user_answered")
+
+	// Wait for assistant response acknowledging the choice
+	_, err = page.Timeout(120 * time.Second).ElementR(".msg-assistant", "Go")
+	if err != nil {
+		t.Fatalf("assistant response acknowledging Go never appeared: %v", err)
+	}
+	Screenshot(t, page, "ask_user_complete")
+}
+
 func TestEditDiff(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "edit_diff.jsonl", testMode())

@@ -151,11 +151,11 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 	}
 
-	// Suppress tool_result for TodoWrite (the result is just a confirmation string)
+	// Suppress tool_result for TodoWrite/AskUserQuestion
 	suppressResult := false
 	if msg.Type == "tool_result" && s != nil {
 		s.Mu.Lock()
-		suppressResult = s.LastTool == "TodoWrite"
+		suppressResult = s.LastTool == "TodoWrite" || s.LastTool == "AskUserQuestion"
 		s.Mu.Unlock()
 	}
 
@@ -403,6 +403,9 @@ func (h *Hub) ReplaySession(cid string, s *Session) {
 			lastTool = msg.Tool
 		}
 		if msg.Tool == "TodoWrite" || (msg.Type == "tool_result" && lastTool == "TodoWrite") {
+			continue
+		}
+		if msg.Type == "tool_result" && lastTool == "AskUserQuestion" {
 			continue
 		}
 		msgsHTML.WriteString(RenderMsg(msg))
