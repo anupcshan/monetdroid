@@ -917,7 +917,7 @@
   <div class="input-area">
     <form hx-post="/send" hx-swap="none" hx-encoding="multipart/form-data" hx-on::after-request="this.reset(); this.querySelector('.badge').classList.add('hidden'); this.querySelector('.badge').textContent = ''">
       <div class="input-row">
-        <textarea name="text" placeholder="Message Claude Code..." rows="1"></textarea>
+        <textarea name="text" placeholder="Message Claude Code..." rows="1" onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();this.form.requestSubmit()}"></textarea>
         <label class="img-btn" title="Attach image">
           <span class="badge hidden"></span>
           📎
