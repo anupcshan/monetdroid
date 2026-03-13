@@ -10,6 +10,7 @@ type Session struct {
 	ID             string
 	ClaudeID       string
 	Label          string
+	AutoLabel      bool
 	Cwd            string
 	PermissionMode string
 	MessageCount   int

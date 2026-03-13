@@ -791,7 +791,11 @@ func RenderQueue(items []QueueItem) string {
 		fmt.Fprintf(&b, `<div class="queue-item %s">`, statusClass)
 		fmt.Fprintf(&b, `<div class="qi-header"><span class="qi-status">%s %s</span><span class="qi-time">%s</span></div>`,
 			statusIcon, Esc(statusLabel), Esc(TimeAgo(parseTime(item.Timestamp))))
-		fmt.Fprintf(&b, `<div class="qi-label">%s</div>`, Esc(item.Label))
+		displayLabel := item.Label
+		if item.AutoLabel && displayLabel != "" {
+			displayLabel = "(auto) " + displayLabel
+		}
+		fmt.Fprintf(&b, `<div class="qi-label">%s</div>`, Esc(displayLabel))
 		if item.Cwd != "" {
 			fmt.Fprintf(&b, `<div class="qi-cwd">%s</div>`, Esc(ShortPath(item.Cwd)))
 		}

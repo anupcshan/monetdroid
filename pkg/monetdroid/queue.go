@@ -12,6 +12,7 @@ import (
 type QueueItem struct {
 	ClaudeID  string `json:"claude_id"`
 	Label     string `json:"label"`
+	AutoLabel bool   `json:"auto_label,omitempty"`
 	Status    string `json:"status"` // "completed" or "blocked"
 	Result    string `json:"result"`
 	Cwd       string `json:"cwd"`

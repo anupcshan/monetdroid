@@ -202,17 +202,19 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		claudeID := s.ClaudeID
 		cwd := s.Cwd
 		sessionLabel := s.Label
+		autoLabel := s.AutoLabel
 		s.Mu.Unlock()
 		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, claudeID, ShortPath(cwd))
 		h.notifyAll(FormatSSE("permission", data))
 
 		if claudeID != "" {
 			h.Queue.Enqueue(QueueItem{
-				ClaudeID: claudeID,
-				Label:    sessionLabel,
-				Status:   "blocked",
-				Result:   permLabel,
-				Cwd:      cwd,
+				ClaudeID:  claudeID,
+				Label:     sessionLabel,
+				AutoLabel: autoLabel,
+				Status:    "blocked",
+				Result:    permLabel,
+				Cwd:       cwd,
 			})
 		}
 	}
@@ -221,6 +223,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		claudeID := s.ClaudeID
 		cwd := s.Cwd
 		label := s.Label
+		autoLabel := s.AutoLabel
 		// Find last assistant text for result summary
 		var result string
 		for i := len(s.Log) - 1; i >= 0; i-- {
@@ -238,11 +241,12 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 				result = result[:200] + "..."
 			}
 			h.Queue.Enqueue(QueueItem{
-				ClaudeID: claudeID,
-				Label:    label,
-				Status:   "completed",
-				Result:   result,
-				Cwd:      cwd,
+				ClaudeID:  claudeID,
+				Label:     label,
+				AutoLabel: autoLabel,
+				Status:    "completed",
+				Result:    result,
+				Cwd:       cwd,
 			})
 		}
 	}
@@ -377,10 +381,11 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	s.Mu.Lock()
 	if s.Label == "" && text != "" {
 		label := text
-		if len(label) > 80 {
-			label = label[:80] + "..."
+		if len(label) > 60 {
+			label = label[:60] + "..."
 		}
 		s.Label = label
+		s.AutoLabel = true
 	}
 	s.Mu.Unlock()
 
@@ -442,6 +447,7 @@ func (h *Hub) BuildReplay(s *Session) string {
 	running := s.Running
 	permMode := s.PermissionMode
 	label := s.Label
+	autoLabel := s.AutoLabel
 	cwd := s.Cwd
 	queuedText := s.QueuedText
 	s.Mu.Unlock()
@@ -485,6 +491,9 @@ func (h *Hub) BuildReplay(s *Session) string {
 	sessionLabel := ShortPath(cwd)
 	if label != "" {
 		sessionLabel = label
+		if autoLabel {
+			sessionLabel = "(auto) " + sessionLabel
+		}
 	}
 	parts = append(parts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
 	parts = append(parts, OobSwap("messages", "innerHTML", msgsHTML.String()))

@@ -605,8 +605,11 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				summary = label
 			} else if summary == "" {
 				summary = "(new)"
-			} else if len(summary) > 80 {
-				summary = summary[:80] + "…"
+			} else {
+				if len(summary) > 60 {
+					summary = summary[:60] + "…"
+				}
+				summary = "(auto) " + summary
 			}
 			runHTML := ""
 			if running {
@@ -629,8 +632,12 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				modTime, _ := time.Parse(time.RFC3339, sess.ModTime)
 				ago := TimeAgo(modTime)
 				summary := h.Labels.Get(sess.ID)
-				if summary == "" {
-					summary = sess.Summary
+				if summary == "" && sess.Summary != "" {
+					s := sess.Summary
+					if len(s) > 60 {
+						s = s[:60] + "…"
+					}
+					summary = "(auto) " + s
 				}
 				if summary == "" {
 					summary = "(empty)"
