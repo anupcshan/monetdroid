@@ -99,8 +99,8 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		exec.Command("docker", "volume", "rm", volName).Run()
 	})
 
-	// Start server
-	hub := monetdroid.NewHub()
+	// Start server (use temp dir for queue/labels to isolate from host)
+	hub := monetdroid.NewHubWithDataDir(t.TempDir())
 
 	// Set BuildClaudeCmd on the hub to run claude in a container
 	hub.BuildClaudeCmd = func(cwd string, args []string) *exec.Cmd {

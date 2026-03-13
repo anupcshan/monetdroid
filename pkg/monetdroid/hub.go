@@ -2,7 +2,9 @@ package monetdroid
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -76,13 +78,22 @@ func (h *Hub) notifyAll(event string) {
 	}
 }
 
+func defaultDataDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".monetdroid")
+}
+
 func NewHub() *Hub {
+	return NewHubWithDataDir(defaultDataDir())
+}
+
+func NewHubWithDataDir(dataDir string) *Hub {
 	return &Hub{
 		clients:       make(map[string]*SSEClient),
 		notifyClients: make(map[string]*NotifyClient),
 		Sessions:      NewSessionManager(),
-		Queue:         NewNotificationQueue(),
-		Labels:        NewLabelStore(),
+		Queue:         NewNotificationQueue(dataDir),
+		Labels:        NewLabelStore(dataDir),
 	}
 }
 

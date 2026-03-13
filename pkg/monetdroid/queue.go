@@ -29,9 +29,7 @@ type NotificationQueue struct {
 	mu    sync.Mutex
 }
 
-func NewNotificationQueue() *NotificationQueue {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".monetdroid")
+func NewNotificationQueue(dir string) *NotificationQueue {
 	os.MkdirAll(dir, 0o755)
 	nq := &NotificationQueue{
 		path: filepath.Join(dir, "queue.json"),
@@ -106,9 +104,7 @@ type LabelStore struct {
 	mu     sync.Mutex
 }
 
-func NewLabelStore() *LabelStore {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".monetdroid")
+func NewLabelStore(dir string) *LabelStore {
 	os.MkdirAll(dir, 0o755)
 	ls := &LabelStore{
 		path:   filepath.Join(dir, "labels.json"),
