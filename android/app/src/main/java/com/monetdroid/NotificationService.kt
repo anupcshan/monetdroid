@@ -19,6 +19,7 @@ class NotificationService : Service() {
     private var serverUrl: String = ""
     private var sseThread: Thread? = null
     @Volatile private var running = false
+    @Volatile private var activeConnection: HttpURLConnection? = null
     private var notificationId = 100
     private val threadLock = Any()  // Guards thread restart
 
@@ -40,12 +41,13 @@ class NotificationService : Service() {
         startForeground(1, buildForegroundNotification())
 
         synchronized(threadLock) {
-            // Stop old thread and wait for it to finish
+            // Stop old thread — close the connection to unblock readLine()
             running = false
+            activeConnection?.disconnect()
             sseThread?.interrupt()
             sseThread?.let {
                 try {
-                    it.join(1000)  // Wait up to 1 second for old thread to exit
+                    it.join(2000)
                 } catch (e: InterruptedException) {
                     // Thread was interrupted during join, continue
                 }
@@ -65,6 +67,7 @@ class NotificationService : Service() {
     override fun onDestroy() {
         synchronized(threadLock) {
             running = false
+            activeConnection?.disconnect()
             sseThread?.interrupt()
             sseThread = null
         }
@@ -108,12 +111,14 @@ class NotificationService : Service() {
 
     private fun connectSSE(serverUrl: String) {
         while (running) {
+            var conn: HttpURLConnection? = null
             try {
                 val url = URL("$serverUrl/api/notifications")
-                val conn = url.openConnection() as HttpURLConnection
+                conn = url.openConnection() as HttpURLConnection
                 conn.setRequestProperty("Accept", "text/event-stream")
                 conn.connectTimeout = 10_000
-                conn.readTimeout = 0 // no read timeout for SSE
+                conn.readTimeout = 60_000 // safety net; server sends heartbeats every 30s
+                activeConnection = conn
 
                 val reader = BufferedReader(InputStreamReader(conn.inputStream))
                 var eventType = ""
@@ -136,14 +141,16 @@ class NotificationService : Service() {
                     }
                 }
                 reader.close()
-                conn.disconnect()
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {
-                // Connection failed or dropped — retry after delay
+                // Connection failed, dropped, or disconnected — retry after delay
                 if (running) {
                     try { Thread.sleep(5_000) } catch (_: InterruptedException) { break }
                 }
+            } finally {
+                activeConnection = null
+                conn?.disconnect()
             }
         }
     }
