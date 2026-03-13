@@ -628,7 +628,10 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			for _, sess := range group.Sessions {
 				modTime, _ := time.Parse(time.RFC3339, sess.ModTime)
 				ago := TimeAgo(modTime)
-				summary := sess.Summary
+				summary := h.Labels.Get(sess.ID)
+				if summary == "" {
+					summary = sess.Summary
+				}
 				if summary == "" {
 					summary = "(empty)"
 				}
