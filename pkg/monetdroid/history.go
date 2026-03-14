@@ -131,7 +131,7 @@ func parseSessionInfo(fpath string) (summary string, cwd string, numMsgs int, er
 		if err := json.Unmarshal([]byte(scanner.Text()), &obj); err != nil {
 			continue
 		}
-		if c, ok := obj["cwd"].(string); ok && cwd == "" {
+		if c, ok := obj["cwd"].(string); ok {
 			cwd = c
 		}
 		msgType, _ := obj["type"].(string)
@@ -184,7 +184,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		if err := json.Unmarshal([]byte(line), &obj); err != nil {
 			continue
 		}
-		if c, ok := obj["cwd"].(string); ok && cwd == "" {
+		if c, ok := obj["cwd"].(string); ok {
 			cwd = c
 		}
 		if sc, ok := obj["isSidechain"].(bool); ok && sc {
