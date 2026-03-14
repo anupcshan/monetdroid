@@ -21,7 +21,7 @@ type ClaudeProcess struct {
 
 	mu      sync.Mutex
 	reqSeq  int
-	pending map[string]chan map[string]any // request_id → response channel
+	pending map[string]chan ctlRespPayload // request_id → response channel
 
 	turnDone chan struct{} // sent (not closed) when a result event arrives
 	dead     chan struct{} // closed when process exits
@@ -72,7 +72,7 @@ func StartProcess(sess *Session, buildCmd func(cwd string, args []string) *exec.
 		cmd:      cmd,
 		stdin:    stdin,
 		sess:     sess,
-		pending:  make(map[string]chan map[string]any),
+		pending:  make(map[string]chan ctlRespPayload),
 		turnDone: make(chan struct{}, 1),
 		dead:     make(chan struct{}),
 	}
@@ -89,12 +89,11 @@ func StartProcess(sess *Session, buildCmd func(cwd string, args []string) *exec.
 	go p.scan(stdout, broadcast)
 
 	// Send initialize and wait for response
-	initResp, err := p.SendControlRequest(map[string]any{"subtype": "initialize"})
-	if err != nil {
+	if err := p.sendControlRequest(ctlInitRequest{Subtype: "initialize"}); err != nil {
 		p.Kill()
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
-	log.Printf("[claude process][%s] initialized: %+v", sess.ID, initResp)
+	log.Printf("[claude process][%s] initialized", sess.ID)
 
 	return p, nil
 }
@@ -106,31 +105,50 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		var event map[string]any
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			log.Printf("[parse error][%s] %s: %s", p.sess.ID, err, line[:min(len(line), 200)])
+		line := scanner.Bytes()
+		if len(line) == 0 {
 			continue
 		}
 
-		eventType, _ := event["type"].(string)
-		switch eventType {
+		// Peek at the type to route appropriately
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &envelope); err != nil {
+			log.Printf("[parse error][%s] %s: %s", p.sess.ID, err, string(line[:min(len(line), 200)]))
+			continue
+		}
+
+		switch envelope.Type {
 		case "control_response":
-			p.handleControlResponse(event)
-		case "control_request":
-			// Permission request from CLI — handle in goroutine to avoid blocking scanner
-			go p.handleControlRequest(event, broadcast)
-		case "result":
-			handleStreamEvent(p.sess, event, broadcast)
-			select {
-			case p.turnDone <- struct{}{}:
-			default: // don't block if channel already has a signal
+			var resp ctlIncomingResponse
+			if err := json.Unmarshal(line, &resp); err != nil {
+				log.Printf("[parse error][%s] control_response: %s", p.sess.ID, err)
+				continue
 			}
+			p.handleControlResponse(resp.Response)
+
+		case "control_request":
+			var req ctlIncomingRequest
+			if err := json.Unmarshal(line, &req); err != nil {
+				log.Printf("[parse error][%s] control_request: %s", p.sess.ID, err)
+				continue
+			}
+			go p.handleControlRequest(req, broadcast)
+
 		default:
-			handleStreamEvent(p.sess, event, broadcast)
+			var event streamEvent
+			if err := json.Unmarshal(line, &event); err != nil {
+				log.Printf("[parse error][%s] stream event: %s", p.sess.ID, err)
+				continue
+			}
+			handleStreamEvent(p.sess, &event, broadcast)
+			if envelope.Type == "result" {
+				select {
+				case p.turnDone <- struct{}{}:
+				default:
+				}
+			}
 		}
 	}
 
@@ -140,119 +158,109 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
 }
 
 // handleControlResponse routes responses to our control requests (initialize, interrupt, etc).
-func (p *ClaudeProcess) handleControlResponse(event map[string]any) {
-	response, _ := event["response"].(map[string]any)
-	requestID, _ := response["request_id"].(string)
-
+func (p *ClaudeProcess) handleControlResponse(resp ctlRespPayload) {
 	p.mu.Lock()
-	ch, ok := p.pending[requestID]
-	delete(p.pending, requestID)
+	ch, ok := p.pending[resp.RequestID]
+	delete(p.pending, resp.RequestID)
 	p.mu.Unlock()
 
 	if ok {
 		select {
-		case ch <- response:
+		case ch <- resp:
 		case <-time.After(5 * time.Second):
-			log.Printf("[claude process][%s] response timeout for %s", p.sess.ID, requestID)
+			log.Printf("[claude process][%s] response timeout for %s", p.sess.ID, resp.RequestID)
 		}
 	}
 }
 
 // handleControlRequest handles permission prompts from the CLI.
 // Runs in a separate goroutine so the scanner is never blocked.
-func (p *ClaudeProcess) handleControlRequest(event map[string]any, broadcast func(ServerMsg)) {
-	requestID, _ := event["request_id"].(string)
-	request, _ := event["request"].(map[string]any)
-	subtype, _ := request["subtype"].(string)
-
-	if subtype != "can_use_tool" {
+func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast func(ServerMsg)) {
+	if req.Subtype != "can_use_tool" {
 		return
 	}
 
-	toolName, _ := request["tool_name"].(string)
-	toolInput := request["input"]
-	reason, _ := request["decision_reason"].(string)
-	suggestions := request["permission_suggestions"]
-
 	ch := make(chan PermResponse, 1)
 	p.sess.Mu.Lock()
-	p.sess.PermChans[requestID] = ch
+	p.sess.PermChans[req.RequestID] = ch
 	p.sess.Mu.Unlock()
 
 	broadcast(ServerMsg{
 		Type: "permission_request", SessionID: p.sess.ID,
-		PermID: requestID, PermTool: toolName, PermInput: toolInput,
-		PermReason: reason, PermSuggestions: suggestions,
+		PermID: req.RequestID, PermTool: req.ToolName, PermInput: req.Input,
+		PermReason: req.DecisionReason, PermSuggestions: req.PermissionSuggestions,
 	})
 
 	resp := <-ch
 
 	p.sess.Mu.Lock()
-	delete(p.sess.PermChans, requestID)
+	delete(p.sess.PermChans, req.RequestID)
 	p.sess.Mu.Unlock()
 
-	var payload map[string]any
 	if resp.Allow {
-		input := toolInput
+		input := req.Input
 		if resp.UpdatedInput != nil {
 			input = resp.UpdatedInput
 		}
-		payload = map[string]any{"behavior": "allow", "updatedInput": input}
-		if len(resp.Permissions) > 0 {
-			payload["updatedPermissions"] = resp.Permissions
+		payload := permAllowResponse{
+			Behavior:           "allow",
+			UpdatedInput:       input,
+			UpdatedPermissions: resp.Permissions,
 		}
+		p.sendControlResponse(req.RequestID, payload)
 	} else {
-		payload = map[string]any{"behavior": "deny", "message": "User denied this action"}
+		payload := permDenyResponse{
+			Behavior: "deny",
+			Message:  "User denied this action",
+		}
+		p.sendControlResponse(req.RequestID, payload)
 	}
-
-	p.SendControlResponse(requestID, payload)
 }
 
-// SendControlRequest sends a control request and waits for the response.
-func (p *ClaudeProcess) SendControlRequest(request map[string]any) (map[string]any, error) {
+// sendControlRequest sends a control request and waits for the response.
+func (p *ClaudeProcess) sendControlRequest(request any) error {
 	p.mu.Lock()
 	p.reqSeq++
 	id := fmt.Sprintf("req_%d", p.reqSeq)
-	ch := make(chan map[string]any, 1)
+	ch := make(chan ctlRespPayload, 1)
 	p.pending[id] = ch
 	p.mu.Unlock()
 
-	msg := map[string]any{
-		"type":       "control_request",
-		"request_id": id,
-		"request":    request,
+	msg := ctlOutgoingRequest{
+		Type:      "control_request",
+		RequestID: id,
+		Request:   request,
 	}
 	data, _ := json.Marshal(msg)
 	p.stdin.Write(append(data, '\n'))
 
 	select {
 	case resp := <-ch:
-		if resp["subtype"] == "error" {
-			return nil, fmt.Errorf("control request error: %v", resp["error"])
+		if resp.Subtype == "error" {
+			return fmt.Errorf("control request error: %s", resp.Error)
 		}
-		response, _ := resp["response"].(map[string]any)
-		return response, nil
+		return nil
 	case <-p.dead:
 		p.mu.Lock()
 		delete(p.pending, id)
 		p.mu.Unlock()
-		return nil, fmt.Errorf("process died")
+		return fmt.Errorf("process died")
 	case <-time.After(30 * time.Second):
 		p.mu.Lock()
 		delete(p.pending, id)
 		p.mu.Unlock()
-		return nil, fmt.Errorf("control request timeout")
+		return fmt.Errorf("control request timeout")
 	}
 }
 
-// SendControlResponse sends a control response (e.g. permission grant/deny).
-func (p *ClaudeProcess) SendControlResponse(requestID string, response map[string]any) {
-	msg := map[string]any{
-		"type": "control_response",
-		"response": map[string]any{
-			"subtype":    "success",
-			"request_id": requestID,
-			"response":   response,
+// sendControlResponse sends a control response (e.g. permission grant/deny).
+func (p *ClaudeProcess) sendControlResponse(requestID string, response any) {
+	msg := ctlOutgoingResponse{
+		Type: "control_response",
+		Response: ctlOutgoingRespBody{
+			Subtype:   "success",
+			RequestID: requestID,
+			Response:  response,
 		},
 	}
 	data, _ := json.Marshal(msg)
@@ -263,33 +271,29 @@ func (p *ClaudeProcess) SendControlResponse(requestID string, response map[strin
 func (p *ClaudeProcess) SendUserMessage(text string, images []ImageData) error {
 	var content any
 	if len(images) > 0 {
-		var blocks []map[string]any
+		var blocks []any
 		for _, img := range images {
-			blocks = append(blocks, map[string]any{
-				"type": "image",
-				"source": map[string]any{
-					"type":       "base64",
-					"media_type": img.MediaType,
-					"data":       img.Data,
+			blocks = append(blocks, userImageBlock{
+				Type: "image",
+				Source: userImageSource{
+					Type:      "base64",
+					MediaType: img.MediaType,
+					Data:      img.Data,
 				},
 			})
 		}
 		if text != "" {
-			blocks = append(blocks, map[string]any{
-				"type": "text",
-				"text": text,
-			})
+			blocks = append(blocks, userTextBlock{Type: "text", Text: text})
 		}
 		content = blocks
 	} else {
 		content = text
 	}
 
-	msg := map[string]any{
-		"type":               "user",
-		"session_id":         "",
-		"message":            map[string]any{"role": "user", "content": content},
-		"parent_tool_use_id": nil,
+	msg := userMessageEnvelope{
+		Type:      "user",
+		SessionID: "",
+		Message:   userMessage{Role: "user", Content: content},
 	}
 	data, _ := json.Marshal(msg)
 	_, err := p.stdin.Write(append(data, '\n'))
@@ -298,14 +302,12 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []ImageData) error {
 
 // Interrupt sends an interrupt control request to abort the current turn.
 func (p *ClaudeProcess) Interrupt() error {
-	_, err := p.SendControlRequest(map[string]any{"subtype": "interrupt"})
-	return err
+	return p.sendControlRequest(ctlInterruptRequest{Subtype: "interrupt"})
 }
 
 // SetPermissionMode changes the permission mode mid-session.
 func (p *ClaudeProcess) SetPermissionMode(mode string) error {
-	_, err := p.SendControlRequest(map[string]any{"subtype": "set_permission_mode", "mode": mode})
-	return err
+	return p.sendControlRequest(ctlSetPermModeRequest{Subtype: "set_permission_mode", Mode: mode})
 }
 
 // IsDead returns true if the process has exited.

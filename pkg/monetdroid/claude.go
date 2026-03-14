@@ -1,8 +1,5 @@
 package monetdroid
 
-import (
-	"encoding/json"
-)
 
 // suppressResultTools lists tools whose tool_result output should not be
 // shown to the user (the tool_use chip is still rendered).
@@ -14,65 +11,42 @@ var suppressResultTools = map[string]bool{
 }
 
 // handleStreamEvent processes non-control messages from the CLI and broadcasts them.
-func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMsg)) {
-	eventType, _ := event["type"].(string)
-
-	switch eventType {
+func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)) {
+	switch event.Type {
 	case "system":
-		if sid, ok := event["session_id"].(string); ok && sid != "" {
+		if event.SessionID != "" {
 			s.Mu.Lock()
 			wasEmpty := s.ClaudeID == ""
 			if wasEmpty {
-				s.ClaudeID = sid
+				s.ClaudeID = event.SessionID
 			}
 			s.Mu.Unlock()
 			if wasEmpty {
-				broadcast(ServerMsg{Type: "session_id", SessionID: s.ID, Text: sid})
+				broadcast(ServerMsg{Type: "session_id", SessionID: s.ID, Text: event.SessionID})
 			}
 		}
 
 	case "assistant":
-		msg, ok := event["message"].(map[string]any)
-		if !ok {
-			return
-		}
-		content, ok := msg["content"].([]any)
-		if !ok {
-			return
-		}
-		for _, block := range content {
-			b, ok := block.(map[string]any)
-			if !ok {
-				continue
-			}
-			blockType, _ := b["type"].(string)
-			switch blockType {
+		for _, b := range event.Message.Content.Blocks {
+			switch b.Type {
 			case "text":
-				text, _ := b["text"].(string)
-				if text != "" {
-					broadcast(ServerMsg{Type: "text", SessionID: s.ID, Text: text})
+				if b.Text != "" {
+					broadcast(ServerMsg{Type: "text", SessionID: s.ID, Text: b.Text})
 				}
 			case "tool_use":
-				name, _ := b["name"].(string)
-				id, _ := b["id"].(string)
-				input := b["input"]
-				if suppressResultTools[name] {
+				if suppressResultTools[b.Name] {
 					s.Mu.Lock()
-					s.SuppressedToolIDs[id] = name
+					s.SuppressedToolIDs[b.ID] = b.Name
 					s.Mu.Unlock()
 				}
-				if name == "AskUserQuestion" {
+				if b.Name == "AskUserQuestion" {
 					continue // rendered by the permission prompt UI
 				}
-				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: name, ToolUseID: id, Input: input})
+				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: b.Input})
 			}
 		}
-		if usage, ok := msg["usage"].(map[string]any); ok {
-			inTok, _ := usage["input_tokens"].(float64)
-			outTok, _ := usage["output_tokens"].(float64)
-			cacheRead, _ := usage["cache_read_input_tokens"].(float64)
-			cacheCreate, _ := usage["cache_creation_input_tokens"].(float64)
-			contextUsed := int(inTok + cacheRead + cacheCreate + outTok)
+		if u := event.Message.Usage; u != nil {
+			contextUsed := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
 			if contextUsed > 0 {
 				broadcast(ServerMsg{
 					Type: "cost", SessionID: s.ID,
@@ -82,67 +56,43 @@ func handleStreamEvent(s *Session, event map[string]any, broadcast func(ServerMs
 		}
 
 	case "result":
-		if text, ok := event["result"].(string); ok && text != "" {
-			broadcast(ServerMsg{Type: "result", SessionID: s.ID, Text: text})
+		if event.Result != "" {
+			broadcast(ServerMsg{Type: "result", SessionID: s.ID, Text: event.Result})
 		}
-		if sid, ok := event["session_id"].(string); ok && sid != "" {
+		if event.SessionID != "" {
 			s.Mu.Lock()
-			s.ClaudeID = sid
+			s.ClaudeID = event.SessionID
 			s.Mu.Unlock()
 		}
 		cost := &CostInfo{}
-		if totalCost, ok := event["total_cost_usd"].(float64); ok {
-			cost.TotalCostUSD = totalCost
+		if event.TotalCost > 0 {
+			cost.TotalCostUSD = event.TotalCost
 		}
-		if mu, ok := event["modelUsage"].(map[string]any); ok {
-			for _, v := range mu {
-				if info, ok := v.(map[string]any); ok {
-					if cw, ok := info["contextWindow"].(float64); ok && cw > 0 {
-						cost.ContextWindow = int(cw)
-					}
-				}
-				break
+		for _, info := range event.ModelUsage {
+			if info.ContextWindow > 0 {
+				cost.ContextWindow = info.ContextWindow
 			}
+			break
 		}
 		if cost.TotalCostUSD > 0 || cost.ContextWindow > 0 {
 			broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: cost})
 		}
 
 	case "user":
-		msg, ok := event["message"].(map[string]any)
-		if !ok {
-			return
-		}
-		content, ok := msg["content"].([]any)
-		if !ok {
-			return
-		}
-		for _, block := range content {
-			b, ok := block.(map[string]any)
-			if !ok {
-				continue
-			}
-			if b["type"] == "tool_result" {
-				tuID, _ := b["tool_use_id"].(string)
+		for _, b := range event.Message.Content.Blocks {
+			if b.Type == "tool_result" {
 				s.Mu.Lock()
-				_, suppressed := s.SuppressedToolIDs[tuID]
+				_, suppressed := s.SuppressedToolIDs[b.ToolUseID]
 				if suppressed {
-					delete(s.SuppressedToolIDs, tuID)
+					delete(s.SuppressedToolIDs, b.ToolUseID)
 				}
 				s.Mu.Unlock()
 				if suppressed {
 					continue
 				}
-				output := ""
-				switch c := b["content"].(type) {
-				case string:
-					output = c
-				default:
-					j, _ := json.Marshal(c)
-					output = string(j)
-				}
+				output := b.Content.String()
 				if !isBoringResult(output) {
-					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: tuID, Output: Truncate(output, 2000)})
+					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000)})
 				}
 			}
 		}

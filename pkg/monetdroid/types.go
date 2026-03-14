@@ -70,6 +70,6 @@ type Todo struct {
 
 type PermResponse struct {
 	Allow        bool
-	Permissions  []interface{}
-	UpdatedInput map[string]any // non-nil for AskUserQuestion answers
+	Permissions  []any
+	UpdatedInput any // non-nil for AskUserQuestion answers
 }

@@ -372,18 +372,16 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		var perms []any
 		if suggestionJSON != "" {
-			var suggestion any
+			var suggestion permissionSuggestion
 			if err := json.Unmarshal([]byte(suggestionJSON), &suggestion); err == nil {
-				perms = []any{suggestion}
-				if sm, ok := suggestion.(map[string]any); ok {
-					if sm["type"] == "setMode" {
-						if mode, ok := sm["mode"].(string); ok {
-							s.Mu.Lock()
-							s.PermissionMode = mode
-							s.Mu.Unlock()
-							h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: mode})
-						}
-					}
+				var raw any
+				json.Unmarshal([]byte(suggestionJSON), &raw)
+				perms = []any{raw}
+				if suggestion.Type == "setMode" && suggestion.Mode != "" {
+					s.Mu.Lock()
+					s.PermissionMode = suggestion.Mode
+					s.Mu.Unlock()
+					h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: suggestion.Mode})
 				}
 			}
 		}
@@ -428,37 +426,28 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reconstruct the original input from the stored permission request
-	var originalInput map[string]any
+	var rawInput any
 	s.Mu.Lock()
 	for _, m := range s.Log {
 		if m.Type == "permission_request" && m.PermID == permID {
-			if mi, ok := m.PermInput.(map[string]any); ok {
-				originalInput = mi
-			}
+			rawInput = m.PermInput
 			break
 		}
 	}
 	s.Mu.Unlock()
 
-	if originalInput == nil {
+	questions := parseAskUserQuestions(rawInput)
+	if len(questions) == 0 {
 		w.WriteHeader(204)
 		return
 	}
 
 	// Build the answers map from form values
-	questions, _ := originalInput["questions"].([]any)
 	answers := make(map[string]string)
 	for qi, q := range questions {
-		qm, ok := q.(map[string]any)
-		if !ok {
-			continue
-		}
-		question, _ := qm["question"].(string)
 		fieldName := fmt.Sprintf("answer_%d", qi)
-		multiSelect, _ := qm["multiSelect"].(bool)
 
-		if multiSelect {
-			// Collect all selected values
+		if q.MultiSelect {
 			r.ParseForm()
 			vals := r.Form[fieldName]
 			var selected []string
@@ -471,24 +460,17 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 					selected = append(selected, v)
 				}
 			}
-			answers[question] = strings.Join(selected, ", ")
+			answers[q.Question] = strings.Join(selected, ", ")
 		} else {
 			val := r.FormValue(fieldName)
 			if val == "__other__" {
 				val = r.FormValue(fieldName + "_other")
 			}
-			answers[question] = val
+			answers[q.Question] = val
 		}
 	}
 
-	// Build updatedInput with answers
-	updatedInput := make(map[string]any)
-	for k, v := range originalInput {
-		updatedInput[k] = v
-	}
-	updatedInput["answers"] = answers
-
-	ch <- PermResponse{Allow: true, UpdatedInput: updatedInput}
+	ch <- PermResponse{Allow: true, UpdatedInput: buildAskUserResponse(rawInput, answers)}
 
 	// Replace the entire ask-user form with a compact answered summary
 	var summaryHTML strings.Builder
