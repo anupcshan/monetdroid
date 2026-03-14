@@ -1,11 +1,9 @@
 package integration
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -35,15 +33,10 @@ func ScreenshotOnFailure(t *testing.T, page *rod.Page, name string) {
 	Screenshot(t, page, "FAIL_"+name)
 }
 
-// WaitForText waits for an element to contain text.
+// WaitForText waits for an element matching selector to contain text.
 func WaitForText(t *testing.T, page *rod.Page, selector, text string, timeout time.Duration) {
 	t.Helper()
-	err := rod.Try(func() {
-		el := page.Timeout(timeout).MustElement(selector)
-		if got := el.MustText(); !containsText(got, text) {
-			panic(fmt.Sprintf("element %q text %q does not contain %q", selector, got, text))
-		}
-	})
+	_, err := page.Timeout(timeout).ElementR(selector, text)
 	if err != nil {
 		t.Fatalf("WaitForText(%q, %q): %v", selector, text, err)
 	}
@@ -57,10 +50,6 @@ func WaitForElement(t *testing.T, page *rod.Page, selector string, timeout time.
 		t.Fatalf("WaitForElement(%q): %v", selector, err)
 	}
 	return el
-}
-
-func containsText(haystack, needle string) bool {
-	return strings.Contains(haystack, needle)
 }
 
 func TestdataDir() string {

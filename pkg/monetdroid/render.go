@@ -277,7 +277,11 @@ func RenderMsg(msg ServerMsg) string {
 		content.WriteString(strings.ReplaceAll(Esc(msg.Text), "\n", "<br>"))
 		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, content.String())
 	case "text":
-		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, RenderMarkdown(msg.Text))
+		rendered := RenderMarkdown(msg.Text)
+		if strings.TrimSpace(rendered) == "" {
+			return ""
+		}
+		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, rendered)
 	case "tool_use":
 		if msg.Tool == "TodoWrite" {
 			return ""
@@ -294,9 +298,13 @@ func RenderMsg(msg ServerMsg) string {
 				}
 			}
 		}
+		var spinnerHTML string
+		if msg.Tool == "Bash" {
+			spinnerHTML = fmt.Sprintf(` <span class="tool-spinner" id="spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span> <span class="tool-elapsed" data-started="%d"></span></span>`, Esc(msg.ToolUseID), time.Now().UnixMilli())
+		}
 		summary := ToolChipSummary(msg.Tool, msg.Input)
 		detail := FormatToolInput(msg.Tool, msg.Input)
-		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, Esc(summary), Esc(detail))
+		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail">%s</div></details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, Esc(detail))
 	case "tool_result":
 		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-result-chip"><summary class="tool-result-summary">result</summary><div class="tool-result-full">%s</div></details></div>`, Esc(msg.Output))
 	case "error":
@@ -736,6 +744,35 @@ func RenderQueue(items []QueueItem) string {
 func parseTime(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
 	return t
+}
+
+// stripSpinner removes the spinner span from a rendered tool_use HTML string.
+func stripSpinner(html, toolUseID string) string {
+	// The spinner is: <span class="tool-spinner" id="spinner-...">...</span>
+	tag := fmt.Sprintf(`<span class="tool-spinner" id="spinner-%s">`, Esc(toolUseID))
+	start := strings.Index(html, tag)
+	if start < 0 {
+		return html
+	}
+	// Find the matching closing </span> — the spinner has nested spans,
+	// so count open/close tags.
+	depth := 0
+	i := start
+	for i < len(html) {
+		if strings.HasPrefix(html[i:], "<span") {
+			depth++
+			i += 5
+		} else if strings.HasPrefix(html[i:], "</span>") {
+			depth--
+			if depth == 0 {
+				return html[:start] + html[i+7:]
+			}
+			i += 7
+		} else {
+			i++
+		}
+	}
+	return html
 }
 
 func OobSwap(id, strategy, content string) string {

@@ -426,6 +426,7 @@
   }
   .msg-tool {
     display: flex;
+    flex-direction: column;
     align-items: flex-start;
     gap: 8px;
     margin-bottom: 8px;
@@ -469,6 +470,40 @@
   .perm-detail:has(pre) {
     background: none;
     padding: 0;
+  }
+  .tool-spinner {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+    font-weight: 400;
+    font-size: 11px;
+    color: var(--text2);
+  }
+  .spinner-dots { display: inline-flex; gap: 2px; }
+  .spinner-dots span {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--tool);
+    animation: dot-pulse 1.2s ease-in-out infinite;
+  }
+  .spinner-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .spinner-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dot-pulse {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1.2); }
+  }
+  .tool-bg-output {
+    color: var(--text2);
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow: auto;
+    background: var(--tool-bg);
+    border: 1px solid var(--tool);
+    border-radius: 8px;
+    padding: 8px 12px;
   }
   .tool-result-chip {
     background: var(--blue-bg);
@@ -971,5 +1006,21 @@
   </form>
 </div>
 
+<script>
+(function(){
+  var tid;
+  function tick(){
+    var els = document.querySelectorAll('.tool-elapsed');
+    if(!els.length){ clearInterval(tid); tid = 0; return; }
+    for(var i = 0; i < els.length; i++){
+      var v = Math.floor((Date.now() - parseInt(els[i].dataset.started)) / 1000) + 's';
+      if(els[i].textContent !== v) els[i].textContent = v;
+    }
+  }
+  new MutationObserver(function(){
+    if(!tid && document.querySelector('.tool-elapsed')) tid = setInterval(tick, 1000);
+  }).observe(document.body, {childList: true, subtree: true});
+})();
+</script>
 </body>
 </html>

@@ -123,12 +123,20 @@ type permDenyResponse struct {
 
 // streamEvent is the top-level envelope for all non-control events.
 type streamEvent struct {
-	Type       string                    `json:"type"` // "user", "assistant", "result", "system"
-	SessionID  string                    `json:"session_id,omitempty"`
-	Message    streamMessage             `json:"message"`
-	Result     string                    `json:"result,omitempty"`
-	TotalCost  float64                   `json:"total_cost_usd,omitempty"`
-	ModelUsage map[string]modelUsageInfo `json:"modelUsage,omitempty"`
+	Type           string                    `json:"type"` // "user", "assistant", "result", "system"
+	SessionID      string                    `json:"session_id,omitempty"`
+	Message        streamMessage             `json:"message"`
+	Result         string                    `json:"result,omitempty"`
+	TotalCost      float64                   `json:"total_cost_usd,omitempty"`
+	ModelUsage     map[string]modelUsageInfo `json:"modelUsage,omitempty"`
+	ToolUseResult  *toolUseResult            `json:"tool_use_result,omitempty"`
+}
+
+// toolUseResult carries structured tool output from the CLI.
+// For background Bash tasks, Stdout contains the task description string.
+type toolUseResult struct {
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
 }
 
 type streamMessage struct {
@@ -204,9 +212,10 @@ type userTextBlock struct {
 // Discriminate by tool name; unused fields are zero for other tools.
 type ToolInput struct {
 	// Bash
-	Command     string `json:"command,omitempty"`
-	Description string `json:"description,omitempty"`
-	Timeout     int    `json:"timeout,omitempty"`
+	Command         string `json:"command,omitempty"`
+	Description     string `json:"description,omitempty"`
+	Timeout         int    `json:"timeout,omitempty"`
+	RunInBackground *bool  `json:"run_in_background,omitempty"` // pointer: false must round-trip
 	// Read/Write/Edit + Grep/Glob
 	FilePath   string `json:"file_path,omitempty"`
 	Content    string `json:"content,omitempty"`

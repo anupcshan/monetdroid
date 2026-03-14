@@ -88,6 +88,15 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 
 	workDir := t.TempDir()
 
+	// The CLI writes background task output to /tmp/claude-<uid>/<cwd>/tasks/.
+	// Container runs as root (uid 0), so the path is /tmp/claude-0/.
+	// Bind-mount at the same absolute path so TailBgTask on the host can read
+	// the files at the path reported in the tool_result.
+	// NOTE: concurrent container tests sharing this path may interfere.
+	const claudeTmpDir = "/tmp/claude-0"
+	os.RemoveAll(claudeTmpDir)
+	os.MkdirAll(claudeTmpDir, 0o755)
+
 	// Named docker volume for persistent claude home across container invocations.
 	// Needed for --resume to find the session file from a previous turn.
 	volName := fmt.Sprintf("monetdroid-test-%s-%d", t.Name(), time.Now().UnixNano())
@@ -111,6 +120,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 			"-v", cwd + ":/work",
 			"-w", "/work",
 			"-v", volName + ":/root/.claude",
+			"-v", claudeTmpDir + ":" + claudeTmpDir,
 		}
 
 		if mode == "record" {

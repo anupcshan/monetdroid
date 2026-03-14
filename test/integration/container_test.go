@@ -479,3 +479,69 @@ func Add(a, b int) int {
 	}
 	Screenshot(t, page, "session_reload_scrolled")
 }
+
+func TestBashSpinner(t *testing.T) {
+	// Not parallel: uses shared /tmp/claude-0 bind mount for background task output
+	// t.Parallel()
+	f := SetupWithContainer(t, "bash_spinner.jsonl", testMode())
+	page := f.Page()
+
+	// Create session
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	time.Sleep(200 * time.Millisecond)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	time.Sleep(500 * time.Millisecond)
+
+	// Background Bash command — tests spinner lifecycle AND streaming output.
+	// The sleep between steps gives time to observe partial output.
+	page.MustElement(`textarea[name="text"]`).MustInput(
+		"Start `for i in $(seq 1 10); do echo step $i; sleep 1; done` in the background and explain what the command does while it runs")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Spinner should appear on the Bash tool chip during execution
+	WaitForElement(t, page, ".tool-spinner", 60*time.Second)
+	Screenshot(t, page, "bash_spinner_active")
+
+	// Command substitution ($()) triggers a permission prompt — allow it
+	WaitForElement(t, page, ".perm-allow", 10*time.Second)
+	page.MustElement(`.perm-allow`).MustClick()
+
+	// Wait for turn to complete (Claude responds after submitting the bg task)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Spinner should be removed after completion
+	spinners := page.MustEval(`() => document.querySelectorAll('.tool-spinner').length`).Int()
+	if spinners != 0 {
+		Screenshot(t, page, "bash_spinner_not_removed")
+		t.Fatalf("expected 0 spinners after turn complete, got %d", spinners)
+	}
+	Screenshot(t, page, "bash_spinner_complete")
+
+	// Wait for streaming to start — at least 2 lines visible
+	WaitForText(t, page, ".tool-bg-output", "step 2", 30*time.Second)
+
+	// Immediately assert that the last step is NOT yet visible (proves partial streaming)
+	bgText := page.MustEval(`() => document.querySelector('.tool-bg-output').textContent`).String()
+	if strings.Contains(bgText, "step 10") {
+		Screenshot(t, page, "bash_bg_not_partial")
+		t.Fatal("step 10 already visible when step 2 first appeared — not partial streaming")
+	}
+
+	// Wait for all output to arrive
+	WaitForText(t, page, ".tool-bg-output", "step 10", 30*time.Second)
+	Screenshot(t, page, "bash_bg_output")
+
+	// Reload — verify spinners are stripped in replay and page stabilises
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	page.MustNavigate(currentURL).MustWaitStable()
+	WaitForElement(t, page, ".msg-assistant", 10*time.Second)
+
+	reloadSpinners := page.MustEval(`() => document.querySelectorAll('.tool-spinner').length`).Int()
+	if reloadSpinners != 0 {
+		Screenshot(t, page, "bash_spinner_reload_fail")
+		t.Fatalf("expected 0 spinners after reload, got %d", reloadSpinners)
+	}
+	Screenshot(t, page, "bash_spinner_reload")
+}
+

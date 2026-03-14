@@ -170,9 +170,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	msgHTML := RenderMsg(msg)
 
 	var parts []string
-	if msgHTML != "" {
-		parts = append(parts, OobSwap("messages", "beforeend", msgHTML))
-	}
 
 	// OOB-swap the todos panel children (summary + body) to preserve open/closed state
 	if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
@@ -283,7 +280,40 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
 		}
 	}
+	// Remove spinner when tool_result arrives
+	if msg.Type == "tool_result" && msg.ToolUseID != "" {
+		parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
+
+		// Detect background Bash tasks and start tailing their output
+		if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
+			bgDivID := "bg-" + msg.ToolUseID
+			// Insert an output area inside the tool chip; suppress the result chip
+			parts = append(parts, OobSwap("tool-"+msg.ToolUseID, "beforeend",
+				fmt.Sprintf(`<div class="tool-bg-output" id="%s"></div>`, bgDivID)))
+			msgHTML = ""
+			toolUseID := msg.ToolUseID
+			go func() {
+				var stop <-chan struct{}
+				if s != nil {
+					s.Mu.Lock()
+					proc := s.proc
+					s.Mu.Unlock()
+					if proc != nil {
+						stop = proc.dead
+					}
+				}
+				TailBgTask(bgPath, stop, func(chunk string) {
+					event := RenderBgOutput(toolUseID, chunk)
+					if event != "" {
+						h.BroadcastToSession(sessionID, FormatSSE("htmx", event))
+					}
+				})
+			}()
+		}
+	}
+
 	if msgHTML != "" {
+		parts = append(parts, OobSwap("messages", "beforeend", msgHTML))
 		parts = append(parts, OobSwap("thinking", "outerHTML", ""))
 		if msg.Type == "tool_use" || msg.Type == "tool_result" {
 			parts = append(parts, OobSwap("messages", "beforeend", thinkingHTML))
@@ -483,6 +513,14 @@ func (h *Hub) BuildReplay(s *Session) string {
 		}
 	}
 
+	// Collect tool_use IDs that have results (so we can strip spinners on replay)
+	completedTools := make(map[string]bool)
+	for _, msg := range log_ {
+		if msg.Type == "tool_result" && msg.ToolUseID != "" {
+			completedTools[msg.ToolUseID] = true
+		}
+	}
+
 	var msgsHTML strings.Builder
 	if lastCompact >= 0 {
 		msgsHTML.WriteString(`<div class="compacted-context">`)
@@ -501,7 +539,12 @@ func (h *Hub) BuildReplay(s *Session) string {
 			delete(suppressedIDs, msg.ToolUseID)
 			continue
 		}
-		msgsHTML.WriteString(RenderMsg(msg))
+		rendered := RenderMsg(msg)
+		// Strip spinners for tool_use events that already have results
+		if msg.Type == "tool_use" && completedTools[msg.ToolUseID] {
+			rendered = stripSpinner(rendered, msg.ToolUseID)
+		}
+		msgsHTML.WriteString(rendered)
 	}
 
 	var parts []string
