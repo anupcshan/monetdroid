@@ -106,7 +106,6 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 			sm.Type = "user_message"
 			sm.Text = m.Text
 			sm.Images = m.Images
-			s.MessageCount++
 		case "assistant":
 			sm.Type = "text"
 			sm.Text = m.Text
@@ -591,7 +590,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			running := s.Running
 			sp := ShortPath(s.Cwd)
 			sid := s.ID
-			mc := s.MessageCount
+			mc := len(s.Log)
 			label := s.Label
 			summary := ""
 			for _, m := range s.Log {
@@ -616,7 +615,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				runHTML = `<span class="di-running"></span> running`
 			}
 			fmt.Fprintf(&buf,
-				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d turns</div></div>`,
+				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs</div></div>`,
 				Esc(sid), Esc(summary), Esc(sp), runHTML, mc,
 			)
 		}
@@ -642,13 +641,13 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				if summary == "" {
 					summary = "(empty)"
 				}
-				turnsStr := ""
-				if sess.NumTurns > 0 {
-					turnsStr = fmt.Sprintf(" · %d turns", sess.NumTurns)
+				msgsStr := ""
+				if sess.NumMsgs > 0 {
+					msgsStr = fmt.Sprintf(" · %d msgs", sess.NumMsgs)
 				}
 				fmt.Fprintf(&buf,
 					`<div class="history-item" hx-post="/load" hx-vals='{"dir_key":"%s","history_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s%s</div></div>`,
-					Esc(group.DirKey), Esc(sess.ID), Esc(summary), Esc(ago), turnsStr,
+					Esc(group.DirKey), Esc(sess.ID), Esc(summary), Esc(ago), msgsStr,
 				)
 			}
 			buf.WriteString(`</div></details>`)

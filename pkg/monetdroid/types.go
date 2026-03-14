@@ -43,7 +43,7 @@ type HistorySession struct {
 	Summary  string `json:"summary"`
 	ModTime  string `json:"mod_time"`
 	ModUnix  int64  `json:"mod_unix"`
-	NumTurns int    `json:"num_turns"`
+	NumMsgs  int    `json:"num_msgs"`
 }
 
 type HistoryMessage struct {

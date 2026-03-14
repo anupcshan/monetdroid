@@ -7,8 +7,41 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+type cachedSessionInfo struct {
+	modTime time.Time
+	summary string
+	cwd     string
+	numMsgs int
+}
+
+type sessionInfoCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedSessionInfo
+}
+
+var historyCache = &sessionInfoCache{
+	entries: make(map[string]cachedSessionInfo),
+}
+
+func (c *sessionInfoCache) get(fpath string, modTime time.Time) (summary, cwd string, numMsgs int, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if e, hit := c.entries[fpath]; hit && e.modTime.Equal(modTime) {
+		return e.summary, e.cwd, e.numMsgs, true
+	}
+
+	summary, cwd, numMsgs, err := parseSessionInfo(fpath)
+	if err != nil {
+		return "", "", 0, false
+	}
+	c.entries[fpath] = cachedSessionInfo{modTime: modTime, summary: summary, cwd: cwd, numMsgs: numMsgs}
+	return summary, cwd, numMsgs, true
+}
 
 func ScanHistory() ([]HistoryGroup, error) {
 	home, err := os.UserHomeDir()
@@ -40,15 +73,18 @@ func ScanHistory() ([]HistoryGroup, error) {
 				continue
 			}
 			sessionID := strings.TrimSuffix(filepath.Base(sf), ".jsonl")
-			summary, sessionCwd, numTurns := GetSessionInfo(sf)
+			summary, sessionCwd, numMsgs, ok := historyCache.get(sf, info.ModTime())
+			if !ok {
+				continue
+			}
 			if cwd == "" && sessionCwd != "" {
 				cwd = sessionCwd
 			}
-			if numTurns == 0 {
+			if numMsgs == 0 {
 				continue
 			}
 			sessions = append(sessions, HistorySession{
-				ID: sessionID, Summary: summary, NumTurns: numTurns,
+				ID: sessionID, Summary: summary, NumMsgs: numMsgs,
 				ModTime: info.ModTime().Format(time.RFC3339), ModUnix: info.ModTime().Unix(),
 			})
 		}
@@ -82,10 +118,10 @@ func FindJSONLByClaudeID(claudeID string) string {
 	return ""
 }
 
-func GetSessionInfo(fpath string) (summary string, cwd string, numTurns int) {
+func parseSessionInfo(fpath string) (summary string, cwd string, numMsgs int, err error) {
 	f, err := os.Open(fpath)
 	if err != nil {
-		return "", "", 0
+		return "", "", 0, err
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
@@ -98,16 +134,18 @@ func GetSessionInfo(fpath string) (summary string, cwd string, numTurns int) {
 		if c, ok := obj["cwd"].(string); ok && cwd == "" {
 			cwd = c
 		}
-		if obj["type"] == "user" {
-			numTurns++
-			if summary == "" {
+		msgType, _ := obj["type"].(string)
+		switch msgType {
+		case "user", "assistant", "result":
+			numMsgs++
+			if summary == "" && msgType == "user" {
 				if msg, ok := obj["message"].(map[string]any); ok {
 					summary = Truncate(ExtractTextContent(msg["content"]), 120)
 				}
 			}
 		}
 	}
-	return
+	return summary, cwd, numMsgs, scanner.Err()
 }
 
 func ExtractTextContent(content any) string {

@@ -14,7 +14,6 @@ type Session struct {
 	AutoLabel      bool
 	Cwd            string
 	PermissionMode string
-	MessageCount   int
 	Running        bool
 	Interrupted    bool
 	CreatedAt      time.Time

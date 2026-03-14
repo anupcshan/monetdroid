@@ -88,6 +88,7 @@ func NewHub() *Hub {
 }
 
 func NewHubWithDataDir(dataDir string) *Hub {
+	go ScanHistory() // warm the session info cache
 	return &Hub{
 		clients:       make(map[string]*SSEClient),
 		notifyClients: make(map[string]*NotifyClient),
