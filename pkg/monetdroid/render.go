@@ -39,15 +39,11 @@ func RenderMarkdown(text string) string {
 }
 
 // ToolChipSummary returns a compact one-line summary for the tool chip header.
-func ToolChipSummary(tool string, input any) string {
-	m, _ := input.(map[string]any)
-	if m == nil {
+func ToolChipSummary(tool string, input *ToolInput) string {
+	if input == nil {
 		return tool
 	}
-	filePath, _ := m["file_path"].(string)
-	if filePath == "" {
-		filePath, _ = m["path"].(string)
-	}
+	filePath := input.ResolvedPath()
 	short := func(p string) string {
 		return filepath.Base(p)
 	}
@@ -57,13 +53,11 @@ func ToolChipSummary(tool string, input any) string {
 			return "Read"
 		}
 		name := short(filePath)
-		offset, hasOffset := m["offset"].(float64)
-		limit, hasLimit := m["limit"].(float64)
-		if hasOffset && hasLimit {
-			return fmt.Sprintf("Read %s:%d-%d", name, int(offset), int(offset+limit))
+		if input.Offset > 0 && input.Limit > 0 {
+			return fmt.Sprintf("Read %s:%d-%d", name, input.Offset, input.Offset+input.Limit)
 		}
-		if hasOffset {
-			return fmt.Sprintf("Read %s:%d+", name, int(offset))
+		if input.Offset > 0 {
+			return fmt.Sprintf("Read %s:%d+", name, input.Offset)
 		}
 		return "Read " + name
 	case "Write", "FileWrite":
@@ -72,51 +66,43 @@ func ToolChipSummary(tool string, input any) string {
 		}
 		return "Write"
 	case "Grep":
-		pattern, _ := m["pattern"].(string)
-		if pattern == "" {
+		if input.Pattern == "" {
 			return "Grep"
 		}
 		if filePath != "" {
-			return fmt.Sprintf("Grep /%s/ in %s", pattern, short(filePath))
+			return fmt.Sprintf("Grep /%s/ in %s", input.Pattern, short(filePath))
 		}
-		return fmt.Sprintf("Grep /%s/", pattern)
+		return fmt.Sprintf("Grep /%s/", input.Pattern)
 	case "Glob":
-		pattern, _ := m["pattern"].(string)
-		if pattern != "" {
-			return "Glob " + pattern
+		if input.Pattern != "" {
+			return "Glob " + input.Pattern
 		}
 		return "Glob"
 	case "Bash":
-		cmd, _ := m["command"].(string)
-		if cmd != "" {
-			return cmd
+		if input.Command != "" {
+			return input.Command
 		}
 		return "Bash"
 	}
 	return tool
 }
 
-func FormatToolInput(tool string, input any) string {
-	m, ok := input.(map[string]any)
-	if !ok {
-		j, _ := json.MarshalIndent(input, "", "  ")
-		return string(j)
+func FormatToolInput(tool string, input *ToolInput) string {
+	if input == nil {
+		return ""
 	}
-	filePath, _ := m["file_path"].(string)
-	if filePath == "" {
-		filePath, _ = m["path"].(string)
-	}
+	filePath := input.ResolvedPath()
 	switch tool {
 	case "Bash":
-		if cmd, _ := m["command"].(string); cmd != "" {
-			return cmd
+		if input.Command != "" {
+			return input.Command
 		}
 	case "Read", "FileRead":
 		if filePath != "" {
 			return filePath
 		}
 	case "Write", "FileWrite":
-		content, _ := m["content"].(string)
+		content := input.Content
 		if len(content) > 200 {
 			content = content[:200]
 		}
@@ -124,57 +110,49 @@ func FormatToolInput(tool string, input any) string {
 	case "Edit", "FileEdit":
 		var lines []string
 		lines = append(lines, filePath)
-		if old, _ := m["old_string"].(string); old != "" {
-			lines = append(lines, "--- old ---", old)
+		if input.OldString != "" {
+			lines = append(lines, "--- old ---", input.OldString)
 		}
-		if new_, _ := m["new_string"].(string); new_ != "" {
-			lines = append(lines, "+++ new +++", new_)
+		if input.NewString != "" {
+			lines = append(lines, "+++ new +++", input.NewString)
 		}
 		return strings.Join(lines, "\n")
 	case "Grep":
-		if p, _ := m["pattern"].(string); p != "" {
-			return p
+		if input.Pattern != "" {
+			return input.Pattern
 		}
 	case "Glob":
-		if p, _ := m["pattern"].(string); p != "" {
-			return p
+		if input.Pattern != "" {
+			return input.Pattern
 		}
 	}
 	j, _ := json.MarshalIndent(input, "", "  ")
 	return string(j)
 }
 
-func FormatPermDetail(tool string, input any) string {
-	m, ok := input.(map[string]any)
-	if !ok {
-		j, _ := json.MarshalIndent(input, "", "  ")
-		return string(j)
+func FormatPermDetail(tool string, input *ToolInput) string {
+	if input == nil {
+		return ""
 	}
-	filePath, _ := m["file_path"].(string)
-	if filePath == "" {
-		filePath, _ = m["path"].(string)
-	}
+	filePath := input.ResolvedPath()
 	switch tool {
 	case "Bash":
-		cmd, _ := m["command"].(string)
-		desc, _ := m["description"].(string)
-		if desc != "" {
-			return desc + "\n\n" + cmd
+		if input.Description != "" {
+			return input.Description + "\n\n" + input.Command
 		}
-		return cmd
+		return input.Command
 	case "Edit", "FileEdit":
 		var lines []string
 		lines = append(lines, filePath)
-		if old, _ := m["old_string"].(string); old != "" {
-			lines = append(lines, "--- old ---", old)
+		if input.OldString != "" {
+			lines = append(lines, "--- old ---", input.OldString)
 		}
-		if new_, _ := m["new_string"].(string); new_ != "" {
-			lines = append(lines, "+++ new +++", new_)
+		if input.NewString != "" {
+			lines = append(lines, "+++ new +++", input.NewString)
 		}
 		return strings.Join(lines, "\n")
 	case "Write", "FileWrite":
-		content, _ := m["content"].(string)
-		return filePath + "\n\n" + content
+		return filePath + "\n\n" + input.Content
 	case "Read", "FileRead":
 		return filePath
 	}
@@ -246,17 +224,13 @@ func highlightDiff(diffText string) string {
 	return buf.String()
 }
 
-func editDiffFromInput(input any) (filePath, oldStr, newStr string, ok bool) {
-	m, mok := input.(map[string]any)
-	if !mok {
+func editDiffFromInput(input *ToolInput) (filePath, oldStr, newStr string, ok bool) {
+	if input == nil {
 		return
 	}
-	filePath, _ = m["file_path"].(string)
-	if filePath == "" {
-		filePath, _ = m["path"].(string)
-	}
-	oldStr, _ = m["old_string"].(string)
-	newStr, _ = m["new_string"].(string)
+	filePath = input.ResolvedPath()
+	oldStr = input.OldString
+	newStr = input.NewString
 	ok = true
 	return
 }
@@ -349,40 +323,25 @@ func RenderPermission(msg ServerMsg) string {
 		detailHTML = Esc(FormatPermDetail(msg.PermTool, msg.PermInput))
 	}
 	var suggBtns strings.Builder
-	if suggestions, ok := msg.PermSuggestions.([]any); ok {
-		for _, s := range suggestions {
-			sm, ok := s.(map[string]any)
-			if !ok {
-				continue
+	for _, s := range msg.PermSuggestions {
+		var label string
+		switch s.Type {
+		case "setMode":
+			if s.Mode == "acceptEdits" {
+				label = "Accept Edits"
+			} else {
+				label = s.Mode
 			}
-			var label string
-			switch sm["type"] {
-			case "setMode":
-				mode, _ := sm["mode"].(string)
-				if mode == "acceptEdits" {
-					label = "Accept Edits"
-				} else {
-					label = mode
-				}
-			case "addDirectories":
-				dirs, _ := sm["directories"].([]any)
-				var ds []string
-				for _, d := range dirs {
-					if ds_, ok := d.(string); ok {
-						ds = append(ds, ds_)
-					}
-				}
-				label = "Add " + strings.Join(ds, ", ")
-			default:
-				t, _ := sm["type"].(string)
-				label = t
-			}
-			sJSON, _ := json.Marshal(s)
-			fmt.Fprintf(&suggBtns,
-				`<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><input type="hidden" name="suggestion" value="%s"><button type="submit" class="perm-allow" style="width:100%%;font-size:11px">%s</button></form>`,
-				Esc(msg.SessionID), Esc(msg.PermID), Esc(string(sJSON)), Esc(label),
-			)
+		case "addDirectories":
+			label = "Add " + strings.Join(s.Directories, ", ")
+		default:
+			label = s.Type
 		}
+		sJSON, _ := json.Marshal(s)
+		fmt.Fprintf(&suggBtns,
+			`<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><input type="hidden" name="suggestion" value="%s"><button type="submit" class="perm-allow" style="width:100%%;font-size:11px">%s</button></form>`,
+			Esc(msg.SessionID), Esc(msg.PermID), Esc(string(sJSON)), Esc(label),
+		)
 	}
 
 	return fmt.Sprintf(`<div class="perm-prompt" id="perm-%s">
@@ -410,12 +369,7 @@ func RenderPermission(msg ServerMsg) string {
 }
 
 func RenderAskUser(msg ServerMsg) string {
-	m, ok := msg.PermInput.(map[string]any)
-	if !ok {
-		return ""
-	}
-	questions, _ := m["questions"].([]any)
-	if len(questions) == 0 {
+	if msg.PermInput == nil || len(msg.PermInput.Questions) == 0 {
 		return ""
 	}
 
@@ -425,42 +379,27 @@ func RenderAskUser(msg ServerMsg) string {
 	fmt.Fprintf(&b, `<input type="hidden" name="session_id" value="%s">`, Esc(msg.SessionID))
 	fmt.Fprintf(&b, `<input type="hidden" name="perm_id" value="%s">`, Esc(msg.PermID))
 
-	for qi, q := range questions {
-		qm, ok := q.(map[string]any)
-		if !ok {
-			continue
-		}
-		question, _ := qm["question"].(string)
-		header, _ := qm["header"].(string)
-		multiSelect, _ := qm["multiSelect"].(bool)
-		options, _ := qm["options"].([]any)
-
+	for qi, q := range msg.PermInput.Questions {
 		b.WriteString(`<div class="ask-question">`)
-		if header != "" {
-			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(header))
+		if q.Header != "" {
+			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(q.Header))
 		}
-		fmt.Fprintf(&b, `<div class="ask-text">%s</div>`, Esc(question))
+		fmt.Fprintf(&b, `<div class="ask-text">%s</div>`, Esc(q.Question))
 
 		fieldName := fmt.Sprintf("answer_%d", qi)
 		inputType := "radio"
-		if multiSelect {
+		if q.MultiSelect {
 			inputType = "checkbox"
 		}
 
-		for oi, o := range options {
-			om, ok := o.(map[string]any)
-			if !ok {
-				continue
-			}
-			label, _ := om["label"].(string)
-			desc, _ := om["description"].(string)
+		for oi, o := range q.Options {
 			optID := fmt.Sprintf("opt-%s-%d-%d", msg.PermID, qi, oi)
 			fmt.Fprintf(&b, `<label class="ask-option" for="%s">`, optID)
 			fmt.Fprintf(&b, `<input type="%s" id="%s" name="%s" value="%s">`,
-				inputType, optID, Esc(fieldName), Esc(label))
-			fmt.Fprintf(&b, `<span class="ask-label">%s</span>`, Esc(label))
-			if desc != "" {
-				fmt.Fprintf(&b, `<span class="ask-desc">%s</span>`, Esc(desc))
+				inputType, optID, Esc(fieldName), Esc(o.Label))
+			fmt.Fprintf(&b, `<span class="ask-label">%s</span>`, Esc(o.Label))
+			if o.Description != "" {
+				fmt.Fprintf(&b, `<span class="ask-desc">%s</span>`, Esc(o.Description))
 			}
 			b.WriteString(`</label>`)
 		}
@@ -486,36 +425,22 @@ func RenderAskUser(msg ServerMsg) string {
 }
 
 // RenderAskUserStatic renders a read-only Q&A summary for history/replay.
-func RenderAskUserStatic(input interface{}) string {
-	m, ok := input.(map[string]any)
-	if !ok {
+func RenderAskUserStatic(input *ToolInput) string {
+	if input == nil || len(input.Questions) == 0 {
 		return ""
 	}
-	questions, _ := m["questions"].([]any)
-	if len(questions) == 0 {
-		return ""
-	}
-	answers, _ := m["answers"].(map[string]any)
 
 	var b strings.Builder
 	b.WriteString(`<div class="perm-prompt ask-user">`)
-	for _, q := range questions {
-		qm, ok := q.(map[string]any)
-		if !ok {
-			continue
-		}
-		question, _ := qm["question"].(string)
-		header, _ := qm["header"].(string)
-
+	for _, q := range input.Questions {
 		b.WriteString(`<div class="ask-question">`)
-		if header != "" {
-			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(header))
+		if q.Header != "" {
+			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(q.Header))
 		}
-		if ans, ok := answers[question]; ok {
-			ansStr, _ := ans.(string)
-			fmt.Fprintf(&b, `<div class="ask-answered"><span class="ask-text">%s</span> <span style="color:var(--tool)">%s</span></div>`, Esc(question), Esc(ansStr))
+		if ans, ok := input.Answers[q.Question]; ok {
+			fmt.Fprintf(&b, `<div class="ask-answered"><span class="ask-text">%s</span> <span style="color:var(--tool)">%s</span></div>`, Esc(q.Question), Esc(ans))
 		} else {
-			fmt.Fprintf(&b, `<div class="ask-text">%s</div>`, Esc(question))
+			fmt.Fprintf(&b, `<div class="ask-text">%s</div>`, Esc(q.Question))
 		}
 		b.WriteString(`</div>`)
 	}
@@ -591,29 +516,11 @@ func ShortPath(p string) string {
 
 // --- Todos rendering ---
 
-func ParseTodos(input any) []Todo {
-	m, ok := input.(map[string]any)
-	if !ok {
+func ParseTodos(input *ToolInput) []Todo {
+	if input == nil {
 		return nil
 	}
-	arr, ok := m["todos"].([]any)
-	if !ok {
-		return nil
-	}
-	var todos []Todo
-	for _, item := range arr {
-		t, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		content, _ := t["content"].(string)
-		activeForm, _ := t["activeForm"].(string)
-		status, _ := t["status"].(string)
-		if content != "" {
-			todos = append(todos, Todo{Content: content, ActiveForm: activeForm, Status: status})
-		}
-	}
-	return todos
+	return input.Todos
 }
 
 func RenderTodosSummary(todos []Todo) string {

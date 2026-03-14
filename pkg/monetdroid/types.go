@@ -8,22 +8,22 @@ type ImageData struct {
 
 // ServerMsg is the internal message type stored in session logs.
 type ServerMsg struct {
-	Type            string      `json:"type"`
-	SessionID       string      `json:"session_id,omitempty"`
-	Text            string      `json:"text,omitempty"`
-	Images          []ImageData `json:"images,omitempty"`
-	Tool            string      `json:"tool,omitempty"`
-	ToolUseID       string      `json:"tool_use_id,omitempty"`
-	Input           interface{} `json:"input,omitempty"`
-	Output          string      `json:"output,omitempty"`
-	Error           string      `json:"error,omitempty"`
-	Cost            *CostInfo   `json:"cost,omitempty"`
-	PermID          string      `json:"perm_id,omitempty"`
-	PermTool        string      `json:"perm_tool,omitempty"`
-	PermInput       interface{} `json:"perm_input,omitempty"`
-	PermReason      string      `json:"perm_reason,omitempty"`
-	PermSuggestions interface{} `json:"perm_suggestions,omitempty"`
-	PermMode        string      `json:"perm_mode,omitempty"`
+	Type            string           `json:"type"`
+	SessionID       string           `json:"session_id,omitempty"`
+	Text            string           `json:"text,omitempty"`
+	Images          []ImageData      `json:"images,omitempty"`
+	Tool            string           `json:"tool,omitempty"`
+	ToolUseID       string           `json:"tool_use_id,omitempty"`
+	Input           *ToolInput       `json:"input,omitempty"`
+	Output          string           `json:"output,omitempty"`
+	Error           string           `json:"error,omitempty"`
+	Cost            *CostInfo        `json:"cost,omitempty"`
+	PermID          string           `json:"perm_id,omitempty"`
+	PermTool        string           `json:"perm_tool,omitempty"`
+	PermInput       *ToolInput       `json:"perm_input,omitempty"`
+	PermReason      string           `json:"perm_reason,omitempty"`
+	PermSuggestions []PermSuggestion `json:"perm_suggestions,omitempty"`
+	PermMode        string           `json:"perm_mode,omitempty"`
 }
 
 type CostInfo struct {
@@ -52,7 +52,7 @@ type HistoryMessage struct {
 	Images    []ImageData `json:"images,omitempty"`
 	Tool      string      `json:"tool,omitempty"`
 	ToolUseID string      `json:"tool_use_id,omitempty"`
-	Input     interface{} `json:"input,omitempty"`
+	Input     *ToolInput  `json:"input,omitempty"`
 	Output    string      `json:"output,omitempty"`
 }
 
@@ -70,6 +70,6 @@ type Todo struct {
 
 type PermResponse struct {
 	Allow        bool
-	Permissions  []any
-	UpdatedInput any // non-nil for AskUserQuestion answers
+	Permissions  []PermSuggestion
+	UpdatedInput *ToolInput // non-nil for AskUserQuestion answers
 }

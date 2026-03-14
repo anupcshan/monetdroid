@@ -71,7 +71,7 @@ type contentBlock struct {
 	Text      string       `json:"text,omitempty"`
 	Name      string       `json:"name,omitempty"`
 	ID        string       `json:"id,omitempty"`
-	Input     any          `json:"input,omitempty"`
+	Input     *ToolInput   `json:"input,omitempty"`
 	ToolUseID string       `json:"tool_use_id,omitempty"`
 	Content   blockContent `json:"content,omitempty"`
 	Source    *imageSource `json:"source,omitempty"`

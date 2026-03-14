@@ -370,13 +370,11 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	s.Mu.Unlock()
 
 	if ok {
-		var perms []any
+		var perms []PermSuggestion
 		if suggestionJSON != "" {
-			var suggestion permissionSuggestion
+			var suggestion PermSuggestion
 			if err := json.Unmarshal([]byte(suggestionJSON), &suggestion); err == nil {
-				var raw any
-				json.Unmarshal([]byte(suggestionJSON), &raw)
-				perms = []any{raw}
+				perms = []PermSuggestion{suggestion}
 				if suggestion.Type == "setMode" && suggestion.Mode != "" {
 					s.Mu.Lock()
 					s.PermissionMode = suggestion.Mode
@@ -426,25 +424,24 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reconstruct the original input from the stored permission request
-	var rawInput any
+	var permInput *ToolInput
 	s.Mu.Lock()
 	for _, m := range s.Log {
 		if m.Type == "permission_request" && m.PermID == permID {
-			rawInput = m.PermInput
+			permInput = m.PermInput
 			break
 		}
 	}
 	s.Mu.Unlock()
 
-	questions := parseAskUserQuestions(rawInput)
-	if len(questions) == 0 {
+	if permInput == nil || len(permInput.Questions) == 0 {
 		w.WriteHeader(204)
 		return
 	}
 
 	// Build the answers map from form values
 	answers := make(map[string]string)
-	for qi, q := range questions {
+	for qi, q := range permInput.Questions {
 		fieldName := fmt.Sprintf("answer_%d", qi)
 
 		if q.MultiSelect {
@@ -470,7 +467,7 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ch <- PermResponse{Allow: true, UpdatedInput: buildAskUserResponse(rawInput, answers)}
+	ch <- PermResponse{Allow: true, UpdatedInput: buildAskUserResponse(permInput, answers)}
 
 	// Replace the entire ask-user form with a compact answered summary
 	var summaryHTML strings.Builder

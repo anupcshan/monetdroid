@@ -46,11 +46,11 @@ type ctlIncomingRequest struct {
 	Type      string `json:"type"` // "control_request"
 	RequestID string `json:"request_id"`
 	// Nested inside "request" — use custom unmarshal
-	Subtype               string `json:"-"`
-	ToolName              string `json:"-"`
-	Input                 any    `json:"-"`
-	DecisionReason        string `json:"-"`
-	PermissionSuggestions any    `json:"-"`
+	Subtype               string           `json:"-"`
+	ToolName              string           `json:"-"`
+	Input                 *ToolInput       `json:"-"`
+	DecisionReason        string           `json:"-"`
+	PermissionSuggestions []PermSuggestion `json:"-"`
 }
 
 func (r *ctlIncomingRequest) UnmarshalJSON(data []byte) error {
@@ -68,11 +68,11 @@ func (r *ctlIncomingRequest) UnmarshalJSON(data []byte) error {
 
 	// Second pass: request body (flat struct with all possible fields)
 	var req struct {
-		Subtype               string `json:"subtype"`
-		ToolName              string `json:"tool_name"`
-		Input                 any    `json:"input"`
-		DecisionReason        string `json:"decision_reason"`
-		PermissionSuggestions any    `json:"permission_suggestions"`
+		Subtype               string           `json:"subtype"`
+		ToolName              string           `json:"tool_name"`
+		Input                 *ToolInput       `json:"input"`
+		DecisionReason        string           `json:"decision_reason"`
+		PermissionSuggestions []PermSuggestion `json:"permission_suggestions"`
 	}
 	if err := json.Unmarshal(envelope.Request, &req); err != nil {
 		return err
@@ -103,9 +103,9 @@ type ctlSetPermModeRequest struct {
 // --- Permission response (we send back) ---
 
 type permAllowResponse struct {
-	Behavior           string `json:"behavior"` // "allow"
-	UpdatedInput       any    `json:"updatedInput"`
-	UpdatedPermissions []any  `json:"updatedPermissions,omitempty"`
+	Behavior           string           `json:"behavior"` // "allow"
+	UpdatedInput       *ToolInput       `json:"updatedInput"`
+	UpdatedPermissions []PermSuggestion `json:"updatedPermissions,omitempty"`
 }
 
 type permDenyResponse struct {
@@ -150,7 +150,7 @@ type streamBlock struct {
 	Text      string       `json:"text,omitempty"`
 	Name      string       `json:"name,omitempty"`
 	ID        string       `json:"id,omitempty"`
-	Input     any          `json:"input,omitempty"`
+	Input     *ToolInput   `json:"input,omitempty"`
 	ToolUseID string       `json:"tool_use_id,omitempty"`
 	Content   blockContent `json:"content,omitempty"`
 }
@@ -192,44 +192,66 @@ type userTextBlock struct {
 	Text string `json:"text"`
 }
 
+// --- ToolInput: flat struct for all tool inputs ---
+
+// ToolInput is a "fat" struct containing fields from all known tools.
+// Discriminate by tool name; unused fields are zero for other tools.
+type ToolInput struct {
+	// Bash
+	Command     string `json:"command,omitempty"`
+	Description string `json:"description,omitempty"`
+	Timeout     int    `json:"timeout,omitempty"`
+	// Read/Write/Edit + Grep/Glob
+	FilePath  string `json:"file_path,omitempty"`
+	Content   string `json:"content,omitempty"`
+	OldString string `json:"old_string,omitempty"`
+	NewString string `json:"new_string,omitempty"`
+	Offset    int    `json:"offset,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	Pattern   string `json:"pattern,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Glob      string `json:"glob,omitempty"`
+	// TodoWrite
+	Todos []Todo `json:"todos,omitempty"`
+	// AskUserQuestion
+	Questions []AskQuestion     `json:"questions,omitempty"`
+	Answers   map[string]string `json:"answers,omitempty"`
+}
+
+// ResolvedPath returns FilePath if set, else Path.
+func (t *ToolInput) ResolvedPath() string {
+	if t.FilePath != "" {
+		return t.FilePath
+	}
+	return t.Path
+}
+
+// AskQuestion represents a single question in AskUserQuestion.
+type AskQuestion struct {
+	Question    string      `json:"question"`
+	Header      string      `json:"header,omitempty"`
+	MultiSelect bool        `json:"multiSelect,omitempty"`
+	Options     []AskOption `json:"options,omitempty"`
+}
+
+// AskOption represents a selectable option within a question.
+type AskOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
 // --- Permission suggestion types ---
 
-type permissionSuggestion struct {
-	Type string `json:"type"` // "setMode", "addRules", etc.
-	Mode string `json:"mode,omitempty"`
-}
-
-// --- AskUserQuestion tool input ---
-
-type askUserQuestion struct {
-	Question    string   `json:"question"`
-	Options     []string `json:"options,omitempty"`
-	MultiSelect bool     `json:"multiSelect,omitempty"`
-}
-
-// parseAskUserQuestions extracts the typed question metadata from an AskUserQuestion
-// tool input. The raw input (any) is preserved for roundtripping back to the CLI.
-func parseAskUserQuestions(rawInput any) []askUserQuestion {
-	inputJSON, err := json.Marshal(rawInput)
-	if err != nil {
-		return nil
-	}
-	var parsed struct {
-		Questions []askUserQuestion `json:"questions"`
-	}
-	json.Unmarshal(inputJSON, &parsed)
-	return parsed.Questions
+type PermSuggestion struct {
+	Type        string   `json:"type"` // "setMode", "addRules", "addDirectories", etc.
+	Mode        string   `json:"mode,omitempty"`
+	Directories []string `json:"directories,omitempty"`
 }
 
 // buildAskUserResponse creates the updatedInput by copying the original input
 // and adding the answers map, preserving all original fields.
-func buildAskUserResponse(rawInput any, answers map[string]string) map[string]any {
-	inputJSON, _ := json.Marshal(rawInput)
-	var m map[string]any
-	json.Unmarshal(inputJSON, &m)
-	if m == nil {
-		m = make(map[string]any)
-	}
-	m["answers"] = answers
-	return m
+func buildAskUserResponse(input *ToolInput, answers map[string]string) *ToolInput {
+	out := *input
+	out.Answers = answers
+	return &out
 }
