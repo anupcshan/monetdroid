@@ -11,6 +11,100 @@ import (
 	"time"
 )
 
+// JSONL schema types — minimal subset of fields we need from Claude session files.
+
+type jsonlEntry struct {
+	CWD         string                    `json:"cwd"`
+	Type        string                    `json:"type"`
+	IsSidechain bool                      `json:"isSidechain"`
+	SessionID   string                    `json:"sessionId"`
+	ResultSID   string                    `json:"session_id"`
+	TotalCost   float64                   `json:"total_cost_usd"`
+	ModelUsage  map[string]modelUsageInfo `json:"modelUsage"`
+	Message     jsonlMessage              `json:"message"`
+}
+
+type jsonlMessage struct {
+	Content messageContent `json:"content"`
+	Usage   *jsonlUsage    `json:"usage,omitempty"`
+}
+
+// messageContent handles the polymorphic content field: plain string or array of blocks.
+type messageContent struct {
+	Text   string         // set when content is a plain string
+	Blocks []contentBlock // set when content is an array
+}
+
+func (c *messageContent) UnmarshalJSON(data []byte) error {
+	if json.Unmarshal(data, &c.Text) == nil {
+		return nil
+	}
+	return json.Unmarshal(data, &c.Blocks)
+}
+
+// FirstText returns the first text content — either the plain string or the first text block.
+func (c *messageContent) FirstText() string {
+	if c.Text != "" {
+		return c.Text
+	}
+	for _, b := range c.Blocks {
+		if b.Type == "text" && b.Text != "" {
+			return b.Text
+		}
+	}
+	return ""
+}
+
+type jsonlUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+type modelUsageInfo struct {
+	ContextWindow int `json:"contextWindow"`
+}
+
+type contentBlock struct {
+	Type      string       `json:"type"`
+	Text      string       `json:"text,omitempty"`
+	Name      string       `json:"name,omitempty"`
+	ID        string       `json:"id,omitempty"`
+	Input     any          `json:"input,omitempty"`
+	ToolUseID string       `json:"tool_use_id,omitempty"`
+	Content   blockContent `json:"content,omitempty"`
+	Source    *imageSource `json:"source,omitempty"`
+}
+
+// blockContent handles the polymorphic tool_result content: plain string or complex object.
+type blockContent struct {
+	Text string // set when content is a plain string
+	Raw  string // JSON string fallback for non-string content
+}
+
+func (c *blockContent) UnmarshalJSON(data []byte) error {
+	if json.Unmarshal(data, &c.Text) == nil {
+		return nil
+	}
+	c.Raw = string(data)
+	return nil
+}
+
+func (c *blockContent) String() string {
+	if c.Text != "" {
+		return c.Text
+	}
+	return c.Raw
+}
+
+type imageSource struct {
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
+// Cache
+
 type cachedSessionInfo struct {
 	modTime time.Time
 	summary string
@@ -127,43 +221,24 @@ func parseSessionInfo(fpath string) (summary string, cwd string, numMsgs int, er
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
-		var obj map[string]any
-		if err := json.Unmarshal([]byte(scanner.Text()), &obj); err != nil {
+		var entry jsonlEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
-		if c, ok := obj["cwd"].(string); ok {
-			cwd = c
+		if entry.CWD != "" {
+			cwd = entry.CWD
 		}
-		msgType, _ := obj["type"].(string)
-		switch msgType {
+		switch entry.Type {
 		case "user", "assistant", "result":
 			numMsgs++
-			if summary == "" && msgType == "user" {
-				if msg, ok := obj["message"].(map[string]any); ok {
-					summary = Truncate(ExtractTextContent(msg["content"]), 120)
+			if summary == "" && entry.Type == "user" {
+				if t := entry.Message.Content.FirstText(); t != "" {
+					summary = Truncate(t, 120)
 				}
 			}
 		}
 	}
 	return summary, cwd, numMsgs, scanner.Err()
-}
-
-func ExtractTextContent(content any) string {
-	switch c := content.(type) {
-	case string:
-		return c
-	case []any:
-		for _, block := range c {
-			if b, ok := block.(map[string]any); ok {
-				if b["type"] == "text" {
-					if t, ok := b["text"].(string); ok && t != "" {
-						return t
-					}
-				}
-			}
-		}
-	}
-	return ""
 }
 
 func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, usage SessionUsage, err error) {
@@ -176,133 +251,84 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
+		if len(scanner.Bytes()) == 0 {
 			continue
 		}
-		var obj map[string]any
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+		var entry jsonlEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
-		if c, ok := obj["cwd"].(string); ok {
-			cwd = c
+		if entry.CWD != "" {
+			cwd = entry.CWD
 		}
-		if sc, ok := obj["isSidechain"].(bool); ok && sc {
+		if entry.IsSidechain {
 			continue
 		}
-		msgType, _ := obj["type"].(string)
-		switch msgType {
+		switch entry.Type {
 		case "user":
-			if sid, ok := obj["sessionId"].(string); ok && sid != "" {
-				claudeID = sid
+			if entry.SessionID != "" {
+				claudeID = entry.SessionID
 			}
-			msg, ok := obj["message"].(map[string]any)
-			if !ok {
+			c := entry.Message.Content
+			if c.Text != "" && len(c.Blocks) == 0 {
+				msgs = append(msgs, HistoryMessage{Type: "user", Text: c.Text})
 				continue
 			}
-			switch c := msg["content"].(type) {
-			case string:
-				if c != "" {
-					msgs = append(msgs, HistoryMessage{Type: "user", Text: c})
-				}
-			case []any:
-				var userText string
-				var userImages []ImageData
-				for _, block := range c {
-					b, ok := block.(map[string]any)
-					if !ok {
-						continue
+			var userText string
+			var userImages []ImageData
+			for _, b := range c.Blocks {
+				switch b.Type {
+				case "text":
+					if b.Text != "" {
+						userText = b.Text
 					}
-					bt, _ := b["type"].(string)
-					switch bt {
-					case "text":
-						if t, _ := b["text"].(string); t != "" {
-							userText = t
-						}
-					case "image":
-						src, _ := b["source"].(map[string]any)
-						if src != nil {
-							mt, _ := src["media_type"].(string)
-							data, _ := src["data"].(string)
-							if mt != "" && data != "" {
-								userImages = append(userImages, ImageData{MediaType: mt, Data: data})
-							}
-						}
-					case "tool_result":
-						output := ""
-						switch rc := b["content"].(type) {
-						case string:
-							output = rc
-						default:
-							j, _ := json.Marshal(rc)
-							output = string(j)
-						}
-						tuID, _ := b["tool_use_id"].(string)
-						toolName := toolNames[tuID]
-						if !isBoringResult(output) {
-							msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: tuID, Output: Truncate(output, 2000)})
-						}
+				case "image":
+					if b.Source != nil && b.Source.MediaType != "" && b.Source.Data != "" {
+						userImages = append(userImages, ImageData{MediaType: b.Source.MediaType, Data: b.Source.Data})
+					}
+				case "tool_result":
+					output := b.Content.String()
+					toolName := toolNames[b.ToolUseID]
+					if !isBoringResult(output) {
+						msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000)})
 					}
 				}
-				if userText != "" || len(userImages) > 0 {
-					msgs = append(msgs, HistoryMessage{Type: "user", Text: userText, Images: userImages})
-				}
+			}
+			if userText != "" || len(userImages) > 0 {
+				msgs = append(msgs, HistoryMessage{Type: "user", Text: userText, Images: userImages})
 			}
 		case "assistant":
-			msg, ok := obj["message"].(map[string]any)
-			if !ok {
-				continue
-			}
-			if u, ok := msg["usage"].(map[string]any); ok {
-				inTok, _ := u["input_tokens"].(float64)
-				outTok, _ := u["output_tokens"].(float64)
-				cacheRead, _ := u["cache_read_input_tokens"].(float64)
-				cacheCreate, _ := u["cache_creation_input_tokens"].(float64)
-				ctx := int(inTok + cacheRead + cacheCreate + outTok)
+			if u := entry.Message.Usage; u != nil {
+				ctx := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
 				if ctx > 0 {
 					usage.ContextUsed = ctx
 				}
 			}
-			content, ok := msg["content"].([]any)
-			if !ok {
-				continue
-			}
-			for _, block := range content {
-				b, ok := block.(map[string]any)
-				if !ok {
-					continue
-				}
-				blockType, _ := b["type"].(string)
-				switch blockType {
+			for _, b := range entry.Message.Content.Blocks {
+				switch b.Type {
 				case "text":
-					if text, _ := b["text"].(string); text != "" {
-						msgs = append(msgs, HistoryMessage{Type: "assistant", Text: text})
+					if b.Text != "" {
+						msgs = append(msgs, HistoryMessage{Type: "assistant", Text: b.Text})
 					}
 				case "tool_use":
-					name, _ := b["name"].(string)
-					id, _ := b["id"].(string)
-					if id != "" {
-						toolNames[id] = name
+					if b.ID != "" {
+						toolNames[b.ID] = b.Name
 					}
-					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: name, ToolUseID: id, Input: b["input"]})
+					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: b.Name, ToolUseID: b.ID, Input: b.Input})
 				}
 			}
 		case "result":
-			if sid, ok := obj["session_id"].(string); ok && sid != "" {
-				claudeID = sid
+			if entry.ResultSID != "" {
+				claudeID = entry.ResultSID
 			}
-			if totalCost, ok := obj["total_cost_usd"].(float64); ok {
-				usage.TotalCostUSD = totalCost
+			if entry.TotalCost > 0 {
+				usage.TotalCostUSD = entry.TotalCost
 			}
-			if mu, ok := obj["modelUsage"].(map[string]any); ok {
-				for _, v := range mu {
-					if info, ok := v.(map[string]any); ok {
-						if cw, ok := info["contextWindow"].(float64); ok && cw > 0 {
-							usage.ContextWindow = int(cw)
-						}
-					}
-					break
+			for _, info := range entry.ModelUsage {
+				if info.ContextWindow > 0 {
+					usage.ContextWindow = info.ContextWindow
 				}
+				break
 			}
 		}
 	}
