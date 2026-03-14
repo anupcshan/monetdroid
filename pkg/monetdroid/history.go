@@ -113,10 +113,12 @@ type imageSource struct {
 // Cache
 
 type cachedSessionInfo struct {
-	modTime time.Time
-	summary string
-	cwd     string
-	numMsgs int
+	modTime       time.Time
+	summary       string
+	cwd           string
+	numMsgs       int
+	contextUsed   int
+	contextWindow int
 }
 
 type sessionInfoCache struct {
@@ -128,20 +130,21 @@ var historyCache = &sessionInfoCache{
 	entries: make(map[string]cachedSessionInfo),
 }
 
-func (c *sessionInfoCache) get(fpath string, modTime time.Time) (summary, cwd string, numMsgs int, ok bool) {
+func (c *sessionInfoCache) get(fpath string, modTime time.Time) (cachedSessionInfo, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if e, hit := c.entries[fpath]; hit && e.modTime.Equal(modTime) {
-		return e.summary, e.cwd, e.numMsgs, true
+		return e, true
 	}
 
-	summary, cwd, numMsgs, err := parseSessionInfo(fpath)
+	info, err := parseSessionInfo(fpath)
 	if err != nil {
-		return "", "", 0, false
+		return cachedSessionInfo{}, false
 	}
-	c.entries[fpath] = cachedSessionInfo{modTime: modTime, summary: summary, cwd: cwd, numMsgs: numMsgs}
-	return summary, cwd, numMsgs, true
+	info.modTime = modTime
+	c.entries[fpath] = info
+	return info, true
 }
 
 func ScanHistory() ([]HistoryGroup, error) {
@@ -169,30 +172,31 @@ func ScanHistory() ([]HistoryGroup, error) {
 		var cwd string
 		var sessions []HistorySession
 		for _, sf := range sessionFiles {
-			info, err := os.Stat(sf)
+			finfo, err := os.Stat(sf)
 			if err != nil {
 				continue
 			}
 			sessionID := strings.TrimSuffix(filepath.Base(sf), ".jsonl")
-			summary, sessionCwd, numMsgs, ok := historyCache.get(sf, info.ModTime())
+			cached, ok := historyCache.get(sf, finfo.ModTime())
 			if !ok {
 				continue
 			}
-			if cwd == "" && sessionCwd != "" {
-				cwd = sessionCwd
+			if cwd == "" && cached.cwd != "" {
+				cwd = cached.cwd
 			}
-			if numMsgs == 0 {
+			if cached.numMsgs == 0 {
 				continue
 			}
 			sessions = append(sessions, HistorySession{
-				ID: sessionID, Summary: summary, NumMsgs: numMsgs,
-				ModTime: info.ModTime().Format(time.RFC3339), ModUnix: info.ModTime().Unix(),
+				ID: sessionID, Summary: cached.summary, NumMsgs: cached.numMsgs,
+				ContextUsed: cached.contextUsed, ContextWindow: cached.contextWindow,
+				ModTime: finfo.ModTime(),
 			})
 		}
 		if cwd == "" {
 			cwd = "/" + strings.ReplaceAll(entry.Name(), "-", "/")
 		}
-		sort.Slice(sessions, func(i, j int) bool { return sessions[i].ModUnix > sessions[j].ModUnix })
+		sort.Slice(sessions, func(i, j int) bool { return sessions[i].ModTime.After(sessions[j].ModTime) })
 		groups = append(groups, HistoryGroup{Dir: cwd, DirKey: entry.Name(), Sessions: sessions})
 	}
 	sort.Slice(groups, func(i, j int) bool {
@@ -202,7 +206,7 @@ func ScanHistory() ([]HistoryGroup, error) {
 		if len(groups[j].Sessions) == 0 {
 			return true
 		}
-		return groups[i].Sessions[0].ModUnix > groups[j].Sessions[0].ModUnix
+		return groups[i].Sessions[0].ModTime.After(groups[j].Sessions[0].ModTime)
 	})
 	return groups, nil
 }
@@ -219,12 +223,13 @@ func FindJSONLByClaudeID(claudeID string) string {
 	return ""
 }
 
-func parseSessionInfo(fpath string) (summary string, cwd string, numMsgs int, err error) {
+func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 	f, err := os.Open(fpath)
 	if err != nil {
-		return "", "", 0, err
+		return cachedSessionInfo{}, err
 	}
 	defer f.Close()
+	var info cachedSessionInfo
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -233,19 +238,35 @@ func parseSessionInfo(fpath string) (summary string, cwd string, numMsgs int, er
 			continue
 		}
 		if entry.CWD != "" {
-			cwd = entry.CWD
+			info.cwd = entry.CWD
 		}
 		switch entry.Type {
 		case "user", "assistant", "result":
-			numMsgs++
-			if summary == "" && entry.Type == "user" {
+			info.numMsgs++
+			if info.summary == "" && entry.Type == "user" {
 				if t := entry.Message.Content.FirstText(); t != "" {
-					summary = Truncate(t, 120)
+					info.summary = Truncate(t, 120)
+				}
+			}
+			if entry.Type == "assistant" {
+				if u := entry.Message.Usage; u != nil {
+					ctx := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
+					if ctx > 0 {
+						info.contextUsed = ctx
+					}
+				}
+			}
+			if entry.Type == "result" {
+				for _, mu := range entry.ModelUsage {
+					if mu.ContextWindow > 0 {
+						info.contextWindow = mu.ContextWindow
+					}
+					break
 				}
 			}
 		}
 	}
-	return summary, cwd, numMsgs, scanner.Err()
+	return info, scanner.Err()
 }
 
 func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, usage SessionUsage, err error) {

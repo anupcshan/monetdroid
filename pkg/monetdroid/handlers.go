@@ -572,6 +572,8 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			sp := ShortPath(s.Cwd)
 			sid := s.ID
 			mc := len(s.Log)
+			ctxUsed := s.CostAccum.ContextUsed
+			ctxWindow := s.CostAccum.ContextWindow
 			label := s.Label
 			summary := ""
 			for _, m := range s.Log {
@@ -595,9 +597,13 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			if running {
 				runHTML = `<span class="di-running"></span> running`
 			}
+			ctxStr := ""
+			if ctxUsed > 0 {
+				ctxStr = " · " + FormatTokens(ctxUsed, ctxWindow)
+			}
 			fmt.Fprintf(&buf,
-				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs</div></div>`,
-				Esc(sid), Esc(summary), Esc(sp), runHTML, mc,
+				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs%s</div></div>`,
+				Esc(sid), Esc(summary), Esc(sp), runHTML, mc, ctxStr,
 			)
 		}
 	}
@@ -609,8 +615,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			sp := ShortPath(group.Dir)
 			fmt.Fprintf(&buf, `<details class="history-group"><summary class="history-group-header">%s <span style="color:var(--text2);font-size:10px">(%d)</span><button class="new-session-btn" hx-post="/new" hx-vals='{"cwd":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()" onclick="event.stopPropagation()">+</button></summary><div class="history-group-items">`, Esc(sp), len(group.Sessions), Esc(group.Dir))
 			for _, sess := range group.Sessions {
-				modTime, _ := time.Parse(time.RFC3339, sess.ModTime)
-				ago := TimeAgo(modTime)
+				ago := TimeAgo(sess.ModTime)
 				summary := h.Labels.Get(sess.ID)
 				if summary == "" && sess.Summary != "" {
 					s := sess.Summary
@@ -625,6 +630,9 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				msgsStr := ""
 				if sess.NumMsgs > 0 {
 					msgsStr = fmt.Sprintf(" · %d msgs", sess.NumMsgs)
+				}
+				if sess.ContextUsed > 0 {
+					msgsStr += fmt.Sprintf(" · %s", FormatTokens(sess.ContextUsed, sess.ContextWindow))
 				}
 				fmt.Fprintf(&buf,
 					`<div class="history-item" hx-post="/load" hx-vals='{"dir_key":"%s","history_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s%s</div></div>`,

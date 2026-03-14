@@ -1,5 +1,7 @@
 package monetdroid
 
+import "time"
+
 // ImageData holds a base64-encoded image for the Messages API content blocks.
 type ImageData struct {
 	MediaType string `json:"media_type"` // e.g. "image/jpeg"
@@ -39,11 +41,12 @@ type HistoryGroup struct {
 }
 
 type HistorySession struct {
-	ID      string `json:"id"`
-	Summary string `json:"summary"`
-	ModTime string `json:"mod_time"`
-	ModUnix int64  `json:"mod_unix"`
-	NumMsgs int    `json:"num_msgs"`
+	ID            string    `json:"id"`
+	Summary       string    `json:"summary"`
+	ModTime       time.Time `json:"mod_time"`
+	NumMsgs       int       `json:"num_msgs"`
+	ContextUsed   int       `json:"context_used"`
+	ContextWindow int       `json:"context_window"`
 }
 
 type HistoryMessage struct {

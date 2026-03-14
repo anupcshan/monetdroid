@@ -518,6 +518,17 @@ func ShortPath(p string) string {
 
 // --- Todos rendering ---
 
+// FormatTokens formats token counts like "62k" or "62k/200k".
+func FormatTokens(used, window int) string {
+	fmtK := func(n int) string {
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	}
+	if window > 0 {
+		return fmtK(used) + "/" + fmtK(window)
+	}
+	return fmtK(used)
+}
+
 func ParseTodos(input *ToolInput) []Todo {
 	if input == nil {
 		return nil
