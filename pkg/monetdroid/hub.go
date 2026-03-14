@@ -475,9 +475,25 @@ func (h *Hub) BuildReplay(s *Session) string {
 	s.Todos = todos
 	s.Mu.Unlock()
 
+	// Find last compact boundary to wrap pre-compaction messages
+	lastCompact := -1
+	for i, msg := range log_ {
+		if msg.Type == "compact_boundary" {
+			lastCompact = i
+		}
+	}
+
 	var msgsHTML strings.Builder
+	if lastCompact >= 0 {
+		msgsHTML.WriteString(`<div class="compacted-context">`)
+	}
 	suppressedIDs := make(map[string]bool)
-	for _, msg := range log_ {
+	for i, msg := range log_ {
+		if msg.Type == "compact_boundary" && i == lastCompact {
+			msgsHTML.WriteString(`</div>`)
+			msgsHTML.WriteString(RenderMsg(msg))
+			continue
+		}
 		if msg.Type == "tool_use" && suppressResultTools[msg.Tool] {
 			suppressedIDs[msg.ToolUseID] = true
 		}

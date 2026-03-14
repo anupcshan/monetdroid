@@ -504,6 +504,25 @@
     font-family: 'JetBrains Mono', monospace;
   }
 
+  /* --- Compact boundary --- */
+  .compact-boundary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 24px 0;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .compact-boundary::before, .compact-boundary::after {
+    content: '';
+    flex: 1;
+    border-top: 2px dashed var(--accent2);
+  }
+  .compacted-context {
+    opacity: 0.35;
+  }
+
   /* --- Thinking indicator --- */
   .thinking-indicator {
     display: flex;

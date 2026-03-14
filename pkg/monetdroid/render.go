@@ -303,6 +303,8 @@ func RenderMsg(msg ServerMsg) string {
 		return fmt.Sprintf(`<div class="msg"><div class="msg-error">✗ %s</div></div>`, Esc(msg.Error))
 	case "permission_request":
 		return RenderPermission(msg)
+	case "compact_boundary":
+		return `<div class="compact-boundary"><span>context compacted</span></div>`
 	case "result":
 		return ""
 	}

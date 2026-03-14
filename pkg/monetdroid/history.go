@@ -14,14 +14,21 @@ import (
 // JSONL schema types — minimal subset of fields we need from Claude session files.
 
 type jsonlEntry struct {
-	CWD         string                    `json:"cwd"`
-	Type        string                    `json:"type"`
-	IsSidechain bool                      `json:"isSidechain"`
-	SessionID   string                    `json:"sessionId"`
-	ResultSID   string                    `json:"session_id"`
-	TotalCost   float64                   `json:"total_cost_usd"`
-	ModelUsage  map[string]modelUsageInfo `json:"modelUsage"`
-	Message     jsonlMessage              `json:"message"`
+	CWD             string                    `json:"cwd"`
+	Type            string                    `json:"type"`
+	Subtype         string                    `json:"subtype,omitempty"`
+	IsSidechain     bool                      `json:"isSidechain"`
+	SessionID       string                    `json:"sessionId"`
+	ResultSID       string                    `json:"session_id"`
+	TotalCost       float64                   `json:"total_cost_usd"`
+	ModelUsage      map[string]modelUsageInfo `json:"modelUsage"`
+	Message         jsonlMessage              `json:"message"`
+	CompactMetadata *compactMetadata          `json:"compactMetadata,omitempty"`
+}
+
+type compactMetadata struct {
+	Trigger   string `json:"trigger"`
+	PreTokens int    `json:"preTokens"`
 }
 
 type jsonlMessage struct {
@@ -265,6 +272,11 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			continue
 		}
 		switch entry.Type {
+		case "system":
+			if entry.Subtype == "compact_boundary" {
+				msgs = append(msgs, HistoryMessage{Type: "compact_boundary"})
+			}
+			continue
 		case "user":
 			if entry.SessionID != "" {
 				claudeID = entry.SessionID
