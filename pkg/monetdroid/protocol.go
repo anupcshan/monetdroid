@@ -48,9 +48,11 @@ type ctlIncomingRequest struct {
 	// Nested inside "request" — use custom unmarshal
 	Subtype               string           `json:"-"`
 	ToolName              string           `json:"-"`
+	ToolUseID             string           `json:"-"`
 	Input                 *ToolInput       `json:"-"`
 	DecisionReason        string           `json:"-"`
 	PermissionSuggestions []PermSuggestion `json:"-"`
+	BlockedPath           string           `json:"-"`
 }
 
 func (r *ctlIncomingRequest) UnmarshalJSON(data []byte) error {
@@ -70,18 +72,22 @@ func (r *ctlIncomingRequest) UnmarshalJSON(data []byte) error {
 	var req struct {
 		Subtype               string           `json:"subtype"`
 		ToolName              string           `json:"tool_name"`
+		ToolUseID             string           `json:"tool_use_id"`
 		Input                 *ToolInput       `json:"input"`
 		DecisionReason        string           `json:"decision_reason"`
 		PermissionSuggestions []PermSuggestion `json:"permission_suggestions"`
+		BlockedPath           string           `json:"blocked_path"`
 	}
 	if err := json.Unmarshal(envelope.Request, &req); err != nil {
 		return err
 	}
 	r.Subtype = req.Subtype
 	r.ToolName = req.ToolName
+	r.ToolUseID = req.ToolUseID
 	r.Input = req.Input
 	r.DecisionReason = req.DecisionReason
 	r.PermissionSuggestions = req.PermissionSuggestions
+	r.BlockedPath = req.BlockedPath
 	return nil
 }
 
@@ -202,15 +208,16 @@ type ToolInput struct {
 	Description string `json:"description,omitempty"`
 	Timeout     int    `json:"timeout,omitempty"`
 	// Read/Write/Edit + Grep/Glob
-	FilePath  string `json:"file_path,omitempty"`
-	Content   string `json:"content,omitempty"`
-	OldString string `json:"old_string,omitempty"`
-	NewString string `json:"new_string,omitempty"`
-	Offset    int    `json:"offset,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	Pattern   string `json:"pattern,omitempty"`
-	Path      string `json:"path,omitempty"`
-	Glob      string `json:"glob,omitempty"`
+	FilePath   string `json:"file_path,omitempty"`
+	Content    string `json:"content,omitempty"`
+	OldString  string `json:"old_string,omitempty"`
+	NewString  string `json:"new_string,omitempty"`
+	ReplaceAll *bool  `json:"replace_all,omitempty"` // pointer: false must round-trip
+	Offset     int    `json:"offset,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+	Pattern    string `json:"pattern,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Glob       string `json:"glob,omitempty"`
 	// TodoWrite
 	Todos []Todo `json:"todos,omitempty"`
 	// AskUserQuestion
@@ -243,9 +250,17 @@ type AskOption struct {
 // --- Permission suggestion types ---
 
 type PermSuggestion struct {
-	Type        string   `json:"type"` // "setMode", "addRules", "addDirectories", etc.
-	Mode        string   `json:"mode,omitempty"`
-	Directories []string `json:"directories,omitempty"`
+	Type        string              `json:"type"` // "setMode", "addRules", "replaceRules", "removeRules", "addDirectories", "removeDirectories"
+	Mode        string              `json:"mode,omitempty"`
+	Directories []string            `json:"directories,omitempty"`
+	Destination string              `json:"destination,omitempty"` // "userSettings", "projectSettings", "localSettings", "session"
+	Behavior    string              `json:"behavior,omitempty"`    // "allow", "deny", "ask"
+	Rules       []PermissionRuleVal `json:"rules,omitempty"`
+}
+
+type PermissionRuleVal struct {
+	ToolName    string `json:"toolName"`
+	RuleContent string `json:"ruleContent,omitempty"`
 }
 
 // buildAskUserResponse creates the updatedInput by copying the original input

@@ -293,6 +293,118 @@ func main() {
 	Screenshot(t, page, "edit_diff_complete")
 }
 
+func TestAcceptEdits(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "accept_edits.jsonl", testMode())
+
+	// Create files for claude to edit
+	os.WriteFile(filepath.Join(f.WorkDir, "greeting.go"), []byte(`package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`), 0o644)
+
+	page := f.Page()
+
+	// Create session
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	time.Sleep(200 * time.Millisecond)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	time.Sleep(500 * time.Millisecond)
+
+	// Ask claude to edit the file — triggers Edit permission with "Accept Edits" suggestion
+	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for permission prompt with Accept Edits button
+	WaitForElement(t, page, ".perm-prompt", 60*time.Second)
+	Screenshot(t, page, "accept_edits_permission")
+
+	// Click "Accept Edits" instead of plain "Allow"
+	acceptBtn, err := page.Timeout(5*time.Second).ElementR("button", "Accept Edits")
+	if err != nil {
+		t.Fatalf("Accept Edits button not found: %v", err)
+	}
+	acceptBtn.MustClick()
+	time.Sleep(1 * time.Second)
+
+	// Permission should be resolved
+	WaitForText(t, page, ".perm-actions", "Allowed", 10*time.Second)
+	Screenshot(t, page, "accept_edits_allowed")
+
+	// Wait for first turn to complete
+	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	Screenshot(t, page, "accept_edits_first_turn")
+
+	// Second turn: another edit — should NOT require permission now
+	page.MustElement(`textarea[name="text"]`).MustInput("Now change 'goodbye world' to 'greetings world' in greeting.go")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for second assistant response — should complete without permission prompt
+	_, err = page.Timeout(120*time.Second).ElementR(".msg-assistant", "greetings")
+	if err != nil {
+		t.Fatalf("second assistant response never appeared: %v", err)
+	}
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	Screenshot(t, page, "accept_edits_second_turn")
+
+	// Verify no second permission prompt appeared (only one .perm-prompt from first turn)
+	prompts, err := page.Elements(".perm-prompt")
+	if err != nil {
+		t.Fatalf("failed to query perm-prompts: %v", err)
+	}
+	if len(prompts) > 1 {
+		Screenshot(t, page, "accept_edits_unexpected_perm")
+		t.Fatalf("expected at most 1 permission prompt after Accept Edits, got %d", len(prompts))
+	}
+
+	// Verify the file was edited
+	content, err := os.ReadFile(filepath.Join(f.WorkDir, "greeting.go"))
+	if err != nil {
+		t.Fatalf("greeting.go not found: %v", err)
+	}
+	if !strings.Contains(string(content), "greetings") {
+		t.Fatalf("greeting.go should contain 'greetings', got: %s", content)
+	}
+
+	// Reset permission mode back to default
+	page.MustElement(`.mode-reset`).MustClick()
+	time.Sleep(500 * time.Millisecond)
+	Screenshot(t, page, "accept_edits_mode_reset")
+
+	// Third turn: another edit — should require permission again after reset
+	page.MustElement(`textarea[name="text"]`).MustInput("Now change 'greetings world' to 'howdy world' in greeting.go")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for a new permission prompt with active buttons (first one already shows "Allowed")
+	_, err = page.Timeout(60*time.Second).ElementR(".perm-deny", "Deny")
+	if err != nil {
+		t.Fatalf("third turn permission prompt never appeared: %v", err)
+	}
+	Screenshot(t, page, "accept_edits_requires_perm_again")
+
+	// Allow the third edit (find the latest Allow button)
+	allowBtns, _ := page.Elements(".perm-allow")
+	allowBtns[len(allowBtns)-1].MustClick()
+
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	Screenshot(t, page, "accept_edits_third_turn")
+
+	// Verify final edit landed
+	content, err = os.ReadFile(filepath.Join(f.WorkDir, "greeting.go"))
+	if err != nil {
+		t.Fatalf("greeting.go not found: %v", err)
+	}
+	if !strings.Contains(string(content), "howdy") {
+		t.Fatalf("greeting.go should contain 'howdy', got: %s", content)
+	}
+}
+
 func TestSessionReload(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
