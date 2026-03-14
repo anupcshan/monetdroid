@@ -1,6 +1,5 @@
 package monetdroid
 
-
 // suppressResultTools lists tools whose tool_result output should not be
 // shown to the user (the tool_use chip is still rendered).
 var suppressResultTools = map[string]bool{

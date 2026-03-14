@@ -94,13 +94,13 @@ func Add(a, b int) int {
 	page.MustElement(`.send-btn`).MustClick()
 
 	// Wait for second user message to render
-	_, err := page.Timeout(30 * time.Second).ElementR(".msg-user", "Add function")
+	_, err := page.Timeout(30*time.Second).ElementR(".msg-user", "Add function")
 	if err != nil {
 		t.Fatalf("second user message never appeared: %v", err)
 	}
 
 	// Wait for second assistant response (it will reference Add/main.go)
-	_, err = page.Timeout(120 * time.Second).ElementR(".msg-assistant", "Add")
+	_, err = page.Timeout(120*time.Second).ElementR(".msg-assistant", "Add")
 	if err != nil {
 		t.Fatalf("second assistant response never appeared: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestAskUserQuestion(t *testing.T) {
 	Screenshot(t, page, "ask_user_prompt")
 
 	// Select an option (click the radio button for "Go")
-	goOption, err := page.Timeout(5 * time.Second).ElementR(".ask-label", "^Go$")
+	goOption, err := page.Timeout(5*time.Second).ElementR(".ask-label", "^Go$")
 	if err != nil {
 		t.Fatalf("could not find Go option: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestAskUserQuestion(t *testing.T) {
 	Screenshot(t, page, "ask_user_answered")
 
 	// Wait for assistant response acknowledging the choice
-	_, err = page.Timeout(120 * time.Second).ElementR(".msg-assistant", "Go")
+	_, err = page.Timeout(120*time.Second).ElementR(".msg-assistant", "Go")
 	if err != nil {
 		t.Fatalf("assistant response acknowledging Go never appeared: %v", err)
 	}
@@ -332,7 +332,7 @@ func Add(a, b int) int {
 	// Second turn
 	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go use the Add function from util.go? Show me how")
 	page.MustElement(`.send-btn`).MustClick()
-	if _, err := page.Timeout(120 * time.Second).ElementR(".msg-assistant", "Add"); err != nil {
+	if _, err := page.Timeout(120*time.Second).ElementR(".msg-assistant", "Add"); err != nil {
 		t.Fatalf("second assistant response never appeared: %v", err)
 	}
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)

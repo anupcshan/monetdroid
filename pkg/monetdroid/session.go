@@ -8,25 +8,25 @@ import (
 )
 
 type Session struct {
-	ID             string
-	ClaudeID       string
-	Label          string
-	AutoLabel      bool
-	Cwd            string
-	PermissionMode string
-	Running        bool
-	Interrupted    bool
-	CreatedAt      time.Time
-	JSONLPath      string
-	Log            []ServerMsg
-	QueuedText     string
-	CostAccum      CostInfo
+	ID                string
+	ClaudeID          string
+	Label             string
+	AutoLabel         bool
+	Cwd               string
+	PermissionMode    string
+	Running           bool
+	Interrupted       bool
+	CreatedAt         time.Time
+	JSONLPath         string
+	Log               []ServerMsg
+	QueuedText        string
+	CostAccum         CostInfo
 	Todos             []Todo
 	SuppressedToolIDs map[string]string // tool_use id → tool name, for suppressing results
 	DiffStat          DiffStat
 	PermChans         map[string]chan PermResponse
-	proc           *ClaudeProcess
-	Mu             sync.Mutex
+	proc              *ClaudeProcess
+	Mu                sync.Mutex
 }
 
 func (s *Session) Append(msg ServerMsg) {
@@ -64,9 +64,9 @@ func (sm *SessionManager) Create(cwd string) *Session {
 	s := &Session{
 		ID:                id,
 		Cwd:               cwd,
-		CreatedAt:          time.Now(),
+		CreatedAt:         time.Now(),
 		SuppressedToolIDs: make(map[string]string),
-		PermChans:          make(map[string]chan PermResponse),
+		PermChans:         make(map[string]chan PermResponse),
 	}
 	sm.sessions[id] = s
 	return s

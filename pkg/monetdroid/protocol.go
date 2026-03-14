@@ -43,7 +43,7 @@ type ctlRespPayload struct {
 // ctlIncomingRequest is a flat struct for all incoming control requests.
 // Discriminate on Subtype; unused fields are zero for other subtypes.
 type ctlIncomingRequest struct {
-	Type      string `json:"type"`       // "control_request"
+	Type      string `json:"type"` // "control_request"
 	RequestID string `json:"request_id"`
 	// Nested inside "request" — use custom unmarshal
 	Subtype               string `json:"-"`
@@ -165,7 +165,7 @@ type streamUsage struct {
 // --- User message (we send to CLI to start a turn) ---
 
 type userMessageEnvelope struct {
-	Type            string      `json:"type"`               // "user"
+	Type            string      `json:"type"` // "user"
 	SessionID       string      `json:"session_id"`
 	Message         userMessage `json:"message"`
 	ParentToolUseID *string     `json:"parent_tool_use_id"`
