@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type SSEClient struct {
@@ -282,34 +283,40 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 	// Remove spinner when tool_result arrives
 	if msg.Type == "tool_result" && msg.ToolUseID != "" {
-		parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
-
 		// Detect background Bash tasks and start tailing their output
 		if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
 			bgDivID := "bg-" + msg.ToolUseID
-			// Insert an output area inside the tool chip; suppress the result chip
+			// Insert an output area inside the tool chip; suppress the result chip.
+			// Keep the spinner — it will be removed when task_done arrives.
 			parts = append(parts, OobSwap("tool-"+msg.ToolUseID, "beforeend",
 				fmt.Sprintf(`<div class="tool-bg-output" id="%s"></div>`, bgDivID)))
 			msgHTML = ""
 			toolUseID := msg.ToolUseID
+			stopCh := make(chan struct{})
+			if s != nil {
+				s.Mu.Lock()
+				s.BgTaskStops[toolUseID] = stopCh
+				s.Mu.Unlock()
+			}
 			go func() {
-				var stop <-chan struct{}
-				if s != nil {
-					s.Mu.Lock()
-					proc := s.proc
-					s.Mu.Unlock()
-					if proc != nil {
-						stop = proc.dead
-					}
-				}
-				TailBgTask(bgPath, stop, func(chunk string) {
+				TailBgTask(bgPath, stopCh, func(chunk string) {
 					event := RenderBgOutput(toolUseID, chunk)
 					if event != "" {
 						h.BroadcastToSession(sessionID, FormatSSE("htmx", event))
 					}
+				}, func(elapsed time.Duration) {
+					secs := int(elapsed.Seconds())
+					h.BroadcastToSession(sessionID, FormatSSE("htmx",
+						OobSwap("elapsed-"+toolUseID, "innerHTML", fmt.Sprintf("%ds", secs))))
 				})
 			}()
+		} else {
+			parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
 		}
+	}
+	// Background task completed — remove spinner, show final elapsed time
+	if msg.Type == "task_done" && msg.ToolUseID != "" {
+		parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
 	}
 
 	if msgHTML != "" {

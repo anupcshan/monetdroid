@@ -22,33 +22,23 @@ func ParseBgTaskPath(output string) string {
 }
 
 // TailBgTask tails a background task output file and calls onChunk with
-// new content as it appears. Stops when the file has had no new content
-// for idleTimeout, or when stop is closed.
-func TailBgTask(path string, stop <-chan struct{}, onChunk func(string)) {
+// new content as it appears. Calls onTick with the elapsed duration on
+// every poll iteration. Stops when stop is closed (via task_notification).
+func TailBgTask(path string, stop <-chan struct{}, onChunk func(string), onTick func(time.Duration)) {
 	var offset int64
-	idle := 0
+	started := time.Now()
 	const pollInterval = 500 * time.Millisecond
-	const maxIdle = 120 // 60 seconds of no output
 
 	for {
-		if stop != nil {
-			select {
-			case <-stop:
-				// Drain any remaining content
-				readChunk(path, &offset, onChunk)
-				return
-			default:
-			}
+		select {
+		case <-stop:
+			readChunk(path, &offset, onChunk)
+			return
+		default:
 		}
 
-		if readChunk(path, &offset, onChunk) {
-			idle = 0
-		} else {
-			idle++
-			if idle > maxIdle {
-				return
-			}
-		}
+		onTick(time.Since(started))
+		readChunk(path, &offset, onChunk)
 		time.Sleep(pollInterval)
 	}
 }

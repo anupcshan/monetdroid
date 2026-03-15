@@ -13,6 +13,15 @@ var suppressResultTools = map[string]bool{
 func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)) {
 	switch event.Type {
 	case "system":
+		if event.Subtype == "task_notification" && event.ToolUseID != "" {
+			broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: event.ToolUseID})
+			s.Mu.Lock()
+			if ch, ok := s.BgTaskStops[event.ToolUseID]; ok {
+				close(ch)
+				delete(s.BgTaskStops, event.ToolUseID)
+			}
+			s.Mu.Unlock()
+		}
 		if event.SessionID != "" {
 			s.Mu.Lock()
 			wasEmpty := s.ClaudeID == ""

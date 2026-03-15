@@ -300,7 +300,7 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		var spinnerHTML string
 		if msg.Tool == "Bash" {
-			spinnerHTML = fmt.Sprintf(` <span class="tool-spinner" id="spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span> <span class="tool-elapsed" data-started="%d"></span></span>`, Esc(msg.ToolUseID), time.Now().UnixMilli())
+			spinnerHTML = fmt.Sprintf(` <span class="tool-spinner" id="spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span> <span class="tool-elapsed" id="elapsed-%s"></span></span>`, Esc(msg.ToolUseID), Esc(msg.ToolUseID))
 		}
 		summary := ToolChipSummary(msg.Tool, msg.Input)
 		detail := FormatToolInput(msg.Tool, msg.Input)

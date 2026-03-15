@@ -22,7 +22,8 @@ type Session struct {
 	QueuedText        string
 	CostAccum         CostInfo
 	Todos             []Todo
-	SuppressedToolIDs map[string]string // tool_use id → tool name, for suppressing results
+	SuppressedToolIDs map[string]string      // tool_use id → tool name, for suppressing results
+	BgTaskStops       map[string]chan struct{} // tool_use id → stop channel for bg tailers
 	DiffStat          DiffStat
 	PermChans         map[string]chan PermResponse
 	proc              *ClaudeProcess
@@ -66,6 +67,7 @@ func (sm *SessionManager) Create(cwd string) *Session {
 		Cwd:               cwd,
 		CreatedAt:         time.Now(),
 		SuppressedToolIDs: make(map[string]string),
+		BgTaskStops:       make(map[string]chan struct{}),
 		PermChans:         make(map[string]chan PermResponse),
 	}
 	sm.sessions[id] = s

@@ -510,13 +510,12 @@ func TestBashSpinner(t *testing.T) {
 	// Wait for turn to complete (Claude responds after submitting the bg task)
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Spinner should be removed after completion
-	spinners := page.MustEval(`() => document.querySelectorAll('.tool-spinner').length`).Int()
-	if spinners != 0 {
-		Screenshot(t, page, "bash_spinner_not_removed")
-		t.Fatalf("expected 0 spinners after turn complete, got %d", spinners)
+	// Spinner should still be present — bg command is still running
+	if !page.MustHas(".tool-spinner") {
+		Screenshot(t, page, "bash_spinner_gone_too_early")
+		t.Fatal("spinner disappeared before bg task completed")
 	}
-	Screenshot(t, page, "bash_spinner_complete")
+	Screenshot(t, page, "bash_spinner_still_running")
 
 	// Wait for streaming to start — at least 2 lines visible
 	WaitForText(t, page, ".tool-bg-output", "step 2", 30*time.Second)
@@ -531,6 +530,17 @@ func TestBashSpinner(t *testing.T) {
 	// Wait for all output to arrive
 	WaitForText(t, page, ".tool-bg-output", "step 10", 30*time.Second)
 	Screenshot(t, page, "bash_bg_output")
+
+	// Spinner should be removed by task_notification — get a fresh reference
+	spinner, err := page.Timeout(30 * time.Second).Element(".tool-spinner")
+	if err == nil {
+		if err := spinner.WaitInvisible(); err != nil {
+			Screenshot(t, page, "bash_spinner_not_removed")
+			t.Fatalf("spinner still visible after bg task completed: %v", err)
+		}
+	}
+	// If Element returned error, spinner is already gone — that's fine
+	Screenshot(t, page, "bash_spinner_complete")
 
 	// Reload — verify spinners are stripped in replay and page stabilises
 	currentURL := page.MustEval(`() => window.location.href`).String()

@@ -505,6 +505,10 @@
     border-radius: 8px;
     padding: 8px 12px;
   }
+  .bg-elapsed {
+    color: var(--tool);
+    font-size: 10px;
+  }
   .tool-result-chip {
     background: var(--blue-bg);
     border: 1px solid var(--blue);
@@ -1005,22 +1009,6 @@
     </div>
   </form>
 </div>
-
-<script>
-(function(){
-  var tid;
-  function tick(){
-    var els = document.querySelectorAll('.tool-elapsed');
-    if(!els.length){ clearInterval(tid); tid = 0; return; }
-    for(var i = 0; i < els.length; i++){
-      var v = Math.floor((Date.now() - parseInt(els[i].dataset.started)) / 1000) + 's';
-      if(els[i].textContent !== v) els[i].textContent = v;
-    }
-  }
-  new MutationObserver(function(){
-    if(!tid && document.querySelector('.tool-elapsed')) tid = setInterval(tick, 1000);
-  }).observe(document.body, {childList: true, subtree: true});
-})();
-</script>
+undefined
 </body>
 </html>
