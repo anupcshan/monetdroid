@@ -3,6 +3,7 @@ package monetdroid
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -32,38 +33,46 @@ func TailBgTask(path string, stop <-chan struct{}, onChunk func(string), onTick 
 	for {
 		select {
 		case <-stop:
-			readChunk(path, &offset, onChunk)
+			if err := readChunk(path, &offset, onChunk); err != nil {
+				log.Printf("[bgtask] final read %s: %v", path, err)
+			}
 			return
 		default:
 		}
 
 		onTick(time.Since(started))
-		readChunk(path, &offset, onChunk)
+		if err := readChunk(path, &offset, onChunk); err != nil {
+			log.Printf("[bgtask] read %s: %v", path, err)
+		}
 		time.Sleep(pollInterval)
 	}
 }
 
-func readChunk(path string, offset *int64, onChunk func(string)) bool {
+func readChunk(path string, offset *int64, onChunk func(string)) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return err
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
-	if err != nil || info.Size() <= *offset {
-		return false
+	if err != nil {
+		return err
+	}
+	if info.Size() <= *offset {
+		return nil
 	}
 
-	f.Seek(*offset, io.SeekStart)
+	if _, err := f.Seek(*offset, io.SeekStart); err != nil {
+		return err
+	}
 	buf := make([]byte, info.Size()-*offset)
 	n, err := f.Read(buf)
-	if n <= 0 {
-		return false
+	if n > 0 {
+		*offset += int64(n)
+		onChunk(string(buf[:n]))
 	}
-	*offset += int64(n)
-	onChunk(string(buf[:n]))
-	return true
+	return err
 }
 
 // RenderBgOutput formats a chunk of background task output as an OOB swap
