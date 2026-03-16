@@ -136,10 +136,20 @@ type streamEvent struct {
 }
 
 // toolUseResult carries structured tool output from the CLI.
-// For background Bash tasks, Stdout contains the task description string.
+// Can be either a plain string or an object with stdout/stderr fields.
 type toolUseResult struct {
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
+}
+
+func (r *toolUseResult) UnmarshalJSON(data []byte) error {
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		r.Stdout = s
+		return nil
+	}
+	type raw toolUseResult
+	return json.Unmarshal(data, (*raw)(r))
 }
 
 type streamMessage struct {
