@@ -946,7 +946,7 @@
   <div class="header">
     <button class="header-btn" popovertarget="drawer" hx-get="/drawer" hx-target="#drawer-content" hx-swap="innerHTML">☰</button>
     <a href="/" class="header-btn" style="text-decoration:none">⌂</a>
-    <div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML">no session</div>
+    <div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">no session</div>
     <span id="running-dot" style="display:none"></span>
     <button class="header-btn" popovertarget="new-session-popover">+</button>
   </div>
@@ -975,6 +975,7 @@
   <div class="queue-bar" id="queue-bar"></div>
   <div class="input-area">
     <form hx-post="/send" hx-swap="none" hx-encoding="multipart/form-data" hx-on::after-request="this.reset(); this.querySelector('.badge').classList.add('hidden'); this.querySelector('.badge').textContent = ''">
+      <input type="hidden" name="session_id" id="session-id" value="">
       <div class="input-row">
         <textarea name="text" placeholder="Message Claude Code..." rows="1" onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();this.form.requestSubmit()}"></textarea>
         <label class="img-btn" title="Attach image">

@@ -99,17 +99,6 @@ func NewHubWithDataDir(dataDir string) *Hub {
 	}
 }
 
-func (h *Hub) GetOrCreateClient(cid string) *SSEClient {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if c, ok := h.clients[cid]; ok {
-		return c
-	}
-	c := &SSEClient{id: cid, events: make(chan string, 64)}
-	h.clients[cid] = c
-	return c
-}
-
 func (h *Hub) RemoveClient(cid string) {
 	h.mu.Lock()
 	delete(h.clients, cid)
@@ -125,14 +114,6 @@ func (h *Hub) BroadcastToSession(sessionID string, event string) {
 			c.Send(event)
 			sent++
 		}
-	}
-}
-
-func (h *Hub) SendToClient(cid string, event string) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if c, ok := h.clients[cid]; ok {
-		c.Send(event)
 	}
 }
 
@@ -189,7 +170,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	thinkingHTML := `<div class="thinking-indicator" id="thinking"><span></span><span></span><span></span></div>`
 	emptyThinking := OobSwap("thinking", "outerHTML", `<div id="thinking"></div>`)
 
-	stopBtnHTML := `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none">◼</button>`
+	stopBtnHTML := `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`
 
 	// Push to notification clients (Android app)
 	if msg.Type == "permission_request" && s != nil {
@@ -472,11 +453,6 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	}()
 }
 
-// ReplaySession sends the full session state to a specific client via the channel.
-func (h *Hub) ReplaySession(cid string, s *Session) {
-	h.SendToClient(cid, h.BuildReplay(s))
-}
-
 // BuildReplay constructs the full session state as an SSE event string.
 func (h *Hub) BuildReplay(s *Session) string {
 	s.Mu.Lock()
@@ -563,12 +539,14 @@ func (h *Hub) BuildReplay(s *Session) string {
 		}
 	}
 	parts = append(parts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
+	parts = append(parts, OobSwap("session-id", "outerHTML",
+		fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))))
 	parts = append(parts, OobSwap("messages", "innerHTML", msgsHTML.String()))
 	parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
 
 	if running {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
-		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none">◼</button>`))
+		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`))
 	} else {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
 		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))

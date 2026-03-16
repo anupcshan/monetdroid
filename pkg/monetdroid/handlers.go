@@ -19,17 +19,6 @@ import (
 //go:embed index.html
 var indexHTML string
 
-func GetCID(w http.ResponseWriter, r *http.Request) string {
-	cookie, err := r.Cookie("cid")
-	if err == nil && cookie.Value != "" {
-		return cookie.Value
-	}
-	b := make([]byte, 16)
-	rand.Read(b)
-	cid := hex.EncodeToString(b)
-	http.SetCookie(w, &http.Cookie{Name: "cid", Value: cid, Path: "/", MaxAge: 86400 * 365})
-	return cid
-}
 
 func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux := http.NewServeMux()
@@ -56,7 +45,6 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 }
 
 func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
-	GetCID(w, r)
 	html := indexHTML
 	if qs := r.URL.RawQuery; qs != "" {
 		html = strings.Replace(html, `sse-connect="/events"`, `sse-connect="/events?`+qs+`"`, 1)
@@ -130,13 +118,7 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 }
 
 func (h *Hub) handleLabelEdit(w http.ResponseWriter, r *http.Request) {
-	cid := GetCID(w, r)
-	client := h.GetOrCreateClient(cid)
-	sid := client.ActiveSession()
-	if sid == "" {
-		w.WriteHeader(204)
-		return
-	}
+	sid := r.URL.Query().Get("session_id")
 	s := h.Sessions.Get(sid)
 	if s == nil {
 		w.WriteHeader(204)
@@ -151,18 +133,12 @@ func (h *Hub) handleLabelEdit(w http.ResponseWriter, r *http.Request) {
 		value = ShortPath(cwd)
 	}
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<form id="session-label" hx-post="/label" hx-swap="outerHTML" style="flex:1;display:flex"><input class="session-label-input" name="label" value="%s" autofocus hx-on:keydown="if(event.key==='Escape'){this.closest('form').outerHTML='<div class=\'session-label\' id=\'session-label\' hx-get=\'/label-edit\' hx-target=\'#session-label\' hx-swap=\'outerHTML\'>'+this.dataset.original+'</div>';htmx.process(document.getElementById('session-label'))}" data-original="%s"></input></form>`,
+	fmt.Fprintf(w, `<form id="session-label" hx-post="/label" hx-swap="outerHTML" hx-include="#session-id" style="flex:1;display:flex"><input class="session-label-input" name="label" value="%s" autofocus hx-on:keydown="if(event.key==='Escape'){this.closest('form').outerHTML='<div class=\'session-label\' id=\'session-label\' hx-get=\'/label-edit\' hx-target=\'#session-label\' hx-swap=\'outerHTML\' hx-include=\'#session-id\'>'+this.dataset.original+'</div>';htmx.process(document.getElementById('session-label'))}" data-original="%s"></input></form>`,
 		Esc(value), Esc(Esc(value)))
 }
 
 func (h *Hub) handleLabel(w http.ResponseWriter, r *http.Request) {
-	cid := GetCID(w, r)
-	client := h.GetOrCreateClient(cid)
-	sid := client.ActiveSession()
-	if sid == "" {
-		w.WriteHeader(204)
-		return
-	}
+	sid := r.FormValue("session_id")
 	s := h.Sessions.Get(sid)
 	if s == nil {
 		w.WriteHeader(204)
@@ -180,13 +156,11 @@ func (h *Hub) handleLabel(w http.ResponseWriter, r *http.Request) {
 		h.Labels.Set(claudeID, s.Label)
 	}
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML">%s</div>`, Esc(label))
+	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">%s</div>`, Esc(label))
 }
 
 // restoreSession finds a session by ClaudeID (in memory or on disk) and assigns it to the client.
-func (h *Hub) restoreSession(cid, claudeID string) {
-	client := h.GetOrCreateClient(cid)
-
+func (h *Hub) restoreSession(client *SSEClient, claudeID string) {
 	// Check in-memory sessions first
 	if s := h.Sessions.FindByClaudeID(claudeID); s != nil {
 		client.SetSession(s.ID)
@@ -215,8 +189,15 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cid := GetCID(w, r)
-	client := h.GetOrCreateClient(cid)
+	// Each SSE connection gets its own unique client ID — no cookies.
+	b := make([]byte, 16)
+	rand.Read(b)
+	connID := hex.EncodeToString(b)
+
+	client := &SSEClient{id: connID, events: make(chan string, 64)}
+	h.mu.Lock()
+	h.clients[connID] = client
+	h.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -228,7 +209,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Restore session from query params (forwarded from page URL via sse-connect)
 	if sessionID := r.URL.Query().Get("session"); sessionID != "" {
-		h.restoreSession(cid, sessionID)
+		h.restoreSession(client, sessionID)
 		h.Queue.Ack(sessionID)
 	} else if cwd := r.URL.Query().Get("cwd"); cwd != "" {
 		if strings.HasPrefix(cwd, "~/") {
@@ -257,7 +238,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
-			h.RemoveClient(cid)
+			h.RemoveClient(connID)
 			return
 		case event := <-client.events:
 			fmt.Fprint(w, event)
@@ -270,7 +251,6 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
-	cid := GetCID(w, r)
 	cwd := r.FormValue("cwd")
 	if cwd == "" {
 		home, _ := os.UserHomeDir()
@@ -287,16 +267,11 @@ func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
 		s.Label = label
 		s.Mu.Unlock()
 	}
-	client := h.GetOrCreateClient(cid)
-	client.SetSession(s.ID)
-	h.ReplaySession(cid, s)
 
-	w.Header().Set("HX-Replace-Url", sessionURL(s))
+	w.Header().Set("HX-Redirect", sessionURL(s))
 }
 
 func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
-	cid := GetCID(w, r)
-
 	// Parse multipart form (supports file uploads). 10MB limit.
 	r.ParseMultipartForm(10 << 20)
 	text := r.FormValue("text")
@@ -329,8 +304,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := h.GetOrCreateClient(cid)
-	sessionID := client.ActiveSession()
+	sessionID := r.FormValue("session_id")
 	s := h.Sessions.Get(sessionID)
 	if s == nil {
 		w.WriteHeader(204)
@@ -509,7 +483,6 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handleSwitch(w http.ResponseWriter, r *http.Request) {
-	cid := GetCID(w, r)
 	sessionID := r.FormValue("session_id")
 
 	s := h.Sessions.Get(sessionID)
@@ -518,15 +491,10 @@ func (h *Hub) handleSwitch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := h.GetOrCreateClient(cid)
-	client.SetSession(s.ID)
-	h.ReplaySession(cid, s)
-
-	w.Header().Set("HX-Replace-Url", sessionURL(s))
+	w.Header().Set("HX-Redirect", sessionURL(s))
 }
 
 func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
-	cid := GetCID(w, r)
 	dirKey := r.FormValue("dir_key")
 	historyID := r.FormValue("history_id")
 
@@ -540,10 +508,7 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 	jsonlPath := filepath.Join(home, ".claude", "projects", dirKey, historyID+".jsonl")
 
 	if s := h.Sessions.FindByJSONLPath(jsonlPath); s != nil {
-		client := h.GetOrCreateClient(cid)
-		client.SetSession(s.ID)
-		h.ReplaySession(cid, s)
-		w.WriteHeader(204)
+		w.Header().Set("HX-Redirect", sessionURL(s))
 		return
 	}
 
@@ -553,11 +518,7 @@ func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := h.GetOrCreateClient(cid)
-	client.SetSession(s.ID)
-	h.ReplaySession(cid, s)
-
-	w.Header().Set("HX-Replace-Url", sessionURL(s))
+	w.Header().Set("HX-Redirect", sessionURL(s))
 }
 
 func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
@@ -652,9 +613,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handleStop(w http.ResponseWriter, r *http.Request) {
-	cid := GetCID(w, r)
-	client := h.GetOrCreateClient(cid)
-	sessionID := client.ActiveSession()
+	sessionID := r.FormValue("session_id")
 	s := h.Sessions.Get(sessionID)
 	if s == nil {
 		w.WriteHeader(204)
