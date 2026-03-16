@@ -29,8 +29,6 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/perm", hub.handlePerm)
 	mux.HandleFunc("/perm-answer", hub.handlePermAnswer)
 	mux.HandleFunc("/mode", hub.handleMode)
-	mux.HandleFunc("/switch", hub.handleSwitch)
-	mux.HandleFunc("/load", hub.handleLoad)
 	mux.HandleFunc("/stop", hub.handleStop)
 	mux.HandleFunc("/cancel-queue", hub.handleCancelQueue)
 	mux.HandleFunc("/drawer", hub.handleDrawer)
@@ -159,16 +157,20 @@ func (h *Hub) handleLabel(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">%s</div>`, Esc(label))
 }
 
-// restoreSession finds a session by ClaudeID (in memory or on disk) and assigns it to the client.
-func (h *Hub) restoreSession(client *SSEClient, claudeID string) {
-	// Check in-memory sessions first
-	if s := h.Sessions.FindByClaudeID(claudeID); s != nil {
+// restoreSession finds a session by ID (internal or ClaudeID, in memory or on disk) and assigns it to the client.
+func (h *Hub) restoreSession(client *SSEClient, id string) {
+	// Check in-memory sessions first (by internal ID, then ClaudeID)
+	if s := h.Sessions.Get(id); s != nil {
+		client.SetSession(s.ID)
+		return
+	}
+	if s := h.Sessions.FindByClaudeID(id); s != nil {
 		client.SetSession(s.ID)
 		return
 	}
 
 	// Find JSONL on disk
-	jsonlPath := FindJSONLByClaudeID(claudeID)
+	jsonlPath := FindJSONLByClaudeID(id)
 	if jsonlPath == "" {
 		return
 	}
@@ -482,44 +484,6 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-func (h *Hub) handleSwitch(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.FormValue("session_id")
-
-	s := h.Sessions.Get(sessionID)
-	if s == nil {
-		w.WriteHeader(204)
-		return
-	}
-
-	w.Header().Set("HX-Redirect", sessionURL(s))
-}
-
-func (h *Hub) handleLoad(w http.ResponseWriter, r *http.Request) {
-	dirKey := r.FormValue("dir_key")
-	historyID := r.FormValue("history_id")
-
-	if strings.Contains(dirKey, "/") || strings.Contains(dirKey, "..") ||
-		strings.Contains(historyID, "/") || strings.Contains(historyID, "..") {
-		w.WriteHeader(204)
-		return
-	}
-
-	home, _ := os.UserHomeDir()
-	jsonlPath := filepath.Join(home, ".claude", "projects", dirKey, historyID+".jsonl")
-
-	if s := h.Sessions.FindByJSONLPath(jsonlPath); s != nil {
-		w.Header().Set("HX-Redirect", sessionURL(s))
-		return
-	}
-
-	s := h.loadSessionFromDisk(jsonlPath)
-	if s == nil {
-		w.WriteHeader(204)
-		return
-	}
-
-	w.Header().Set("HX-Redirect", sessionURL(s))
-}
 
 func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 	var buf strings.Builder
@@ -531,7 +495,10 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			s.Mu.Lock()
 			running := s.Running
 			sp := ShortPath(s.Cwd)
-			sid := s.ID
+			sid := s.ClaudeID
+			if sid == "" {
+				sid = s.ID
+			}
 			mc := len(s.Log)
 			ctxUsed := s.CostAccum.ContextUsed
 			ctxWindow := s.CostAccum.ContextWindow
@@ -563,7 +530,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				ctxStr = " · " + FormatTokens(ctxUsed, ctxWindow)
 			}
 			fmt.Fprintf(&buf,
-				`<div class="drawer-item" hx-post="/switch" hx-vals='{"session_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs%s</div></div>`,
+				`<a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs%s</div></a>`,
 				Esc(sid), Esc(summary), Esc(sp), runHTML, mc, ctxStr,
 			)
 		}
@@ -596,8 +563,8 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 					msgsStr += fmt.Sprintf(" · %s", FormatTokens(sess.ContextUsed, sess.ContextWindow))
 				}
 				fmt.Fprintf(&buf,
-					`<div class="history-item" hx-post="/load" hx-vals='{"dir_key":"%s","history_id":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s%s</div></div>`,
-					Esc(group.DirKey), Esc(sess.ID), Esc(summary), Esc(ago), msgsStr,
+					`<a class="history-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s%s</div></a>`,
+					Esc(sess.ID), Esc(summary), Esc(ago), msgsStr,
 				)
 			}
 			buf.WriteString(`</div></details>`)
