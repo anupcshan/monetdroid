@@ -547,12 +547,26 @@ func RenderTodosSummary(todos []Todo) string {
 		return ""
 	}
 	done := 0
+	var active string
 	for _, t := range todos {
 		if t.Status == "completed" {
 			done++
+		} else if t.Status == "in_progress" && active == "" {
+			active = t.ActiveForm
+			if active == "" {
+				active = t.Content
+			}
 		}
 	}
-	return fmt.Sprintf("Todos (%d/%d)", done, len(todos))
+	summary := fmt.Sprintf("Todos (%d/%d)", done, len(todos))
+	if active != "" {
+		const maxLen = 50
+		if len(active) > maxLen {
+			active = active[:maxLen] + "…"
+		}
+		summary += " · " + Esc(active)
+	}
+	return summary
 }
 
 func RenderTodosBody(todos []Todo) string {
