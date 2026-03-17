@@ -33,12 +33,11 @@ func TestCreateSession(t *testing.T) {
 	page := f.Page()
 
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	Screenshot(t, page, "new_session_popover")
 
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
 
 	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 	Screenshot(t, page, "session_created")
@@ -69,10 +68,10 @@ func Add(a, b int) int {
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// First turn: ask about the files
 	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
@@ -137,10 +136,10 @@ const Version = "1.0.0"
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// Send a prompt that triggers multiple tool calls
 	page.MustElement(`textarea[name="text"]`).MustInput("Read all three Go files and summarize what each one does")
@@ -166,10 +165,10 @@ func TestPermissionFlow(t *testing.T) {
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// Ask claude to create a file (triggers Write permission)
 	page.MustElement(`textarea[name="text"]`).MustInput("Create a file called hello.txt containing 'Hello, World!'")
@@ -182,7 +181,6 @@ func TestPermissionFlow(t *testing.T) {
 
 	// Click Allow
 	page.MustElement(`.perm-allow`).MustClick()
-	time.Sleep(1 * time.Second)
 
 	// Permission should be resolved
 	WaitForText(t, page, ".perm-actions", "Allowed", 10*time.Second)
@@ -215,10 +213,10 @@ func TestAskUserQuestion(t *testing.T) {
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// Ask something that triggers AskUserQuestion
 	page.MustElement(`textarea[name="text"]`).MustInput("I want to set up a new project. Use the AskUserQuestion tool to ask me what programming language I prefer, with options: Go, Python, Rust, TypeScript")
@@ -235,7 +233,6 @@ func TestAskUserQuestion(t *testing.T) {
 		t.Fatalf("could not find Go option: %v", err)
 	}
 	goOption.MustParent().MustClick()
-	time.Sleep(200 * time.Millisecond)
 	Screenshot(t, page, "ask_user_selected")
 
 	// Submit the answer
@@ -271,10 +268,10 @@ func main() {
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// Ask claude to edit the file
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
@@ -286,7 +283,6 @@ func main() {
 
 	// Allow it
 	page.MustElement(`.perm-allow`).MustClick()
-	time.Sleep(1 * time.Second)
 
 	// Wait for response
 	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
@@ -311,10 +307,10 @@ func main() {
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// Ask claude to edit the file — triggers Edit permission with "Accept Edits" suggestion
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
@@ -330,7 +326,6 @@ func main() {
 		t.Fatalf("Accept Edits button not found: %v", err)
 	}
 	acceptBtn.MustClick()
-	time.Sleep(1 * time.Second)
 
 	// Permission should be resolved
 	WaitForText(t, page, ".perm-actions", "Allowed", 10*time.Second)
@@ -374,7 +369,7 @@ func main() {
 
 	// Reset permission mode back to default
 	page.MustElement(`.mode-reset`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	page.MustWait(`() => !document.querySelector('.mode-reset')`)
 	Screenshot(t, page, "accept_edits_mode_reset")
 
 	// Third turn: another edit — should require permission again after reset
@@ -430,10 +425,10 @@ func Add(a, b int) int {
 
 	// Create session and do two turns (generates enough content to overflow)
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// First turn
 	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
@@ -459,7 +454,7 @@ func Add(a, b int) int {
 	page.MustSetViewport(800, 300, 1, false)
 	page.MustNavigate(currentURL).MustWaitStable()
 	WaitForElement(t, page, ".msg-assistant", 10*time.Second)
-	time.Sleep(500 * time.Millisecond)
+	page.MustWaitStable()
 
 	scrollTop := page.MustEval(`() => document.getElementById('messages').scrollTop`).Int()
 	scrollHeight := page.MustEval(`() => document.getElementById('messages').scrollHeight`).Int()
@@ -590,10 +585,10 @@ func TestBashSpinner(t *testing.T) {
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	time.Sleep(200 * time.Millisecond)
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	time.Sleep(500 * time.Millisecond)
+	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
 
 	// Background Bash command — tests spinner lifecycle AND streaming output.
 	// The sleep between steps gives time to observe partial output.
