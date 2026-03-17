@@ -224,6 +224,25 @@ func highlightDiff(diffText string) string {
 	return buf.String()
 }
 
+func splitDiffByFile(fullDiff string) []string {
+	var chunks []string
+	var current strings.Builder
+	for _, line := range strings.Split(fullDiff, "\n") {
+		if strings.HasPrefix(line, "diff --git ") && current.Len() > 0 {
+			chunks = append(chunks, current.String())
+			current.Reset()
+		}
+		if current.Len() > 0 {
+			current.WriteByte('\n')
+		}
+		current.WriteString(line)
+	}
+	if current.Len() > 0 {
+		chunks = append(chunks, current.String())
+	}
+	return chunks
+}
+
 func editDiffFromInput(input *ToolInput) (filePath, oldStr, newStr string, ok bool) {
 	if input == nil {
 		return

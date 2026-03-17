@@ -228,3 +228,89 @@ func GitGrep(cwd, pattern string) ([]SearchMatch, error) {
 	}
 	return results, nil
 }
+
+// CommitEntry represents a single commit from git log.
+type CommitEntry struct {
+	Hash      string
+	ShortHash string
+	Subject   string
+	Author    string
+	TimeAgo   string
+}
+
+// GitLog returns recent commits.
+func GitLog(cwd string, limit int) ([]CommitEntry, error) {
+	cmd := exec.Command("git", "log", fmt.Sprintf("-%d", limit), "--format=%H%x00%h%x00%s%x00%an%x00%ar")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var commits []CommitEntry
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x00", 5)
+		if len(parts) < 5 {
+			continue
+		}
+		commits = append(commits, CommitEntry{
+			Hash:      parts[0],
+			ShortHash: parts[1],
+			Subject:   parts[2],
+			Author:    parts[3],
+			TimeAgo:   parts[4],
+		})
+	}
+	return commits, nil
+}
+
+// GitShowCommit returns the diff for a specific commit.
+func GitShowCommit(cwd, hash string) (string, error) {
+	cmd := exec.Command("git", "show", "-w", "--format=", hash)
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// GitLogOne returns metadata for a single commit by hash.
+func GitLogOne(cwd, hash string) (CommitEntry, error) {
+	cmd := exec.Command("git", "log", "-1", "--format=%H%x00%h%x00%s%x00%an%x00%ar", hash)
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return CommitEntry{}, err
+	}
+	parts := strings.SplitN(strings.TrimRight(string(out), "\n"), "\x00", 5)
+	if len(parts) < 5 {
+		return CommitEntry{}, fmt.Errorf("unexpected git log output")
+	}
+	return CommitEntry{
+		Hash:      parts[0],
+		ShortHash: parts[1],
+		Subject:   parts[2],
+		Author:    parts[3],
+		TimeAgo:   parts[4],
+	}, nil
+}
+
+// GitShowCommitFiles returns the files changed in a specific commit.
+func GitShowCommitFiles(cwd, hash string) ([]string, error) {
+	cmd := exec.Command("git", "show", "--name-only", "--format=", hash)
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}

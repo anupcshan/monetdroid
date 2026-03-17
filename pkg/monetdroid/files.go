@@ -67,6 +67,12 @@ func (h *Hub) handleFiles(w http.ResponseWriter, r *http.Request) {
 	case "search":
 		query := r.URL.Query().Get("q")
 		content = renderSearchContent(sessionID, cwd, query)
+	case "commits":
+		if hash := r.URL.Query().Get("commit"); hash != "" {
+			content = renderCommitDetail(sessionID, cwd, hash)
+		} else {
+			content = renderCommitsContent(sessionID, cwd)
+		}
 	default:
 		content = renderChangesContent(sessionID, cwd)
 	}
@@ -208,6 +214,21 @@ func renderFilesPage(sessionID, cwd, activeTab, content string) string {
   .search-line a:hover { color: var(--accent); }
   .search-line .match-text { color: var(--text); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
   .search-count { padding: 12px 16px; font-size: 12px; color: var(--text2); }
+
+  /* Commits tab */
+  .commit-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 16px; font-size: 12px; text-decoration: none; color: var(--text); }
+  .commit-row:hover { background: var(--surface2); }
+  .commit-hash { font-family: 'JetBrains Mono', monospace; font-size: 11px; flex-shrink: 0; color: var(--accent); }
+  .commit-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commit-time { color: var(--text2); font-size: 11px; flex-shrink: 0; min-width: 80px; text-align: right; }
+  .commit-detail-header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
+  .commit-detail-subject { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .commit-detail-meta { font-size: 11px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+  .commit-detail-files { padding: 8px 16px; border-bottom: 1px solid var(--border); }
+  .commit-detail-files a { display: block; padding: 2px 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--blue); }
+  .commit-detail-files a:hover { color: var(--text); }
+  .diff-section { padding: 0 16px 24px; }
+  .diff-section pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
 </style></head><body>
 `)
 
@@ -226,7 +247,7 @@ func renderFilesPage(sessionID, cwd, activeTab, content string) string {
 		baseURL += "cwd=" + Esc(cwd)
 	}
 	b.WriteString(`<div class="files-tabs">`)
-	for _, t := range []struct{ id, label string }{{"changes", "Changes"}, {"browse", "Browse"}, {"search", "Search"}} {
+	for _, t := range []struct{ id, label string }{{"changes", "Changes"}, {"browse", "Browse"}, {"search", "Search"}, {"commits", "Commits"}} {
 		cls := "files-tab"
 		if t.id == activeTab {
 			cls += " active"
@@ -623,6 +644,101 @@ func renderSearchContent(sessionID, cwd, query string) string {
 		b.WriteString(` (truncated)`)
 	}
 	b.WriteString(`</div>`)
+
+	return b.String()
+}
+
+// --- Commits tab ---
+
+func renderCommitsContent(sessionID, cwd string) string {
+	commits, err := GitLog(cwd, 50)
+	if err != nil || len(commits) == 0 {
+		return `<div class="files-empty">No commits</div>`
+	}
+
+	baseURL := "/files?"
+	if sessionID != "" {
+		baseURL += "session=" + Esc(sessionID)
+	} else {
+		baseURL += "cwd=" + Esc(cwd)
+	}
+	baseURL += "&tab=commits"
+
+	var b strings.Builder
+	for _, c := range commits {
+		fmt.Fprintf(&b, `<a class="commit-row" href="%s&commit=%s">`, baseURL, Esc(c.Hash))
+		fmt.Fprintf(&b, `<span class="commit-hash">%s</span>`, Esc(c.ShortHash))
+		fmt.Fprintf(&b, `<span class="commit-subject">%s</span>`, Esc(c.Subject))
+		fmt.Fprintf(&b, `<span class="commit-time">%s</span>`, Esc(c.TimeAgo))
+		b.WriteString(`</a>`)
+	}
+	return b.String()
+}
+
+func renderCommitDetail(sessionID, cwd, hash string) string {
+	var b strings.Builder
+
+	baseURL := "/files?"
+	if sessionID != "" {
+		baseURL += "session=" + Esc(sessionID)
+	} else {
+		baseURL += "cwd=" + Esc(cwd)
+	}
+
+	// Get commit metadata
+	meta, err := GitLogOne(cwd, hash)
+	if err != nil {
+		return fmt.Sprintf(`<div class="files-empty">Error: %s</div>`, Esc(err.Error()))
+	}
+
+	// Navigation bar
+	b.WriteString(`<div class="diff-nav">`)
+	fmt.Fprintf(&b, `<a href="%s&tab=commits" class="diff-nav-back">← commits</a>`, baseURL)
+	b.WriteString(`</div>`)
+
+	// Commit header
+	b.WriteString(`<div class="commit-detail-header">`)
+	fmt.Fprintf(&b, `<div class="commit-detail-subject">%s</div>`, Esc(meta.Subject))
+	fmt.Fprintf(&b, `<div class="commit-detail-meta">%s · %s · %s</div>`, Esc(meta.ShortHash), Esc(meta.Author), Esc(meta.TimeAgo))
+	b.WriteString(`</div>`)
+
+	// File list
+	files, _ := GitShowCommitFiles(cwd, hash)
+	if len(files) > 0 {
+		b.WriteString(`<div class="commit-detail-files">`)
+		for _, f := range files {
+			fmt.Fprintf(&b, `<a href="#%s">%s</a>`, Esc(f), Esc(f))
+		}
+		b.WriteString(`</div>`)
+	}
+
+	// Full diff
+	diffContent, err := GitShowCommit(cwd, hash)
+	if err != nil || diffContent == "" {
+		b.WriteString(`<div class="files-empty">No changes</div>`)
+		return b.String()
+	}
+
+	// Split diff by file and render each section
+	chunks := splitDiffByFile(diffContent)
+	for _, chunk := range chunks {
+		firstLine := chunk
+		if idx := strings.Index(chunk, "\n"); idx >= 0 {
+			firstLine = chunk[:idx]
+		}
+		name := ""
+		if strings.HasPrefix(firstLine, "diff --git ") {
+			fields := strings.Fields(firstLine)
+			if len(fields) >= 4 {
+				name = strings.TrimPrefix(fields[3], "b/")
+			}
+		}
+		fmt.Fprintf(&b, `<div class="diff-section" id="%s">`, Esc(name))
+		fmt.Fprintf(&b, `<div class="diff-file-header">%s</div>`, Esc(name))
+		b.WriteString(`<div class="diff-body">`)
+		b.WriteString(highlightDiff(chunk))
+		b.WriteString(`</div></div>`)
+	}
 
 	return b.String()
 }
