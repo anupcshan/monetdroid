@@ -1,7 +1,6 @@
 package monetdroid
 
 import (
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -9,7 +8,6 @@ import (
 
 type Session struct {
 	ID                string
-	ClaudeID          string
 	Label             string
 	AutoLabel         bool
 	Cwd               string
@@ -51,18 +49,15 @@ func (s *Session) RemovePermission(permID string) {
 type SessionManager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex
-	counter  int
 }
 
 func NewSessionManager() *SessionManager {
 	return &SessionManager{sessions: make(map[string]*Session)}
 }
 
-func (sm *SessionManager) Create(cwd string) *Session {
+func (sm *SessionManager) Create(id, cwd string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.counter++
-	id := fmt.Sprintf("s%d", sm.counter)
 	s := &Session{
 		ID:                id,
 		Cwd:               cwd,
@@ -92,19 +87,6 @@ func (sm *SessionManager) FindByJSONLPath(path string) *Session {
 	return nil
 }
 
-func (sm *SessionManager) FindByClaudeID(claudeID string) *Session {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	for _, s := range sm.sessions {
-		s.Mu.Lock()
-		cid := s.ClaudeID
-		s.Mu.Unlock()
-		if cid == claudeID {
-			return s
-		}
-	}
-	return nil
-}
 
 func (sm *SessionManager) List() []*Session {
 	sm.mu.RLock()

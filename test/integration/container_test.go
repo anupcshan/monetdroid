@@ -480,6 +480,108 @@ func Add(a, b int) int {
 	Screenshot(t, page, "session_reload_scrolled")
 }
 
+func TestDrawer(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "drawer.jsonl", testMode())
+
+	// Two distinct work directories so they appear as separate history groups.
+	dir1 := filepath.Join(f.WorkDir, "project-alpha")
+	dir2 := filepath.Join(f.WorkDir, "project-beta")
+	os.MkdirAll(dir1, 0o755)
+	os.MkdirAll(dir2, 0o755)
+
+	page := f.Page()
+
+	// --- Session 1 ---
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir1)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+
+	// Wait for redirect to ?cwd= and session label to render
+	WaitForText(t, page, "#session-label", "project-alpha", 5*time.Second)
+
+	// Verify we're on a ?cwd= URL (no session yet)
+	url1 := page.MustEval(`() => window.location.href`).String()
+	if !strings.Contains(url1, "cwd=") {
+		t.Fatalf("expected cwd= in URL before first message, got: %s", url1)
+	}
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// URL should now have session= with a ClaudeID
+	session1URL := page.MustEval(`() => window.location.href`).String()
+	if !strings.Contains(session1URL, "session=") {
+		t.Fatalf("expected session= in URL after first message, got: %s", session1URL)
+	}
+	Screenshot(t, page, "drawer_session1")
+
+	// --- Session 2 ---
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir2)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+
+	WaitForText(t, page, "#session-label", "project-beta", 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Say goodbye")
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	Screenshot(t, page, "drawer_session2")
+
+	// --- Open drawer and verify contents ---
+	page.MustElement(`button[popovertarget="drawer"]`).MustClick()
+	WaitForElement(t, page, "#drawer-content .drawer-item", 5*time.Second)
+	Screenshot(t, page, "drawer_open")
+
+	// Exactly 2 active sessions (no orphan sN sessions)
+	activeItems := page.MustElements("#drawer-content .drawer-item")
+	if len(activeItems) != 2 {
+		t.Fatalf("expected 2 active sessions in drawer, got %d", len(activeItems))
+	}
+
+	// Both session labels should appear
+	drawerHTML := page.MustEval(`() => document.getElementById('drawer-content').innerHTML`).String()
+	if !strings.Contains(drawerHTML, "Say hello") {
+		t.Fatalf("drawer missing 'Say hello' session")
+	}
+	if !strings.Contains(drawerHTML, "Say goodbye") {
+		t.Fatalf("drawer missing 'Say goodbye' session")
+	}
+
+	// Both directories should appear (in active sessions section)
+	if !strings.Contains(drawerHTML, "project-alpha") {
+		t.Fatalf("drawer missing project-alpha directory")
+	}
+	if !strings.Contains(drawerHTML, "project-beta") {
+		t.Fatalf("drawer missing project-beta directory")
+	}
+
+	// --- Switch to session 1 via drawer ---
+	// Find the drawer item that links to session 1
+	session1Link, err := page.Timeout(5*time.Second).ElementR(".drawer-item", "Say hello")
+	if err != nil {
+		t.Fatalf("could not find session 1 link in drawer: %v", err)
+	}
+	session1Link.MustClick()
+
+	// Session 1's content should be visible
+	WaitForText(t, page, ".msg-user", "Say hello", 10*time.Second)
+
+	// Should be back on session 1's URL
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	if currentURL != session1URL {
+		t.Fatalf("expected to switch back to session 1 URL %s, got %s", session1URL, currentURL)
+	}
+	Screenshot(t, page, "drawer_switched_back")
+}
+
 func TestBashSpinner(t *testing.T) {
 	// Not parallel: uses shared /tmp/claude-0 bind mount for background task output
 	// t.Parallel()

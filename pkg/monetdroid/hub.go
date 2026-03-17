@@ -49,6 +49,8 @@ func (l *EventLog) Snapshot() ([]SSEEvent, uint64) {
 type SSEClient struct {
 	id        string
 	sessionID string
+	cwd       string // set when ?cwd= connects before a session exists
+	label     string // label from ?label= for pre-session state
 	events    chan SSEEvent
 	mu        sync.Mutex
 }
@@ -219,28 +221,24 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			permLabel = msg.PermTool + ": " + msg.PermReason
 		}
 		s.Mu.Lock()
-		claudeID := s.ClaudeID
 		cwd := s.Cwd
 		sessionLabel := s.Label
 		autoLabel := s.AutoLabel
 		s.Mu.Unlock()
-		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, claudeID, ShortPath(cwd))
+		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, s.ID, ShortPath(cwd))
 		h.notifyAll(FormatSSE("permission", data))
 
-		if claudeID != "" {
-			h.Queue.Enqueue(QueueItem{
-				ClaudeID:  claudeID,
-				Label:     sessionLabel,
-				AutoLabel: autoLabel,
-				Status:    "blocked",
-				Result:    permLabel,
-				Cwd:       cwd,
-			})
-		}
+		h.Queue.Enqueue(QueueItem{
+			ClaudeID:  s.ID,
+			Label:     sessionLabel,
+			AutoLabel: autoLabel,
+			Status:    "blocked",
+			Result:    permLabel,
+			Cwd:       cwd,
+		})
 	}
 	if msg.Type == "done" && s != nil {
 		s.Mu.Lock()
-		claudeID := s.ClaudeID
 		cwd := s.Cwd
 		label := s.Label
 		autoLabel := s.AutoLabel
@@ -253,22 +251,20 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			}
 		}
 		s.Mu.Unlock()
-		data := fmt.Sprintf(`{"text":"task complete","session":%q,"cwd":%q}`, claudeID, ShortPath(cwd))
+		data := fmt.Sprintf(`{"text":"task complete","session":%q,"cwd":%q}`, s.ID, ShortPath(cwd))
 		h.notifyAll(FormatSSE("done", data))
 
-		if claudeID != "" {
-			if len(result) > 200 {
-				result = result[:200] + "..."
-			}
-			h.Queue.Enqueue(QueueItem{
-				ClaudeID:  claudeID,
-				Label:     label,
-				AutoLabel: autoLabel,
-				Status:    "completed",
-				Result:    result,
-				Cwd:       cwd,
-			})
+		if len(result) > 200 {
+			result = result[:200] + "..."
 		}
+		h.Queue.Enqueue(QueueItem{
+			ClaudeID:  s.ID,
+			Label:     label,
+			AutoLabel: autoLabel,
+			Status:    "completed",
+			Result:    result,
+			Cwd:       cwd,
+		})
 	}
 
 	if msg.Type == "running" {
@@ -277,12 +273,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		parts = append(parts, OobSwap("messages", "beforeend", thinkingHTML))
 		// Remove any "blocked" queue item — session is running again
 		if s != nil {
-			s.Mu.Lock()
-			claudeID := s.ClaudeID
-			s.Mu.Unlock()
-			if claudeID != "" {
-				h.Queue.Ack(claudeID)
-			}
+			h.Queue.Ack(s.ID)
 		}
 	}
 	if msg.Type == "done" {
@@ -348,46 +339,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 	}
 
-	// Update the browser URL when a session gets its ClaudeID.
-	//
-	// Problem: New sessions start with /?cwd=... in the URL. The ClaudeID
-	// arrives later (via the "system" init event from claude). If the user
-	// reloads before the URL is updated, handleEvents sees ?cwd= and creates
-	// a brand new empty session, losing all messages.
-	//
-	// Solution: Push a URL update to the browser via HTMX when we learn the
-	// ClaudeID. This is tricky because SSE events can't set response headers
-	// (like HX-Replace-Url) — only HTTP responses can. So we use a two-step
-	// approach:
-	//
-	//   1. OOB swap a <span> into #url-state with hx-trigger="load" and
-	//      hx-get="/session-url?session=<id>". The outerHTML swap causes
-	//      HTMX to process the new element and fire its load trigger.
-	//
-	//   2. The /session-url handler returns 200 with the HX-Replace-Url
-	//      header, which HTMX uses to update the browser URL bar.
-	//
-	// Approaches that DON'T work (tested):
-	//   - hx-trigger="load" with innerHTML OOB swap: HTMX doesn't fire
-	//     load triggers for child elements added via innerHTML OOB swaps.
-	//   - hx-swap="none" on the triggered request: HTMX ignores
-	//     HX-Replace-Url on 204 responses or when hx-swap="none".
-	//   - <img onerror="history.replaceState(...)">: works but is an XSS
-	//     pattern, not a proper HTMX mechanism.
-	if msg.Type == "session_id" {
-		parts = append(parts, fmt.Sprintf(
-			`<span id="url-state" hx-swap-oob="outerHTML" hx-get="/session-url?session=%s" hx-trigger="load" hx-target="#url-state" hx-swap="innerHTML"></span>`, Esc(msg.Text)))
-		// Persist label now that we have the ClaudeID
-		if s != nil {
-			s.Mu.Lock()
-			label := s.Label
-			s.Mu.Unlock()
-			if label != "" {
-				h.Labels.Set(msg.Text, label)
-			}
-		}
-	}
-
 	if msg.Type == "permission_mode" {
 		var modeHTML string
 		if msg.PermMode != "" && msg.PermMode != "default" {
@@ -426,7 +377,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 			h.Broadcast(msg)
 		}
 		var err error
-		proc, err = StartProcess(s, h.BuildClaudeCmd, logBroadcast)
+		proc, err = StartProcess(s, s.Cwd, h.BuildClaudeCmd, logBroadcast, s.ID)
 		if err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return

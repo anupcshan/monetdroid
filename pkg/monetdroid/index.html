@@ -957,11 +957,6 @@
     <button class="header-btn" popovertarget="new-session-popover">+</button>
   </div>
 
-  <!-- Swap target for URL updates. When a session gets its ClaudeID, the
-       server OOB-swaps this with a span that triggers an HTMX request to
-       /session-url, which returns HX-Replace-Url to update the browser URL.
-       See Broadcast() in hub.go for the full explanation. -->
-  <span id="url-state"></span>
   <div class="mode-bar" id="mode-bar"></div>
   <div class="cost-bar" id="cost-bar"></div>
 
@@ -982,6 +977,8 @@
   <div class="input-area">
     <form hx-post="/send" hx-swap="none" hx-encoding="multipart/form-data" hx-on::after-request="this.reset(); this.querySelector('.badge').classList.add('hidden'); this.querySelector('.badge').textContent = ''">
       <input type="hidden" name="session_id" id="session-id" value="">
+      <input type="hidden" name="cwd" id="session-cwd" value="">
+      <input type="hidden" name="label" id="session-label-value" value="">
       <div class="input-row">
         <textarea name="text" placeholder="Message Claude Code..." rows="1" onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();this.form.requestSubmit()}"></textarea>
         <label class="img-btn" title="Attach image">

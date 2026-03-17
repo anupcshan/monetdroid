@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +33,6 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/stop", hub.handleStop)
 	mux.HandleFunc("/cancel-queue", hub.handleCancelQueue)
 	mux.HandleFunc("/drawer", hub.handleDrawer)
-	mux.HandleFunc("/session-url", handleSessionURL)
 	mux.HandleFunc("/diff", hub.handleDiff)
 	mux.HandleFunc("/label-edit", hub.handleLabelEdit)
 	mux.HandleFunc("/label", hub.handleLabel)
@@ -54,14 +54,7 @@ func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func sessionURL(s *Session) string {
-	s.Mu.Lock()
-	claudeID := s.ClaudeID
-	cwd := s.Cwd
-	s.Mu.Unlock()
-	if claudeID != "" {
-		return "/?session=" + claudeID
-	}
-	return "/?cwd=" + cwd
+	return "/?session=" + s.ID
 }
 
 // loadSessionFromDisk parses a JSONL file and creates an in-memory session.
@@ -75,9 +68,8 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 		cwd = "/" + strings.ReplaceAll(dirKey, "-", "/")
 	}
 
-	s := h.Sessions.Create(cwd)
+	s := h.Sessions.Create(claudeID, cwd)
 	s.Mu.Lock()
-	s.ClaudeID = claudeID
 	s.Label = h.Labels.Get(claudeID)
 	s.JSONLPath = jsonlPath
 	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
@@ -145,26 +137,18 @@ func (h *Hub) handleLabel(w http.ResponseWriter, r *http.Request) {
 	label := strings.TrimSpace(r.FormValue("label"))
 	s.Mu.Lock()
 	s.Label = label
-	claudeID := s.ClaudeID
 	if label == "" {
 		label = ShortPath(s.Cwd)
 	}
 	s.Mu.Unlock()
-	if claudeID != "" {
-		h.Labels.Set(claudeID, s.Label)
-	}
+	h.Labels.Set(s.ID, label)
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">%s</div>`, Esc(label))
 }
 
-// restoreSession finds a session by ID (internal or ClaudeID, in memory or on disk) and assigns it to the client.
+// restoreSession finds a session by ID (in memory or on disk) and assigns it to the client.
 func (h *Hub) restoreSession(client *SSEClient, id string) {
-	// Check in-memory sessions first (by internal ID, then ClaudeID)
 	if s := h.Sessions.Get(id); s != nil {
-		client.SetSession(s.ID)
-		return
-	}
-	if s := h.Sessions.FindByClaudeID(id); s != nil {
 		client.SetSession(s.ID)
 		return
 	}
@@ -218,8 +202,10 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			home, _ := os.UserHomeDir()
 			cwd = home + cwd[1:]
 		}
-		s := h.Sessions.Create(cwd)
-		client.SetSession(s.ID)
+		client.mu.Lock()
+		client.cwd = cwd
+		client.label = r.URL.Query().Get("label")
+		client.mu.Unlock()
 	}
 
 	// Replay: write all stored events directly, then use seq to dedup live events.
@@ -233,11 +219,32 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			lastSeq = h.BuildReplay(s, w, flusher)
 		}
 	} else {
-		// No active session — show the notification queue on the landing page
-		if queueHTML := RenderQueue(h.Queue.List()); queueHTML != "" {
-			fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML",
-				`<div class="queue-header">Needs Attention</div>`+queueHTML)))
+		client.mu.Lock()
+		cwd := client.cwd
+		label := client.label
+		client.mu.Unlock()
+		if cwd != "" {
+			// Pre-session state: show chrome with cwd label and empty messages
+			sessionLabel := label
+			if sessionLabel == "" {
+				sessionLabel = ShortPath(cwd)
+			}
+			var chromeParts []string
+			chromeParts = append(chromeParts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
+			chromeParts = append(chromeParts, OobSwap("session-cwd", "outerHTML",
+				fmt.Sprintf(`<input type="hidden" name="cwd" id="session-cwd" value="%s">`, Esc(cwd))))
+			chromeParts = append(chromeParts, OobSwap("session-label-value", "outerHTML",
+				fmt.Sprintf(`<input type="hidden" name="label" id="session-label-value" value="%s">`, Esc(label))))
+			chromeParts = append(chromeParts, OobSwap("messages", "innerHTML", ""))
+			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
+		} else {
+			// No active session — show the notification queue on the landing page
+			if queueHTML := RenderQueue(h.Queue.List()); queueHTML != "" {
+				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML",
+					`<div class="queue-header">Needs Attention</div>`+queueHTML)))
+				flusher.Flush()
+			}
 		}
 	}
 
@@ -271,14 +278,11 @@ func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
 		cwd = home + cwd[1:]
 	}
 
-	s := h.Sessions.Create(cwd)
+	u := "/?cwd=" + url.QueryEscape(cwd)
 	if label := r.FormValue("label"); label != "" {
-		s.Mu.Lock()
-		s.Label = label
-		s.Mu.Unlock()
+		u += "&label=" + url.QueryEscape(label)
 	}
-
-	w.Header().Set("HX-Redirect", sessionURL(s))
+	w.Header().Set("HX-Redirect", u)
 }
 
 func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -316,8 +320,117 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := r.FormValue("session_id")
 	s := h.Sessions.Get(sessionID)
+
 	if s == nil {
-		w.WriteHeader(204)
+		// New session: start process, wait for ClaudeID, create session
+		cwd := r.FormValue("cwd")
+		if cwd == "" {
+			w.WriteHeader(204)
+			return
+		}
+		label := r.FormValue("label")
+
+		// The broadcast closure captures `s` by reference. It's safe because
+		// scan waits on p.ready (which is closed after s is set and BindSession is called).
+		logBroadcast := func(msg ServerMsg) {
+			s.Append(msg)
+			h.Broadcast(msg)
+		}
+		proc, err := StartProcess(nil, cwd, h.BuildClaudeCmd, logBroadcast, "")
+		if err != nil {
+			log.Printf("[send] start process failed: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		// Send the user message to trigger the stream
+		if err := proc.SendUserMessage(text, images); err != nil {
+			proc.Kill()
+			log.Printf("[send] send message failed: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		// Wait for the ClaudeID from the stream
+		var claudeID string
+		select {
+		case claudeID = <-proc.sessionIDCh:
+		case <-proc.dead:
+			log.Printf("[send] process died before session ID")
+			w.WriteHeader(500)
+			return
+		case <-time.After(30 * time.Second):
+			proc.Kill()
+			log.Printf("[send] timeout waiting for session ID")
+			w.WriteHeader(500)
+			return
+		}
+
+		// Create the session with the real ClaudeID
+		s = h.Sessions.Create(claudeID, cwd)
+		s.Mu.Lock()
+		if label != "" {
+			s.Label = label
+		} else {
+			lbl := text
+			if len(lbl) > 60 {
+				lbl = lbl[:60] + "..."
+			}
+			s.Label = lbl
+			s.AutoLabel = true
+		}
+		s.Running = true
+		s.proc = proc
+		s.Mu.Unlock()
+
+		if s.Label != "" {
+			h.Labels.Set(claudeID, s.Label)
+		}
+
+		// Bind SSE clients that were waiting on this cwd
+		h.mu.RLock()
+		for _, c := range h.clients {
+			c.mu.Lock()
+			if c.cwd == cwd && c.sessionID == "" {
+				c.sessionID = s.ID
+				c.cwd = ""
+			}
+			c.mu.Unlock()
+		}
+		h.mu.RUnlock()
+
+		// Send chrome setup (session-id hidden field, label) to bound clients
+		sessionLabel := s.Label
+		if s.AutoLabel {
+			sessionLabel = "(auto) " + sessionLabel
+		}
+		h.BroadcastToSession(s.ID, FormatSSE("htmx", strings.Join([]string{
+			OobSwap("session-id", "outerHTML",
+				fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))),
+			OobSwap("session-label", "innerHTML", Esc(sessionLabel)),
+		}, "\n")))
+
+		// Broadcast user message and running state
+		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
+
+		// Unblock scan goroutine to start broadcasting stream events
+		proc.BindSession(s)
+
+		// Wait for turn completion in background
+		go func() {
+			select {
+			case <-proc.turnDone:
+			case <-proc.dead:
+			}
+			s.Mu.Lock()
+			s.Running = false
+			s.Mu.Unlock()
+			h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
+		}()
+
+		w.Header().Set("HX-Replace-Url", sessionURL(s))
 		return
 	}
 
@@ -503,10 +616,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			s.Mu.Lock()
 			running := s.Running
 			sp := ShortPath(s.Cwd)
-			sid := s.ClaudeID
-			if sid == "" {
-				sid = s.ID
-			}
+			sid := s.ID
 			mc := len(s.Log)
 			ctxUsed := s.CostAccum.ContextUsed
 			ctxWindow := s.CostAccum.ContextWindow
@@ -623,7 +733,7 @@ func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleDiff(w http.ResponseWriter, r *http.Request) {
 	claudeID := r.URL.Query().Get("session")
-	s := h.Sessions.FindByClaudeID(claudeID)
+	s := h.Sessions.Get(claudeID)
 	if s == nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
@@ -687,14 +797,3 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-// handleSessionURL is the target of an HTMX request triggered by the
-// url-state OOB swap (see Broadcast in hub.go). Its only job is to return
-// the HX-Replace-Url header so the browser URL updates to /?session=<id>.
-// Must return 200 (not 204) — HTMX ignores HX-Replace-Url on 204.
-func handleSessionURL(w http.ResponseWriter, r *http.Request) {
-	session := r.URL.Query().Get("session")
-	if session != "" {
-		w.Header().Set("HX-Replace-Url", "/?session="+session)
-	}
-	w.Write(nil)
-}

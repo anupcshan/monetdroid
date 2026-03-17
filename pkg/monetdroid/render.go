@@ -462,7 +462,7 @@ func RenderCostBar(s *Session) string {
 	s.Mu.Lock()
 	c := s.CostAccum
 	ds := s.DiffStat
-	sid := s.ClaudeID
+	sid := s.ID
 	s.Mu.Unlock()
 	var parts []string
 	if c.TotalCostUSD > 0 {

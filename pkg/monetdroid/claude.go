@@ -22,17 +22,6 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 			}
 			s.Mu.Unlock()
 		}
-		if event.SessionID != "" {
-			s.Mu.Lock()
-			wasEmpty := s.ClaudeID == ""
-			if wasEmpty {
-				s.ClaudeID = event.SessionID
-			}
-			s.Mu.Unlock()
-			if wasEmpty {
-				broadcast(ServerMsg{Type: "session_id", SessionID: s.ID, Text: event.SessionID})
-			}
-		}
 
 	case "assistant":
 		for _, b := range event.Message.Content.Blocks {
@@ -66,11 +55,6 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 	case "result":
 		if event.Result != "" {
 			broadcast(ServerMsg{Type: "result", SessionID: s.ID, Text: event.Result})
-		}
-		if event.SessionID != "" {
-			s.Mu.Lock()
-			s.ClaudeID = event.SessionID
-			s.Mu.Unlock()
 		}
 		cost := &CostInfo{}
 		if event.TotalCost > 0 {

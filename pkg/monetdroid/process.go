@@ -23,13 +23,16 @@ type ClaudeProcess struct {
 	reqSeq  int
 	pending map[string]chan ctlRespPayload // request_id → response channel
 
-	turnDone chan struct{} // sent (not closed) when a result event arrives
-	dead     chan struct{} // closed when process exits
+	turnDone    chan struct{} // sent (not closed) when a result event arrives
+	dead        chan struct{} // closed when process exits
+	sessionIDCh chan string   // receives the ClaudeID from the first system event
+	ready       chan struct{} // closed when session is bound and broadcasting can begin
 }
 
-// StartProcess starts a new claude CLI subprocess for the given session.
-// If sess.ClaudeID is set, passes --resume to restore conversation state.
-func StartProcess(sess *Session, buildCmd func(cwd string, args []string) *exec.Cmd, broadcast func(ServerMsg)) (*ClaudeProcess, error) {
+// StartProcess starts a new claude CLI subprocess.
+// sess may be nil for new sessions (before the ClaudeID is known).
+// If resume is non-empty, passes --resume to restore conversation state.
+func StartProcess(sess *Session, cwd string, buildCmd func(cwd string, args []string) *exec.Cmd, broadcast func(ServerMsg), resume string) (*ClaudeProcess, error) {
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -38,16 +41,16 @@ func StartProcess(sess *Session, buildCmd func(cwd string, args []string) *exec.
 		"--permission-prompt-tool", "stdio",
 		"--permission-mode", "default",
 	}
-	if sess.ClaudeID != "" {
-		args = append(args, "--resume", sess.ClaudeID)
+	if resume != "" {
+		args = append(args, "--resume", resume)
 	}
 
 	var cmd *exec.Cmd
 	if buildCmd != nil {
-		cmd = buildCmd(sess.Cwd, args)
+		cmd = buildCmd(cwd, args)
 	} else {
 		cmd = exec.Command("claude", args...)
-		cmd.Dir = sess.Cwd
+		cmd.Dir = cwd
 		cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 	}
 
@@ -69,38 +72,48 @@ func StartProcess(sess *Session, buildCmd func(cwd string, args []string) *exec.
 	}
 
 	p := &ClaudeProcess{
-		cmd:      cmd,
-		stdin:    stdin,
-		sess:     sess,
-		pending:  make(map[string]chan ctlRespPayload),
-		turnDone: make(chan struct{}, 1),
-		dead:     make(chan struct{}),
+		cmd:         cmd,
+		stdin:       stdin,
+		sess:        sess,
+		pending:     make(map[string]chan ctlRespPayload),
+		turnDone:    make(chan struct{}, 1),
+		dead:        make(chan struct{}),
+		sessionIDCh: make(chan string, 1),
+		ready:       make(chan struct{}),
+	}
+	if sess != nil {
+		close(p.ready) // session already bound, no need to wait
+	}
+
+	logLabel := cwd
+	if resume != "" {
+		logLabel = resume
 	}
 
 	// Drain stderr in background
 	go func() {
 		sc := bufio.NewScanner(stderr)
 		for sc.Scan() {
-			log.Printf("[claude stderr][%s] %s", sess.ID, sc.Text())
+			log.Printf("[claude stderr][%s] %s", logLabel, sc.Text())
 		}
 	}()
 
 	// Start stdout scanner
-	go p.scan(stdout, broadcast)
+	go p.scan(stdout, broadcast, logLabel)
 
 	// Send initialize and wait for response
 	if err := p.sendControlRequest(ctlInitRequest{Subtype: "initialize"}); err != nil {
 		p.Kill()
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
-	log.Printf("[claude process][%s] initialized", sess.ID)
+	log.Printf("[claude process][%s] initialized", logLabel)
 
 	return p, nil
 }
 
 // scan reads stdout line-by-line and routes events.
 // Runs until the process exits (EOF).
-func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
+func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLabel string) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -115,7 +128,7 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(line, &envelope); err != nil {
-			log.Printf("[parse error][%s] %s: %s", p.sess.ID, err, string(line[:min(len(line), 200)]))
+			log.Printf("[parse error][%s] %s: %s", logLabel, err, string(line[:min(len(line), 200)]))
 			continue
 		}
 
@@ -123,7 +136,7 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
 		case "control_response":
 			var resp ctlIncomingResponse
 			if err := json.Unmarshal(line, &resp); err != nil {
-				log.Printf("[parse error][%s] control_response: %s", p.sess.ID, err)
+				log.Printf("[parse error][%s] control_response: %s", logLabel, err)
 				continue
 			}
 			p.handleControlResponse(resp.Response)
@@ -131,7 +144,7 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
 		case "control_request":
 			var req ctlIncomingRequest
 			if err := json.Unmarshal(line, &req); err != nil {
-				log.Printf("[parse error][%s] control_request: %s", p.sess.ID, err)
+				log.Printf("[parse error][%s] control_request: %s", logLabel, err)
 				continue
 			}
 			go p.handleControlRequest(req, broadcast)
@@ -139,9 +152,18 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
 		default:
 			var event streamEvent
 			if err := json.Unmarshal(line, &event); err != nil {
-				log.Printf("[parse error][%s] stream event: %s", p.sess.ID, err)
+				log.Printf("[parse error][%s] stream event: %s", logLabel, err)
 				continue
 			}
+			// Signal the ClaudeID from the first system/result event that carries it
+			if event.SessionID != "" {
+				select {
+				case p.sessionIDCh <- event.SessionID:
+				default:
+				}
+			}
+			// Wait for session to be bound before broadcasting
+			<-p.ready
 			handleStreamEvent(p.sess, &event, broadcast)
 			if envelope.Type == "result" {
 				select {
@@ -153,7 +175,7 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg)) {
 	}
 
 	// Process exited
-	log.Printf("[claude exit][%s] scanner ended", p.sess.ID)
+	log.Printf("[claude exit][%s] scanner ended", logLabel)
 	close(p.dead)
 }
 
@@ -180,6 +202,7 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 		return
 	}
 
+	<-p.ready // wait for session to be bound
 	ch := make(chan PermResponse, 1)
 	p.sess.Mu.Lock()
 	p.sess.PermChans[req.RequestID] = ch
@@ -303,6 +326,13 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []ImageData) error {
 // Interrupt sends an interrupt control request to abort the current turn.
 func (p *ClaudeProcess) Interrupt() error {
 	return p.sendControlRequest(ctlInterruptRequest{Subtype: "interrupt"})
+}
+
+// BindSession sets the session on the process and unblocks broadcasting.
+// Must be called exactly once for processes started without a session.
+func (p *ClaudeProcess) BindSession(s *Session) {
+	p.sess = s
+	close(p.ready)
 }
 
 // SetPermissionMode changes the permission mode mid-session.
