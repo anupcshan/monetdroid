@@ -25,6 +25,7 @@ type Session struct {
 	SuppressedToolIDs map[string]string      // tool_use id → tool name, for suppressing results
 	BgTaskStops       map[string]chan struct{} // tool_use id → stop channel for bg tailers
 	DiffStat          DiffStat
+	EventLog          EventLog
 	PermChans         map[string]chan PermResponse
 	proc              *ClaudeProcess
 	Mu                sync.Mutex

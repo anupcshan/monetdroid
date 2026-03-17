@@ -527,6 +527,18 @@ func TestBashSpinner(t *testing.T) {
 		t.Fatal("step 10 already visible when step 2 first appeared — not partial streaming")
 	}
 
+	// Reload mid-stream — verify partial bg output survives reload
+	Screenshot(t, page, "bash_bg_before_reload")
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	page.MustNavigate(currentURL).MustWaitStable()
+	WaitForElement(t, page, ".tool-bg-output", 10*time.Second)
+	reloadBgText := page.MustEval(`() => document.querySelector('.tool-bg-output').textContent`).String()
+	if !strings.Contains(reloadBgText, "step 2") {
+		Screenshot(t, page, "bash_bg_reload_missing_output")
+		t.Fatalf("after mid-stream reload, expected at least 'step 2' in bg output, got: %s", reloadBgText)
+	}
+	Screenshot(t, page, "bash_bg_after_reload")
+
 	// Wait for all output to arrive
 	WaitForText(t, page, ".tool-bg-output", "step 10", 30*time.Second)
 	Screenshot(t, page, "bash_bg_output")
@@ -543,7 +555,7 @@ func TestBashSpinner(t *testing.T) {
 	Screenshot(t, page, "bash_spinner_complete")
 
 	// Reload — verify spinners are stripped in replay and page stabilises
-	currentURL := page.MustEval(`() => window.location.href`).String()
+	currentURL = page.MustEval(`() => window.location.href`).String()
 	page.MustNavigate(currentURL).MustWaitStable()
 	WaitForElement(t, page, ".msg-assistant", 10*time.Second)
 

@@ -2,6 +2,8 @@ package monetdroid
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,14 +12,48 @@ import (
 	"time"
 )
 
+// SSEEvent is a rendered SSE event string tagged with a monotonic sequence number.
+type SSEEvent struct {
+	Seq   uint64
+	Event string
+}
+
+// EventLog is an append-only log of rendered SSE events for a session.
+// Broadcast appends to it; replay reads from it. This ensures both paths
+// produce identical output.
+type EventLog struct {
+	mu     sync.Mutex
+	events []SSEEvent
+	seq    uint64
+}
+
+// Append adds an event to the log and returns its sequence number.
+func (l *EventLog) Append(event string) uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.seq++
+	l.events = append(l.events, SSEEvent{Seq: l.seq, Event: event})
+	return l.seq
+}
+
+// Snapshot returns a copy of all events and the sequence number of the last one.
+// Returns 0 if the log is empty.
+func (l *EventLog) Snapshot() ([]SSEEvent, uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]SSEEvent, len(l.events))
+	copy(out, l.events)
+	return out, l.seq
+}
+
 type SSEClient struct {
 	id        string
 	sessionID string
-	events    chan string
+	events    chan SSEEvent
 	mu        sync.Mutex
 }
 
-func (c *SSEClient) Send(event string) {
+func (c *SSEClient) Send(event SSEEvent) {
 	select {
 	case c.events <- event:
 	default:
@@ -106,13 +142,17 @@ func (h *Hub) RemoveClient(cid string) {
 }
 
 func (h *Hub) BroadcastToSession(sessionID string, event string) {
+	s := h.Sessions.Get(sessionID)
+	var seq uint64
+	if s != nil {
+		seq = s.EventLog.Append(event)
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	sent := 0
+	sseEvent := SSEEvent{Seq: seq, Event: event}
 	for _, c := range h.clients {
 		if c.ActiveSession() == sessionID {
-			c.Send(event)
-			sent++
+			c.Send(sseEvent)
 		}
 	}
 }
@@ -453,8 +493,10 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	}()
 }
 
-// BuildReplay constructs the full session state as an SSE event string.
-func (h *Hub) BuildReplay(s *Session) string {
+// SeedEventLog populates a session's EventLog from its current state.
+// Called once when loading a session from disk or when a new session is
+// created, before any live Broadcast events arrive.
+func (h *Hub) SeedEventLog(s *Session) {
 	s.Mu.Lock()
 	log_ := make([]ServerMsg, len(s.Log))
 	copy(log_, s.Log)
@@ -488,6 +530,50 @@ func (h *Hub) BuildReplay(s *Session) string {
 	s.Todos = todos
 	s.Mu.Unlock()
 
+	// --- Chrome setup event: session-id, label, running state, cost, mode, todos, queue ---
+	var chromeParts []string
+	sessionLabel := ShortPath(cwd)
+	if label != "" {
+		sessionLabel = label
+		if autoLabel {
+			sessionLabel = "(auto) " + sessionLabel
+		}
+	}
+	chromeParts = append(chromeParts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
+	chromeParts = append(chromeParts, OobSwap("session-id", "outerHTML",
+		fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))))
+
+	if running {
+		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
+		chromeParts = append(chromeParts, OobSwap("stop-btn", "outerHTML",
+			`<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`))
+	} else {
+		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
+		chromeParts = append(chromeParts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
+	}
+
+	chromeParts = append(chromeParts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
+
+	var modeHTML string
+	if permMode != "" && permMode != "default" {
+		names := map[string]string{
+			"acceptEdits": "Auto-accepting edits", "plan": "Plan mode (read-only)",
+			"bypassPermissions": "All permissions bypassed", "dontAsk": "Don't ask mode",
+		}
+		ml := names[permMode]
+		if ml == "" {
+			ml = permMode
+		}
+		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(ml), Esc(s.ID))
+	}
+	chromeParts = append(chromeParts, OobSwap("mode-bar", "innerHTML", modeHTML))
+	chromeParts = append(chromeParts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
+	chromeParts = append(chromeParts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
+	chromeParts = append(chromeParts, RenderQueueBar(s.ID, queuedText))
+
+	s.EventLog.Append(FormatSSE("htmx", strings.Join(chromeParts, "\n")))
+
+	// --- Render all messages from the log ---
 	// Find last compact boundary to wrap pre-compaction messages
 	lastCompact := -1
 	for i, msg := range log_ {
@@ -496,7 +582,7 @@ func (h *Hub) BuildReplay(s *Session) string {
 		}
 	}
 
-	// Collect tool_use IDs that have results (so we can strip spinners on replay)
+	// Collect tool_use IDs that have results (so we can strip spinners)
 	completedTools := make(map[string]bool)
 	for _, msg := range log_ {
 		if msg.Type == "tool_result" && msg.ToolUseID != "" {
@@ -530,44 +616,17 @@ func (h *Hub) BuildReplay(s *Session) string {
 		msgsHTML.WriteString(rendered)
 	}
 
-	var parts []string
-	sessionLabel := ShortPath(cwd)
-	if label != "" {
-		sessionLabel = label
-		if autoLabel {
-			sessionLabel = "(auto) " + sessionLabel
-		}
-	}
-	parts = append(parts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
-	parts = append(parts, OobSwap("session-id", "outerHTML",
-		fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))))
-	parts = append(parts, OobSwap("messages", "innerHTML", msgsHTML.String()))
-	parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
+	s.EventLog.Append(FormatSSE("htmx", OobSwap("messages", "innerHTML", msgsHTML.String())))
+}
 
-	if running {
-		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
-		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`))
-	} else {
-		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
-		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
+// BuildReplay writes all stored SSE events for the session directly to w
+// and returns the sequence number of the last event written. The caller
+// should drop any live events with seq <= the returned value.
+func (h *Hub) BuildReplay(s *Session, w io.Writer, flusher http.Flusher) uint64 {
+	events, lastSeq := s.EventLog.Snapshot()
+	for _, e := range events {
+		fmt.Fprint(w, e.Event)
 	}
-
-	var modeHTML string
-	if permMode != "" && permMode != "default" {
-		names := map[string]string{
-			"acceptEdits": "Auto-accepting edits", "plan": "Plan mode (read-only)",
-			"bypassPermissions": "All permissions bypassed", "dontAsk": "Don't ask mode",
-		}
-		label := names[permMode]
-		if label == "" {
-			label = permMode
-		}
-		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(label), Esc(s.ID))
-	}
-	parts = append(parts, OobSwap("mode-bar", "innerHTML", modeHTML))
-	parts = append(parts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
-	parts = append(parts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
-	parts = append(parts, RenderQueueBar(s.ID, queuedText))
-
-	return FormatSSE("htmx", strings.Join(parts, "\n"))
+	flusher.Flush()
+	return lastSeq
 }

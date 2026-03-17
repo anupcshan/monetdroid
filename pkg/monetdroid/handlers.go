@@ -196,7 +196,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 	rand.Read(b)
 	connID := hex.EncodeToString(b)
 
-	client := &SSEClient{id: connID, events: make(chan string, 64)}
+	client := &SSEClient{id: connID, events: make(chan SSEEvent, 64)}
 	h.mu.Lock()
 	h.clients[connID] = client
 	h.mu.Unlock()
@@ -221,11 +221,16 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 		s := h.Sessions.Create(cwd)
 		client.SetSession(s.ID)
 	}
+
+	// Replay: write all stored events directly, then use seq to dedup live events.
+	var lastSeq uint64
 	if sid := client.ActiveSession(); sid != "" {
 		if s := h.Sessions.Get(sid); s != nil {
-			// Write replay directly to avoid channel race with old SSE connection
-			fmt.Fprint(w, h.BuildReplay(s))
-			flusher.Flush()
+			// Seed the EventLog if this is the first client to view this session.
+			if _, seq := s.EventLog.Snapshot(); seq == 0 {
+				h.SeedEventLog(s)
+			}
+			lastSeq = h.BuildReplay(s, w, flusher)
 		}
 	} else {
 		// No active session — show the notification queue on the landing page
@@ -242,8 +247,11 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			h.RemoveClient(connID)
 			return
-		case event := <-client.events:
-			fmt.Fprint(w, event)
+		case sseEvent := <-client.events:
+			if sseEvent.Seq <= lastSeq {
+				continue // already sent during replay
+			}
+			fmt.Fprint(w, sseEvent.Event)
 			flusher.Flush()
 		case <-time.After(30 * time.Second):
 			fmt.Fprint(w, FormatSSE("heartbeat", "ping"))
