@@ -92,6 +92,18 @@ type Hub struct {
 	BuildClaudeCmd func(cwd string, args []string) *exec.Cmd
 }
 
+// Close kills all active claude processes.
+func (h *Hub) Close() {
+	for _, s := range h.Sessions.List() {
+		s.Mu.Lock()
+		proc := s.proc
+		s.Mu.Unlock()
+		if proc != nil && !proc.IsDead() {
+			proc.Kill()
+		}
+	}
+}
+
 func (h *Hub) AddNotifyClient(id string) *NotifyClient {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -147,6 +147,8 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 		return cmd
 	}
+	t.Cleanup(func() { hub.Close() })
+
 	mux := monetdroid.RegisterRoutes(hub)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
