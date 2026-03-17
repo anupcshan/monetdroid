@@ -88,6 +88,14 @@ func (sm *SessionManager) FindByJSONLPath(path string) *Session {
 }
 
 
+func (sm *SessionManager) Remove(id string) *Session {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	s := sm.sessions[id]
+	delete(sm.sessions, id)
+	return s
+}
+
 func (sm *SessionManager) List() []*Session {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()

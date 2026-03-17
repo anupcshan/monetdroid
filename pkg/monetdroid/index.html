@@ -115,16 +115,33 @@
     letter-spacing: 0.5px;
     padding: 12px 12px 6px;
   }
+  .drawer-item-row {
+    display: flex;
+    align-items: center;
+    border-radius: 8px;
+    margin-bottom: 4px;
+  }
+  .drawer-item-row:active { background: var(--surface2); }
   .drawer-item {
     display: block;
     text-decoration: none;
     color: inherit;
     padding: 12px;
-    border-radius: 8px;
+    flex: 1;
+    min-width: 0;
     cursor: pointer;
-    margin-bottom: 4px;
   }
-  .drawer-item:active { background: var(--surface2); }
+  .drawer-close-btn {
+    background: none;
+    border: none;
+    color: var(--text2);
+    cursor: pointer;
+    padding: 8px;
+    font-size: 14px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .drawer-close-btn:hover { color: var(--text); background: var(--surface2); }
   .drawer-item .di-name {
     font-family: 'JetBrains Mono', monospace;
     font-size: 13px;
@@ -954,6 +971,7 @@
     <a href="/" class="header-btn" style="text-decoration:none">⌂</a>
     <div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">no session</div>
     <span id="running-dot" style="display:none"></span>
+    <form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id" style="display:none"><button class="header-btn" type="submit" title="Close session">✕</button></form>
     <button class="header-btn" popovertarget="new-session-popover">+</button>
   </div>
 

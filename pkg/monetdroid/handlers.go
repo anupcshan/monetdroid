@@ -31,6 +31,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/perm-answer", hub.handlePermAnswer)
 	mux.HandleFunc("/mode", hub.handleMode)
 	mux.HandleFunc("/stop", hub.handleStop)
+	mux.HandleFunc("/close", hub.handleClose)
 	mux.HandleFunc("/cancel-queue", hub.handleCancelQueue)
 	mux.HandleFunc("/drawer", hub.handleDrawer)
 	mux.HandleFunc("/diff", hub.handleDiff)
@@ -408,6 +409,8 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			OobSwap("session-id", "outerHTML",
 				fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))),
 			OobSwap("session-label", "innerHTML", Esc(sessionLabel)),
+			OobSwap("close-btn", "outerHTML",
+				`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`),
 		}, "\n")))
 
 		// Broadcast user message and running state
@@ -648,8 +651,9 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				ctxStr = " · " + FormatTokens(ctxUsed, ctxWindow)
 			}
 			fmt.Fprintf(&buf,
-				`<a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs%s</div></a>`,
-				Esc(sid), Esc(summary), Esc(sp), runHTML, mc, ctxStr,
+				`<div class="drawer-item-row"><a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs%s</div></a>`+
+					`<form hx-post="/close" hx-swap="delete" hx-target="closest .drawer-item-row"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="from" value="drawer"><button type="submit" class="drawer-close-btn" title="Close session" onclick="event.stopPropagation()">✕</button></form></div>`,
+				Esc(sid), Esc(summary), Esc(sp), runHTML, mc, ctxStr, Esc(sid),
 			)
 		}
 	}
@@ -716,6 +720,31 @@ func (h *Hub) handleStop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	w.WriteHeader(204)
+}
+
+func (h *Hub) handleClose(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.FormValue("session_id")
+	s := h.Sessions.Remove(sessionID)
+	if s == nil {
+		w.Header().Set("HX-Redirect", "/")
+		w.WriteHeader(204)
+		return
+	}
+
+	s.Mu.Lock()
+	proc := s.proc
+	s.Mu.Unlock()
+
+	if proc != nil && !proc.IsDead() {
+		proc.Kill()
+	}
+
+	if r.FormValue("from") == "drawer" {
+		w.WriteHeader(200)
+		return
+	}
+	w.Header().Set("HX-Redirect", "/")
 	w.WriteHeader(204)
 }
 

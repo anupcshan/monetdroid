@@ -577,6 +577,74 @@ func TestDrawer(t *testing.T) {
 	Screenshot(t, page, "drawer_switched_back")
 }
 
+func TestCloseSession(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "drawer.jsonl", testMode())
+
+	dir1 := filepath.Join(f.WorkDir, "project-alpha")
+	dir2 := filepath.Join(f.WorkDir, "project-beta")
+	os.MkdirAll(dir1, 0o755)
+	os.MkdirAll(dir2, 0o755)
+
+	page := f.Page()
+
+	// --- Create two sessions ---
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir1)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	WaitForText(t, page, "#session-label", "project-alpha", 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir2)
+	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	WaitForText(t, page, "#session-label", "project-beta", 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Say goodbye")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Currently viewing session 2 (project-beta)
+
+	// --- Close session 1 from drawer (should NOT redirect) ---
+	page.MustElement(`button[popovertarget="drawer"]`).MustClick()
+	WaitForElement(t, page, "#drawer-content .drawer-item", 5*time.Second)
+
+	// Find the close button for session 1 (the row containing "Say hello")
+	row1, err := page.Timeout(5*time.Second).ElementR(".drawer-item-row", "Say hello")
+	if err != nil {
+		t.Fatalf("could not find session 1 row in drawer: %v", err)
+	}
+	row1.MustElement(".drawer-close-btn").MustClick()
+
+	// Wait for the row to be removed (drawer stays open for multi-close)
+	page.MustWait(`() => !document.querySelector('#drawer-content').innerHTML.includes('Say hello')`)
+	Screenshot(t, page, "close_from_drawer")
+
+	// Only 1 active session remaining in the still-open drawer
+	activeItems := page.MustElements("#drawer-content .drawer-item")
+	if len(activeItems) != 1 {
+		t.Fatalf("expected 1 active session after closing from drawer, got %d", len(activeItems))
+	}
+
+	// Dismiss the drawer to access the header
+	page.MustEval(`() => document.getElementById('drawer').hidePopover()`)
+
+	// --- Close session 2 from header (should redirect to /) ---
+	page.MustElement(`#close-btn button`).MustClick()
+
+	// Should redirect to landing page showing the notification queue
+	WaitForText(t, page, ".queue-header", "NEEDS ATTENTION", 5*time.Second)
+	Screenshot(t, page, "close_from_header")
+}
+
 func TestBashSpinner(t *testing.T) {
 	// Not parallel: uses shared /tmp/claude-0 bind mount for background task output
 	// t.Parallel()
