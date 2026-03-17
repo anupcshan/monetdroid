@@ -34,7 +34,9 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/close", hub.handleClose)
 	mux.HandleFunc("/cancel-queue", hub.handleCancelQueue)
 	mux.HandleFunc("/drawer", hub.handleDrawer)
-	mux.HandleFunc("/diff", hub.handleDiff)
+	mux.HandleFunc("/files", hub.handleFiles)
+	mux.HandleFunc("/files/stage", hub.handleFilesStage)
+	mux.HandleFunc("/files/unstage", hub.handleFilesUnstage)
 	mux.HandleFunc("/label-edit", hub.handleLabelEdit)
 	mux.HandleFunc("/label", hub.handleLabel)
 	mux.HandleFunc("/queue", hub.handleQueue)
@@ -758,24 +760,6 @@ func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 		h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")))
 	}
 	w.WriteHeader(204)
-}
-
-func (h *Hub) handleDiff(w http.ResponseWriter, r *http.Request) {
-	claudeID := r.URL.Query().Get("session")
-	s := h.Sessions.Get(claudeID)
-	if s == nil {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-	s.Mu.Lock()
-	cwd := s.Cwd
-	s.Mu.Unlock()
-
-	files, _ := GitDiffFiles(cwd)
-	fullDiff, _ := GitDiffFull(cwd)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(RenderDiffPage(claudeID, cwd, files, fullDiff)))
 }
 
 func (h *Hub) handleNotifications(w http.ResponseWriter, r *http.Request) {

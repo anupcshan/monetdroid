@@ -1,0 +1,628 @@
+package monetdroid
+
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/alecthomas/chroma/v2"
+	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
+	"github.com/alecthomas/chroma/v2/lexers"
+)
+
+var chromaFormatterLines = chromahtml.New(chromahtml.WithLineNumbers(true), chromahtml.WithLinkableLineNumbers(true, "L"))
+
+// resolveFilesCwd extracts the working directory from session ID or cwd query param.
+func (h *Hub) resolveFilesCwd(r *http.Request) (sessionID, cwd string, ok bool) {
+	sessionID = r.URL.Query().Get("session")
+	if sessionID != "" {
+		s := h.Sessions.Get(sessionID)
+		if s == nil {
+			return "", "", false
+		}
+		s.Mu.Lock()
+		cwd = s.Cwd
+		s.Mu.Unlock()
+		return sessionID, cwd, true
+	}
+	cwd = r.URL.Query().Get("cwd")
+	if cwd != "" {
+		return "", cwd, true
+	}
+	return "", "", false
+}
+
+func (h *Hub) handleFiles(w http.ResponseWriter, r *http.Request) {
+	sessionID, cwd, ok := h.resolveFilesCwd(r)
+	if !ok {
+		http.Error(w, "session or cwd required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	// Single file diff view
+	if diffPath := r.URL.Query().Get("diff"); diffPath != "" {
+		mode := r.URL.Query().Get("mode")
+		if mode == "" {
+			mode = "unstaged"
+		}
+		w.Write([]byte(renderFilesPage(sessionID, cwd, "changes", renderFileDiff(sessionID, cwd, diffPath, mode))))
+		return
+	}
+
+	tab := r.URL.Query().Get("tab")
+	if tab == "" {
+		tab = "changes"
+	}
+
+	var content string
+	switch tab {
+	case "browse":
+		browsePath := r.URL.Query().Get("path")
+		content = renderBrowseContent(sessionID, cwd, browsePath)
+	case "search":
+		query := r.URL.Query().Get("q")
+		content = renderSearchContent(sessionID, cwd, query)
+	default:
+		content = renderChangesContent(sessionID, cwd)
+	}
+
+	w.Write([]byte(renderFilesPage(sessionID, cwd, tab, content)))
+}
+
+func (h *Hub) handleFilesStage(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.FormValue("session")
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	s.Mu.Lock()
+	cwd := s.Cwd
+	s.Mu.Unlock()
+
+	if r.FormValue("all") == "true" {
+		GitStage(cwd, nil)
+	} else if path := r.FormValue("path"); path != "" {
+		GitStage(cwd, []string{path})
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(renderFileList(sessionID, cwd)))
+}
+
+func (h *Hub) handleFilesUnstage(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.FormValue("session")
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	s.Mu.Lock()
+	cwd := s.Cwd
+	s.Mu.Unlock()
+
+	if r.FormValue("all") == "true" {
+		GitUnstage(cwd, nil)
+	} else if path := r.FormValue("path"); path != "" {
+		GitUnstage(cwd, []string{path})
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(renderFileList(sessionID, cwd)))
+}
+
+// --- Page rendering ---
+
+func renderFilesPage(sessionID, cwd, activeTab, content string) string {
+	var b strings.Builder
+
+	b.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Files · `)
+	b.WriteString(Esc(ShortPath(cwd)))
+	b.WriteString(`</title>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap');
+  :root { --bg: #0c0c0e; --surface: #16161a; --surface2: #1e1e24; --border: #2a2a32; --text: #e2e0d8; --text2: #8b8a85; --accent: #d4a053; --tool: #5b8a72; --tool-bg: #1a2e24; --error: #c45c5c; --blue: #5b7a9e; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--text); }
+
+  .files-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 10; }
+  .files-header a { font-size: 14px; }
+  .files-header h1 { font-size: 14px; font-weight: 600; color: var(--text); }
+
+  .files-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 41px; z-index: 9; }
+  .files-tab { padding: 8px 20px; font-size: 13px; font-weight: 500; color: var(--text2); text-decoration: none; border-bottom: 2px solid transparent; }
+  .files-tab:hover { color: var(--text); }
+  .files-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .files-content { padding: 0; }
+  .files-empty { padding: 40px; text-align: center; color: var(--text2); font-size: 14px; }
+
+  /* Changes tab */
+  .stage-bar { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
+  .stage-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text2); padding: 4px 12px; font-size: 11px; font-family: 'DM Sans', sans-serif; border-radius: 4px; cursor: pointer; }
+  .stage-btn:hover { color: var(--text); border-color: var(--text2); }
+
+  .file-group-header { padding: 10px 16px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); }
+  .file-row { display: flex; align-items: center; gap: 8px; padding: 4px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  .file-row:hover { background: var(--surface2); }
+  .file-status { width: 18px; text-align: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+  .file-status-M { color: var(--accent); }
+  .file-status-A { color: #589819; }
+  .file-status-D { color: var(--error); }
+  .file-status-R { color: var(--blue); }
+  .file-status-U { color: var(--text2); }
+  .file-name { flex: 1; }
+  .file-name a { color: var(--blue); text-decoration: none; }
+  .file-name a:hover { color: var(--text); }
+  .file-action .stage-btn { font-size: 10px; padding: 2px 8px; }
+
+  /* Diff view */
+  .diff-nav { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
+  .diff-nav-back { color: var(--blue); font-size: 12px; }
+  .diff-nav-action { display: inline; }
+  .diff-nav-pager { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 12px; }
+  .diff-nav-arrow { color: var(--blue); padding: 2px 6px; text-decoration: none; font-size: 16px; line-height: 1; }
+  .diff-nav-arrow:hover { color: var(--text); }
+  .diff-nav-arrow.disabled { color: var(--border); pointer-events: none; }
+  .diff-nav-pos { color: var(--text2); font-family: 'JetBrains Mono', monospace; font-size: 11px; min-width: 32px; text-align: center; }
+  .diff-file-header { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); padding: 12px 16px 8px; border-bottom: 1px solid var(--border); }
+  .diff-body { padding: 0 16px 24px; }
+  .diff-body pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
+
+  /* Browse tab */
+  .browse-crumbs { padding: 10px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; border-bottom: 1px solid var(--border); background: var(--surface2); }
+  .browse-crumbs a { color: var(--blue); }
+  .browse-crumbs .crumb-sep { color: var(--text2); margin: 0 4px; }
+  .browse-crumbs .crumb-current { color: var(--text); }
+
+  .browse-entry { display: block; padding: 4px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--blue); text-decoration: none; }
+  .browse-entry:hover { background: var(--surface2); color: var(--text); }
+  .browse-entry .entry-icon { color: var(--text2); margin-right: 6px; display: inline-block; width: 16px; text-align: center; }
+
+  .file-view { padding: 0 16px 24px; }
+  .file-view pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
+  .file-view-header { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); padding: 12px 16px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+
+  /* Search tab */
+  .search-bar { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); display: flex; gap: 8px; }
+  .search-input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; border-radius: 4px; outline: none; }
+  .search-input:focus { border-color: var(--accent); }
+  .search-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text2); padding: 6px 16px; font-size: 12px; font-family: 'DM Sans', sans-serif; border-radius: 4px; cursor: pointer; }
+  .search-btn:hover { color: var(--text); border-color: var(--text2); }
+
+  .search-file-header { padding: 10px 16px 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; }
+  .search-file-header a { color: var(--blue); }
+  .search-line { display: flex; gap: 8px; padding: 2px 16px 2px 32px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .search-line:hover { background: var(--surface2); }
+  .search-line a { color: var(--text2); text-decoration: none; min-width: 40px; text-align: right; }
+  .search-line a:hover { color: var(--accent); }
+  .search-line .match-text { color: var(--text); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  .search-count { padding: 12px 16px; font-size: 12px; color: var(--text2); }
+</style></head><body>
+`)
+
+	// Header
+	backHref := "/"
+	if sessionID != "" {
+		backHref = "/?session=" + Esc(sessionID)
+	}
+	fmt.Fprintf(&b, `<div class="files-header"><a href="%s">← back</a><h1>%s</h1></div>`, backHref, Esc(ShortPath(cwd)))
+
+	// Tabs
+	baseURL := "/files?"
+	if sessionID != "" {
+		baseURL += "session=" + Esc(sessionID)
+	} else {
+		baseURL += "cwd=" + Esc(cwd)
+	}
+	b.WriteString(`<div class="files-tabs">`)
+	for _, t := range []struct{ id, label string }{{"changes", "Changes"}, {"browse", "Browse"}, {"search", "Search"}} {
+		cls := "files-tab"
+		if t.id == activeTab {
+			cls += " active"
+		}
+		href := baseURL
+		if t.id != "changes" {
+			href += "&tab=" + t.id
+		}
+		fmt.Fprintf(&b, `<a href="%s" class="%s">%s</a>`, href, cls, t.label)
+	}
+	b.WriteString(`</div>`)
+
+	// Content
+	b.WriteString(`<div class="files-content">`)
+	b.WriteString(content)
+	b.WriteString(`</div>`)
+
+	b.WriteString(`</body></html>`)
+	return b.String()
+}
+
+// --- Changes tab ---
+
+func renderChangesContent(sessionID, cwd string) string {
+	return renderFileList(sessionID, cwd)
+}
+
+func renderFileList(sessionID, cwd string) string {
+	files, err := GitStatusFiles(cwd)
+	if err != nil || len(files) == 0 {
+		return `<div class="files-empty">No uncommitted changes</div>`
+	}
+
+	var staged, modified, untracked []StatusFile
+	for _, f := range files {
+		if f.IsUntracked() {
+			untracked = append(untracked, f)
+		} else {
+			if f.IsStaged() {
+				staged = append(staged, f)
+			}
+			if f.IsModified() {
+				modified = append(modified, f)
+			}
+		}
+	}
+
+	hasStaged := len(staged) > 0
+	hasUnstaged := len(modified) > 0 || len(untracked) > 0
+
+	var b strings.Builder
+
+	// Stage All / Unstage All bar
+	if hasStaged || hasUnstaged {
+		b.WriteString(`<div class="stage-bar">`)
+		if hasUnstaged {
+			fmt.Fprintf(&b, `<button class="stage-btn" hx-post="/files/stage" hx-vals='{"session":"%s","all":"true"}' hx-target="#file-list" hx-swap="innerHTML">Stage All</button>`, Esc(sessionID))
+		}
+		if hasStaged {
+			fmt.Fprintf(&b, `<button class="stage-btn" hx-post="/files/unstage" hx-vals='{"session":"%s","all":"true"}' hx-target="#file-list" hx-swap="innerHTML">Unstage All</button>`, Esc(sessionID))
+		}
+		b.WriteString(`</div>`)
+	}
+
+	b.WriteString(`<div id="file-list">`)
+
+	baseURL := "/files?session=" + Esc(sessionID)
+
+	if len(staged) > 0 {
+		fmt.Fprintf(&b, `<div class="file-group-header">Staged (%d)</div>`, len(staged))
+		for _, f := range staged {
+			badge := string(f.Index)
+			fmt.Fprintf(&b, `<div class="file-row">`)
+			fmt.Fprintf(&b, `<span class="file-status file-status-%s">%s</span>`, Esc(badge), Esc(badge))
+			fmt.Fprintf(&b, `<span class="file-name"><a href="%s&diff=%s&mode=staged">%s</a></span>`, baseURL, Esc(f.Path), Esc(f.Path))
+			fmt.Fprintf(&b, `<span class="file-action"><button class="stage-btn" hx-post="/files/unstage" hx-vals='{"session":"%s","path":"%s"}' hx-target="#file-list" hx-swap="innerHTML">Unstage</button></span>`, Esc(sessionID), Esc(f.Path))
+			b.WriteString(`</div>`)
+		}
+	}
+
+	if len(modified) > 0 {
+		fmt.Fprintf(&b, `<div class="file-group-header">Modified (%d)</div>`, len(modified))
+		for _, f := range modified {
+			badge := string(f.Worktree)
+			fmt.Fprintf(&b, `<div class="file-row">`)
+			fmt.Fprintf(&b, `<span class="file-status file-status-%s">%s</span>`, Esc(badge), Esc(badge))
+			fmt.Fprintf(&b, `<span class="file-name"><a href="%s&diff=%s&mode=unstaged">%s</a></span>`, baseURL, Esc(f.Path), Esc(f.Path))
+			fmt.Fprintf(&b, `<span class="file-action"><button class="stage-btn" hx-post="/files/stage" hx-vals='{"session":"%s","path":"%s"}' hx-target="#file-list" hx-swap="innerHTML">Stage</button></span>`, Esc(sessionID), Esc(f.Path))
+			b.WriteString(`</div>`)
+		}
+	}
+
+	if len(untracked) > 0 {
+		fmt.Fprintf(&b, `<div class="file-group-header">Untracked (%d)</div>`, len(untracked))
+		for _, f := range untracked {
+			fmt.Fprintf(&b, `<div class="file-row">`)
+			fmt.Fprintf(&b, `<span class="file-status file-status-U">?</span>`)
+			fmt.Fprintf(&b, `<span class="file-name"><a href="%s&diff=%s&mode=untracked">%s</a></span>`, baseURL, Esc(f.Path), Esc(f.Path))
+			fmt.Fprintf(&b, `<span class="file-action"><button class="stage-btn" hx-post="/files/stage" hx-vals='{"session":"%s","path":"%s"}' hx-target="#file-list" hx-swap="innerHTML">Stage</button></span>`, Esc(sessionID), Esc(f.Path))
+			b.WriteString(`</div>`)
+		}
+	}
+
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// --- Diff view ---
+
+// diffNavEntry is a file in the changes list, used for prev/next navigation.
+type diffNavEntry struct {
+	Path string
+	Mode string // "staged", "unstaged", "untracked"
+}
+
+// buildDiffNav returns a flat list of all changed files in the order they appear in the changes view.
+func buildDiffNav(cwd string) []diffNavEntry {
+	files, err := GitStatusFiles(cwd)
+	if err != nil {
+		return nil
+	}
+	var nav []diffNavEntry
+	for _, f := range files {
+		if f.IsStaged() {
+			nav = append(nav, diffNavEntry{Path: f.Path, Mode: "staged"})
+		}
+	}
+	for _, f := range files {
+		if f.IsModified() {
+			nav = append(nav, diffNavEntry{Path: f.Path, Mode: "unstaged"})
+		}
+	}
+	for _, f := range files {
+		if f.IsUntracked() {
+			nav = append(nav, diffNavEntry{Path: f.Path, Mode: "untracked"})
+		}
+	}
+	return nav
+}
+
+func renderFileDiff(sessionID, cwd, path, mode string) string {
+	var b strings.Builder
+
+	baseHref := "/files?"
+	if sessionID != "" {
+		baseHref += "session=" + Esc(sessionID)
+	} else {
+		baseHref += "cwd=" + Esc(cwd)
+	}
+
+	// Build navigation list
+	nav := buildDiffNav(cwd)
+	curIdx := -1
+	for i, e := range nav {
+		if e.Path == path && e.Mode == mode {
+			curIdx = i
+			break
+		}
+	}
+
+	// Navigation bar: ← changes   [Unstage/Stage]   < 4/9 >
+	b.WriteString(`<div class="diff-nav">`)
+	fmt.Fprintf(&b, `<a href="%s" class="diff-nav-back">← changes</a>`, baseHref)
+
+	// Stage/unstage button
+	if sessionID != "" {
+		switch mode {
+		case "staged":
+			fmt.Fprintf(&b, `<form class="diff-nav-action" hx-post="/files/unstage" hx-vals='{"session":"%s","path":"%s"}' hx-swap="none" hx-on::after-request="window.location.href='%s'"><button class="stage-btn" type="submit">Unstage</button></form>`,
+				Esc(sessionID), Esc(path), baseHref)
+		case "unstaged", "untracked":
+			fmt.Fprintf(&b, `<form class="diff-nav-action" hx-post="/files/stage" hx-vals='{"session":"%s","path":"%s"}' hx-swap="none" hx-on::after-request="window.location.href='%s'"><button class="stage-btn" type="submit">Stage</button></form>`,
+				Esc(sessionID), Esc(path), baseHref)
+		}
+	}
+
+	// Prev/next navigation
+	if len(nav) > 1 && curIdx >= 0 {
+		b.WriteString(`<span class="diff-nav-pager">`)
+		if curIdx > 0 {
+			prev := nav[curIdx-1]
+			fmt.Fprintf(&b, `<a href="%s&diff=%s&mode=%s" class="diff-nav-arrow">‹</a>`, baseHref, Esc(prev.Path), Esc(prev.Mode))
+		} else {
+			b.WriteString(`<span class="diff-nav-arrow disabled">‹</span>`)
+		}
+		fmt.Fprintf(&b, `<span class="diff-nav-pos">%d/%d</span>`, curIdx+1, len(nav))
+		if curIdx < len(nav)-1 {
+			next := nav[curIdx+1]
+			fmt.Fprintf(&b, `<a href="%s&diff=%s&mode=%s" class="diff-nav-arrow">›</a>`, baseHref, Esc(next.Path), Esc(next.Mode))
+		} else {
+			b.WriteString(`<span class="diff-nav-arrow disabled">›</span>`)
+		}
+		b.WriteString(`</span>`)
+	}
+
+	b.WriteString(`</div>`)
+
+	modeLabel := mode
+	if modeLabel == "" {
+		modeLabel = "unstaged"
+	}
+	fmt.Fprintf(&b, `<div class="diff-file-header">%s <span style="color:var(--text2)">(%s)</span></div>`, Esc(path), Esc(modeLabel))
+
+	diffContent, err := GitDiffFileContent(cwd, path, mode)
+	if err != nil || diffContent == "" {
+		b.WriteString(`<div class="files-empty">No changes</div>`)
+		return b.String()
+	}
+
+	b.WriteString(`<div class="diff-body">`)
+	b.WriteString(highlightDiff(diffContent))
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// --- Browse tab ---
+
+func renderBrowseContent(sessionID, cwd, browsePath string) string {
+	var b strings.Builder
+
+	baseURL := "/files?"
+	if sessionID != "" {
+		baseURL += "session=" + Esc(sessionID)
+	} else {
+		baseURL += "cwd=" + Esc(cwd)
+	}
+	baseURL += "&tab=browse"
+
+	// Check if browsePath points to a file
+	if browsePath != "" {
+		fullPath := filepath.Join(cwd, browsePath)
+		info, err := os.Stat(fullPath)
+		if err == nil && !info.IsDir() {
+			return renderFileView(&b, baseURL, sessionID, cwd, browsePath, fullPath, info)
+		}
+	}
+
+	// Directory listing
+	renderBreadcrumbs(&b, baseURL, browsePath)
+
+	entries, err := GitListDir(cwd, browsePath)
+	if err != nil {
+		fmt.Fprintf(&b, `<div class="files-empty">Error: %s</div>`, Esc(err.Error()))
+		return b.String()
+	}
+	if len(entries) == 0 {
+		b.WriteString(`<div class="files-empty">Empty directory</div>`)
+		return b.String()
+	}
+
+	for _, e := range entries {
+		entryPath := e.Name
+		if browsePath != "" {
+			entryPath = browsePath + "/" + e.Name
+		}
+		href := baseURL + "&path=" + Esc(entryPath)
+		if e.IsDir {
+			fmt.Fprintf(&b, `<a class="browse-entry" href="%s"><span class="entry-icon">▸</span>%s/</a>`, href, Esc(e.Name))
+		} else {
+			fmt.Fprintf(&b, `<a class="browse-entry" href="%s"><span class="entry-icon"> </span>%s</a>`, href, Esc(e.Name))
+		}
+	}
+
+	return b.String()
+}
+
+func renderBreadcrumbs(b *strings.Builder, baseURL, browsePath string) {
+	b.WriteString(`<div class="browse-crumbs">`)
+	if browsePath == "" {
+		b.WriteString(`<span class="crumb-current">/</span>`)
+	} else {
+		fmt.Fprintf(b, `<a href="%s">/</a>`, baseURL)
+		parts := strings.Split(browsePath, "/")
+		for i, part := range parts {
+			b.WriteString(`<span class="crumb-sep">›</span>`)
+			if i == len(parts)-1 {
+				fmt.Fprintf(b, `<span class="crumb-current">%s</span>`, Esc(part))
+			} else {
+				partial := strings.Join(parts[:i+1], "/")
+				fmt.Fprintf(b, `<a href="%s&path=%s">%s</a>`, baseURL, Esc(partial), Esc(part))
+			}
+		}
+	}
+	b.WriteString(`</div>`)
+}
+
+func renderFileView(b *strings.Builder, baseURL, sessionID, cwd, browsePath, fullPath string, info os.FileInfo) string {
+	renderBreadcrumbs(b, baseURL, browsePath)
+
+	// File size limit: 1MB
+	if info.Size() > 1<<20 {
+		b.WriteString(`<div class="files-empty">File too large to display</div>`)
+		return b.String()
+	}
+
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		fmt.Fprintf(b, `<div class="files-empty">Error reading file: %s</div>`, Esc(err.Error()))
+		return b.String()
+	}
+
+	// Check if file has uncommitted changes — link to diff
+	var extraLinks string
+	if sessionID != "" {
+		diffContent, _ := GitDiffFileContent(cwd, browsePath, "unstaged")
+		if diffContent != "" {
+			diffHref := fmt.Sprintf("/files?session=%s&diff=%s", Esc(sessionID), Esc(browsePath))
+			extraLinks = fmt.Sprintf(` <a href="%s" style="font-size:11px;color:var(--accent)">view diff</a>`, diffHref)
+		}
+	}
+
+	fmt.Fprintf(b, `<div class="file-view-header">%s%s</div>`, Esc(filepath.Base(browsePath)), extraLinks)
+
+	b.WriteString(`<div class="file-view">`)
+	b.WriteString(highlightFile(filepath.Base(fullPath), string(content)))
+	b.WriteString(`</div>`)
+
+	return b.String()
+}
+
+func highlightFile(filename, content string) string {
+	lexer := lexers.Match(filename)
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	lexer = chroma.Coalesce(lexer)
+	iterator, err := lexer.Tokenise(nil, content)
+	if err != nil {
+		return "<pre>" + Esc(content) + "</pre>"
+	}
+	var buf bytes.Buffer
+	if err := chromaFormatterLines.Format(&buf, chromaStyle, iterator); err != nil {
+		return "<pre>" + Esc(content) + "</pre>"
+	}
+	return buf.String()
+}
+
+// --- Search tab ---
+
+func renderSearchContent(sessionID, cwd, query string) string {
+	var b strings.Builder
+
+	baseURL := "/files?"
+	if sessionID != "" {
+		baseURL += "session=" + Esc(sessionID)
+	} else {
+		baseURL += "cwd=" + Esc(cwd)
+	}
+
+	// Search form
+	b.WriteString(`<div class="search-bar">`)
+	fmt.Fprintf(&b, `<form action="/files" method="get" style="display:flex;gap:8px;flex:1">`)
+	if sessionID != "" {
+		fmt.Fprintf(&b, `<input type="hidden" name="session" value="%s">`, Esc(sessionID))
+	} else {
+		fmt.Fprintf(&b, `<input type="hidden" name="cwd" value="%s">`, Esc(cwd))
+	}
+	b.WriteString(`<input type="hidden" name="tab" value="search">`)
+	fmt.Fprintf(&b, `<input type="text" name="q" class="search-input" placeholder="regex pattern..." value="%s" autofocus>`, Esc(query))
+	b.WriteString(`<button type="submit" class="search-btn">Search</button>`)
+	b.WriteString(`</form></div>`)
+
+	if query == "" {
+		return b.String()
+	}
+
+	results, err := GitGrep(cwd, query)
+	if err != nil {
+		fmt.Fprintf(&b, `<div class="files-empty">Error: %s</div>`, Esc(err.Error()))
+		return b.String()
+	}
+	if len(results) == 0 {
+		b.WriteString(`<div class="files-empty">No matches</div>`)
+		return b.String()
+	}
+
+	browseURL := baseURL + "&tab=browse&path="
+
+	// Group by file
+	var currentFile string
+	matchCount := 0
+	for _, m := range results {
+		if m.File != currentFile {
+			currentFile = m.File
+			fmt.Fprintf(&b, `<div class="search-file-header"><a href="%s%s">%s</a></div>`, browseURL, Esc(m.File), Esc(m.File))
+		}
+		fmt.Fprintf(&b, `<div class="search-line"><a href="%s%s#L%d">%d</a><span class="match-text">%s</span></div>`,
+			browseURL, Esc(m.File), m.Line, m.Line, Esc(m.Text))
+		matchCount++
+	}
+
+	fmt.Fprintf(&b, `<div class="search-count">%d matches`, matchCount)
+	if matchCount >= 500 {
+		b.WriteString(` (truncated)`)
+	}
+	b.WriteString(`</div>`)
+
+	return b.String()
+}

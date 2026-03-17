@@ -474,9 +474,7 @@ func RenderCostBar(s *Session) string {
 	} else if c.ContextUsed > 0 {
 		parts = append(parts, fmt.Sprintf("context %s", FmtK(c.ContextUsed)))
 	}
-	if ds.Added > 0 || ds.Removed > 0 {
-		parts = append(parts, RenderDiffStat(sid, ds))
-	}
+	parts = append(parts, RenderDiffStat(sid, ds))
 	return strings.Join(parts, " · ")
 }
 
@@ -605,98 +603,6 @@ func FormatSSE(event, data string) string {
 	return buf.String()
 }
 
-func splitDiffByFile(fullDiff string) []string {
-	var chunks []string
-	var current strings.Builder
-	for _, line := range strings.SplitAfter(fullDiff, "\n") {
-		if strings.HasPrefix(line, "diff --git ") && current.Len() > 0 {
-			chunks = append(chunks, current.String())
-			current.Reset()
-		}
-		current.WriteString(line)
-	}
-	if current.Len() > 0 {
-		chunks = append(chunks, current.String())
-	}
-	return chunks
-}
-
-func RenderDiffPage(sessionID, cwd string, files []DiffFile, fullDiff string) string {
-	var b strings.Builder
-
-	b.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Diff · `)
-	b.WriteString(Esc(ShortPath(cwd)))
-	b.WriteString(`</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap');
-  :root { --bg: #0c0c0e; --surface: #16161a; --surface2: #1e1e24; --border: #2a2a32; --text: #e2e0d8; --text2: #8b8a85; --accent: #d4a053; --tool: #5b8a72; --tool-bg: #1a2e24; --error: #c45c5c; --blue: #5b7a9e; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; }
-  .diff-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 10; }
-  .diff-header a { color: var(--accent); text-decoration: none; font-size: 14px; }
-  .diff-header h1 { font-size: 14px; font-weight: 600; color: var(--text); }
-  .diff-files { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
-  .diff-files a { color: var(--blue); text-decoration: none; font-family: 'JetBrains Mono', monospace; font-size: 12px; display: block; padding: 2px 0; }
-  .diff-files a:hover { color: var(--text); }
-  .diff-badge { display: inline-block; width: 16px; text-align: center; font-size: 10px; font-weight: 600; margin-right: 6px; border-radius: 3px; }
-  .diff-badge-M { color: var(--accent); }
-  .diff-badge-A { color: #589819; }
-  .diff-badge-D { color: var(--error); }
-  .diff-section { padding: 0 16px 24px; }
-  .diff-section-header { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); padding: 12px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
-  .diff-section pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
-  .diff-empty { padding: 40px; text-align: center; color: var(--text2); font-size: 14px; }
-</style></head><body>
-<div class="diff-header">
-  <a href="/?session=`)
-	b.WriteString(Esc(sessionID))
-	b.WriteString(`">← back</a>
-  <h1>`)
-	b.WriteString(Esc(ShortPath(cwd)))
-	b.WriteString(`</h1>
-</div>`)
-
-	if len(files) == 0 {
-		b.WriteString(`<div class="diff-empty">No uncommitted changes</div>`)
-		b.WriteString(`</body></html>`)
-		return b.String()
-	}
-
-	// File list
-	b.WriteString(`<div class="diff-files">`)
-	for _, f := range files {
-		badge := f.Status[:1]
-		fmt.Fprintf(&b, `<a href="#%s"><span class="diff-badge diff-badge-%s">%s</span>%s</a>`,
-			Esc(f.Name), Esc(badge), Esc(badge), Esc(f.Name))
-	}
-	b.WriteString(`</div>`)
-
-	// Per-file diffs
-	chunks := splitDiffByFile(fullDiff)
-	for _, chunk := range chunks {
-		// Extract filename from "diff --git a/foo b/foo"
-		firstLine := chunk
-		if idx := strings.Index(chunk, "\n"); idx >= 0 {
-			firstLine = chunk[:idx]
-		}
-		name := ""
-		if strings.HasPrefix(firstLine, "diff --git ") {
-			parts := strings.Fields(firstLine)
-			if len(parts) >= 4 {
-				name = strings.TrimPrefix(parts[3], "b/")
-			}
-		}
-		fmt.Fprintf(&b, `<div class="diff-section" id="%s">`, Esc(name))
-		fmt.Fprintf(&b, `<div class="diff-section-header">%s</div>`, Esc(name))
-		b.WriteString(highlightDiff(chunk))
-		b.WriteString(`</div>`)
-	}
-
-	b.WriteString(`</body></html>`)
-	return b.String()
-}
 
 func RenderQueue(items []QueueItem) string {
 	if len(items) == 0 {
