@@ -279,7 +279,7 @@ func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
-		if entry.CWD != "" {
+		if entry.CWD != "" && info.cwd == "" {
 			info.cwd = entry.CWD
 		}
 		if entry.GitBranch != "" {
@@ -336,7 +336,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
-		if entry.CWD != "" {
+		if entry.CWD != "" && cwd == "" {
 			cwd = entry.CWD
 		}
 		if entry.GitBranch != "" {
