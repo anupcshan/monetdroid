@@ -11,6 +11,7 @@ type Session struct {
 	Label             string
 	AutoLabel         bool
 	Cwd               string
+	Branches          []string
 	PermissionMode    string
 	Running           bool
 	Interrupted       bool

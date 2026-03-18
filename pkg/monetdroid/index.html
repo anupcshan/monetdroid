@@ -147,6 +147,16 @@
     font-size: 13px;
     font-weight: 500;
     margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .di-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
   .drawer-item .di-path {
     font-size: 11px;
@@ -222,15 +232,37 @@
   .history-item .hi-summary {
     font-size: 12px;
     color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .hi-summary-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
   }
   .history-item .hi-time {
     font-size: 10px;
     color: var(--text2);
     font-family: 'JetBrains Mono', monospace;
     margin-top: 2px;
+  }
+  .hi-branches {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .branch-chip {
+    display: inline-block;
+    font-size: 9px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--surface2);
+    color: var(--text2);
   }
 
   /* --- Mode bar --- */
@@ -885,6 +917,9 @@
     color: var(--text);
     margin-bottom: 4px;
     line-height: 1.4;
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
   }
   .qi-cwd {
     font-size: 11px;

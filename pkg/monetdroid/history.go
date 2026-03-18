@@ -15,6 +15,7 @@ import (
 
 type jsonlEntry struct {
 	CWD             string                    `json:"cwd"`
+	GitBranch       string                    `json:"gitBranch"`
 	Type            string                    `json:"type"`
 	Subtype         string                    `json:"subtype,omitempty"`
 	IsSidechain     bool                      `json:"isSidechain"`
@@ -116,6 +117,7 @@ type cachedSessionInfo struct {
 	modTime       time.Time
 	summary       string
 	cwd           string
+	branches      []string
 	numMsgs       int
 	contextUsed   int
 	contextWindow int
@@ -188,9 +190,9 @@ func ScanHistory() ([]HistoryGroup, error) {
 				continue
 			}
 			sessions = append(sessions, HistorySession{
-				ID: sessionID, Summary: cached.summary, NumMsgs: cached.numMsgs,
-				ContextUsed: cached.contextUsed, ContextWindow: cached.contextWindow,
-				ModTime: finfo.ModTime(),
+				ID: sessionID, Summary: cached.summary, Branches: cached.branches,
+				NumMsgs: cached.numMsgs, ContextUsed: cached.contextUsed,
+				ContextWindow: cached.contextWindow, ModTime: finfo.ModTime(),
 			})
 		}
 		if cwd == "" {
@@ -230,6 +232,7 @@ func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 	}
 	defer f.Close()
 	var info cachedSessionInfo
+	branchSet := make(map[string]struct{})
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -239,6 +242,9 @@ func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 		}
 		if entry.CWD != "" {
 			info.cwd = entry.CWD
+		}
+		if entry.GitBranch != "" {
+			branchSet[entry.GitBranch] = struct{}{}
 		}
 		switch entry.Type {
 		case "user", "assistant", "result":
@@ -266,16 +272,21 @@ func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 			}
 		}
 	}
+	for b := range branchSet {
+		info.branches = append(info.branches, b)
+	}
+	sort.Strings(info.branches)
 	return info, scanner.Err()
 }
 
-func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, usage SessionUsage, err error) {
+func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, branches []string, usage SessionUsage, err error) {
 	f, err := os.Open(jsonlPath)
 	if err != nil {
-		return nil, "", "", usage, err
+		return nil, "", "", nil, usage, err
 	}
 	defer f.Close()
 	toolNames := make(map[string]string) // tool_use id → tool name
+	branchSet := make(map[string]struct{})
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -288,6 +299,9 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		}
 		if entry.CWD != "" {
 			cwd = entry.CWD
+		}
+		if entry.GitBranch != "" {
+			branchSet[entry.GitBranch] = struct{}{}
 		}
 		if entry.IsSidechain {
 			continue
@@ -365,5 +379,9 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			}
 		}
 	}
-	return msgs, claudeID, cwd, usage, scanner.Err()
+	for b := range branchSet {
+		branches = append(branches, b)
+	}
+	sort.Strings(branches)
+	return msgs, claudeID, cwd, branches, usage, scanner.Err()
 }

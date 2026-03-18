@@ -11,12 +11,13 @@ import (
 
 // TrackedSession represents a session being tracked across its lifecycle.
 type TrackedSession struct {
-	ClaudeID  string `json:"claude_id"`
-	Label     string `json:"label"`
-	AutoLabel bool   `json:"auto_label,omitempty"`
-	Status    string `json:"status"` // "running", "completed", or "blocked"
-	Result    string `json:"result"`
-	Cwd       string `json:"cwd"`
+	ClaudeID  string   `json:"claude_id"`
+	Label     string   `json:"label"`
+	AutoLabel bool     `json:"auto_label,omitempty"`
+	Status    string   `json:"status"` // "running", "completed", or "blocked"
+	Result    string   `json:"result"`
+	Cwd       string   `json:"cwd"`
+	Branches  []string `json:"branches,omitempty"`
 	UpdatedAtMillis int64 `json:"updated_at_millis"`
 }
 

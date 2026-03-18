@@ -43,6 +43,7 @@ type HistoryGroup struct {
 type HistorySession struct {
 	ID            string    `json:"id"`
 	Summary       string    `json:"summary"`
+	Branches      []string  `json:"branches,omitempty"`
 	ModTime       time.Time `json:"mod_time"`
 	NumMsgs       int       `json:"num_msgs"`
 	ContextUsed   int       `json:"context_used"`

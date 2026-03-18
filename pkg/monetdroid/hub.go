@@ -231,6 +231,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		cwd := s.Cwd
 		sessionLabel := s.Label
 		autoLabel := s.AutoLabel
+		branches := s.Branches
 		s.Mu.Unlock()
 		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, s.ID, ShortPath(cwd))
 		h.notifyAll(FormatSSE("permission", data))
@@ -242,6 +243,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			Status:    "blocked",
 			Result:    permLabel,
 			Cwd:       cwd,
+			Branches:  branches,
 		})
 	}
 	if msg.Type == "done" && s != nil {
@@ -249,6 +251,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		cwd := s.Cwd
 		label := s.Label
 		autoLabel := s.AutoLabel
+		branches := s.Branches
 		// Find last assistant text for result summary
 		var result string
 		for i := len(s.Log) - 1; i >= 0; i-- {
@@ -271,6 +274,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			Status:    "completed",
 			Result:    result,
 			Cwd:       cwd,
+			Branches:  branches,
 		})
 	}
 
@@ -280,6 +284,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			label := s.Label
 			autoLabel := s.AutoLabel
 			cwd := s.Cwd
+			branches := s.Branches
 			s.Mu.Unlock()
 			h.Tracker.Track(TrackedSession{
 				ClaudeID:  s.ID,
@@ -287,6 +292,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 				AutoLabel: autoLabel,
 				Status:    "running",
 				Cwd:       cwd,
+				Branches:  branches,
 			})
 		}
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))

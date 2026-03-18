@@ -62,7 +62,7 @@ func sessionURL(s *Session) string {
 
 // loadSessionFromDisk parses a JSONL file and creates an in-memory session.
 func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
-	allMsgs, claudeID, cwd, sessUsage, err := ParseSessionMessages(jsonlPath)
+	allMsgs, claudeID, cwd, branches, sessUsage, err := ParseSessionMessages(jsonlPath)
 	if err != nil {
 		return nil
 	}
@@ -75,6 +75,7 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 	s.Mu.Lock()
 	s.Label = h.Labels.Get(claudeID)
 	s.JSONLPath = jsonlPath
+	s.Branches = branches
 	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
 	s.CostAccum.ContextUsed = sessUsage.ContextUsed
 	s.CostAccum.ContextWindow = sessUsage.ContextWindow
@@ -654,10 +655,11 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				metaExtra = " · " + TimeAgo(time.UnixMilli(ts.UpdatedAtMillis))
 			}
 
+			branchHTML := renderBranchChips(ts.Branches)
 			fmt.Fprintf(&buf,
-				`<div class="drawer-item-row"><a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s%s</div></a>`+
+				`<div class="drawer-item-row"><a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name"><span class="di-name-text">%s</span>%s</div><div class="di-path">%s</div><div class="di-meta">%s%s</div></a>`+
 					`<form hx-post="/archive" hx-swap="delete" hx-target="closest .drawer-item-row"><input type="hidden" name="claude_id" value="%s"><button type="submit" class="drawer-close-btn" title="Archive session" onclick="event.stopPropagation()">✕</button></form></div>`,
-				Esc(ts.ClaudeID), Esc(summary), Esc(sp), statusHTML, metaExtra, Esc(ts.ClaudeID),
+				Esc(ts.ClaudeID), Esc(summary), branchHTML, Esc(sp), statusHTML, metaExtra, Esc(ts.ClaudeID),
 			)
 		}
 	}
@@ -688,9 +690,10 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				if sess.ContextUsed > 0 {
 					msgsStr += fmt.Sprintf(" · %s", FormatTokens(sess.ContextUsed, sess.ContextWindow))
 				}
+				branchHTML := renderBranchChips(sess.Branches)
 				fmt.Fprintf(&buf,
-					`<a class="history-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="hi-summary">%s</div><div class="hi-time">%s%s</div></a>`,
-					Esc(sess.ID), Esc(summary), Esc(ago), msgsStr,
+					`<a class="history-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="hi-summary"><span class="hi-summary-text">%s</span>%s</div><div class="hi-time">%s%s</div></a>`,
+					Esc(sess.ID), Esc(summary), branchHTML, Esc(ago), msgsStr,
 				)
 			}
 			buf.WriteString(`</div></details>`)

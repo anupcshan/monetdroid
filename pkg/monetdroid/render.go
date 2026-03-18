@@ -637,6 +637,19 @@ func FormatSSE(event, data string) string {
 }
 
 
+func renderBranchChips(branches []string) string {
+	if len(branches) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="hi-branches">`)
+	for _, br := range branches {
+		fmt.Fprintf(&b, `<span class="branch-chip">%s</span>`, Esc(br))
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
 func RenderTrackedSessions(items []TrackedSession) string {
 	if len(items) == 0 {
 		return ""
@@ -667,7 +680,7 @@ func RenderTrackedSessions(items []TrackedSession) string {
 		if item.AutoLabel && displayLabel != "" {
 			displayLabel = "(auto) " + displayLabel
 		}
-		fmt.Fprintf(&b, `<div class="qi-label">%s</div>`, Esc(displayLabel))
+		fmt.Fprintf(&b, `<div class="qi-label"><span>%s</span>%s</div>`, Esc(displayLabel), renderBranchChips(item.Branches))
 		if item.Cwd != "" {
 			fmt.Fprintf(&b, `<div class="qi-cwd">%s</div>`, Esc(ShortPath(item.Cwd)))
 		}
