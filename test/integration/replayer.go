@@ -249,11 +249,7 @@ func (r *Replayer) Start() string {
 
 // recordResponseHeader returns true if a response header should be saved in the cassette.
 func recordResponseHeader(k string) bool {
-	switch http.CanonicalHeaderKey(k) {
-	case "Content-Type":
-		return true
-	}
-	return false
+	return http.CanonicalHeaderKey(k) == "Content-Type"
 }
 
 var (

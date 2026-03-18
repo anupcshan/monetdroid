@@ -44,9 +44,7 @@ func ToolChipSummary(tool string, input *ToolInput) string {
 		return tool
 	}
 	filePath := input.ResolvedPath()
-	short := func(p string) string {
-		return filepath.Base(p)
-	}
+	short := filepath.Base
 	switch tool {
 	case "Read", "FileRead":
 		if filePath == "" {
@@ -711,16 +709,17 @@ func stripSpinner(html, toolUseID string) string {
 	depth := 0
 	i := start
 	for i < len(html) {
-		if strings.HasPrefix(html[i:], "<span") {
+		switch {
+		case strings.HasPrefix(html[i:], "<span"):
 			depth++
 			i += 5
-		} else if strings.HasPrefix(html[i:], "</span>") {
+		case strings.HasPrefix(html[i:], "</span>"):
 			depth--
 			if depth == 0 {
 				return html[:start] + html[i+7:]
 			}
 			i += 7
-		} else {
+		default:
 			i++
 		}
 	}

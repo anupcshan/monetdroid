@@ -176,11 +176,9 @@ func GitListDir(cwd, dir string) ([]FileEntry, error) {
 				seen[key] = true
 				entries = append(entries, FileEntry{Name: dirName, IsDir: true})
 			}
-		} else {
-			if !seen[rel] {
-				seen[rel] = true
-				entries = append(entries, FileEntry{Name: rel, IsDir: false})
-			}
+		} else if !seen[rel] {
+			seen[rel] = true
+			entries = append(entries, FileEntry{Name: rel, IsDir: false})
 		}
 	}
 
