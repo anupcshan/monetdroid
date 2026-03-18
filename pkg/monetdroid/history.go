@@ -160,7 +160,13 @@ func ScanHistory() ([]HistoryGroup, error) {
 		return nil, err
 	}
 
-	var groups []HistoryGroup
+	// First pass: collect sessions per ~/.claude/projects/ subdirectory.
+	type rawGroup struct {
+		cwd      string
+		dirKey   string
+		sessions []HistorySession
+	}
+	var raw []rawGroup
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -198,8 +204,41 @@ func ScanHistory() ([]HistoryGroup, error) {
 		if cwd == "" {
 			cwd = "/" + strings.ReplaceAll(entry.Name(), "-", "/")
 		}
-		sort.Slice(sessions, func(i, j int) bool { return sessions[i].ModTime.After(sessions[j].ModTime) })
-		groups = append(groups, HistoryGroup{Dir: cwd, DirKey: entry.Name(), Sessions: sessions})
+		raw = append(raw, rawGroup{cwd: cwd, dirKey: entry.Name(), sessions: sessions})
+	}
+
+	// Second pass: merge groups that share the same git repo (via git-common-dir).
+	type mergedGroup struct {
+		dir      string
+		dirKeys  []string
+		sessions []HistorySession
+	}
+	merged := make(map[string]*mergedGroup) // key: git common dir (or cwd if not a git repo)
+	var mergeOrder []string                 // preserve insertion order
+	for _, rg := range raw {
+		key := GitCommonDir(rg.cwd)
+		if key == "" {
+			key = rg.cwd // not a git repo or dir doesn't exist
+		}
+		mg, exists := merged[key]
+		if !exists {
+			mg = &mergedGroup{dir: rg.cwd}
+			merged[key] = mg
+			mergeOrder = append(mergeOrder, key)
+		}
+		mg.dirKeys = append(mg.dirKeys, rg.dirKey)
+		mg.sessions = append(mg.sessions, rg.sessions...)
+	}
+
+	var groups []HistoryGroup
+	for _, key := range mergeOrder {
+		mg := merged[key]
+		sort.Slice(mg.sessions, func(i, j int) bool { return mg.sessions[i].ModTime.After(mg.sessions[j].ModTime) })
+		groups = append(groups, HistoryGroup{
+			Dir:      mg.dir,
+			DirKey:   strings.Join(mg.dirKeys, ","),
+			Sessions: mg.sessions,
+		})
 	}
 	sort.Slice(groups, func(i, j int) bool {
 		if len(groups[i].Sessions) == 0 {

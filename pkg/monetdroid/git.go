@@ -3,10 +3,29 @@ package monetdroid
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 )
+
+// GitCommonDir returns the path to the shared .git directory for a repo or worktree.
+// For the main checkout this returns the .git dir; for worktrees it returns the main
+// repo's .git dir. Returns "" if cwd is not a git repo.
+func GitCommonDir(cwd string) string {
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
+	}
+	p = filepath.Clean(p)
+	return p
+}
 
 type DiffStat struct {
 	Added   int
