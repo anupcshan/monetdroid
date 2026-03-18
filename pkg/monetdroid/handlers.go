@@ -72,14 +72,7 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 	}
 
 	s := h.Sessions.Create(claudeID, cwd)
-	s.Mu.Lock()
-	s.Label = h.Labels.Get(claudeID)
-	s.JSONLPath = jsonlPath
-	s.Branches = branches
-	s.CostAccum.TotalCostUSD = sessUsage.TotalCostUSD
-	s.CostAccum.ContextUsed = sessUsage.ContextUsed
-	s.CostAccum.ContextWindow = sessUsage.ContextWindow
-	s.Mu.Unlock()
+	s.InitFromHistory(h.Labels.Get(claudeID), jsonlPath, branches, CostInfo(sessUsage))
 
 	for _, m := range allMsgs {
 		sm := ServerMsg{SessionID: s.ID}
@@ -118,10 +111,7 @@ func (h *Hub) handleLabelEdit(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 		return
 	}
-	s.Mu.Lock()
-	label := s.Label
-	cwd := s.Cwd
-	s.Mu.Unlock()
+	label, cwd := s.GetLabelAndCwd()
 	value := label
 	if value == "" {
 		value = ShortPath(cwd)
@@ -139,12 +129,7 @@ func (h *Hub) handleLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	label := strings.TrimSpace(r.FormValue("label"))
-	s.Mu.Lock()
-	s.Label = label
-	if label == "" {
-		label = ShortPath(s.Cwd)
-	}
-	s.Mu.Unlock()
+	label = s.UpdateLabel(label)
 	h.Labels.Set(s.ID, label)
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">%s</div>`, Esc(label))
@@ -371,23 +356,17 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 		// Create the session with the real ClaudeID
 		s = h.Sessions.Create(claudeID, cwd)
-		s.Mu.Lock()
-		if label != "" {
-			s.Label = label
-		} else {
-			lbl := text
-			if len(lbl) > 60 {
-				lbl = lbl[:60] + "..."
+		autoLabel := label == ""
+		if autoLabel {
+			label = text
+			if len(label) > 60 {
+				label = label[:60] + "..."
 			}
-			s.Label = lbl
-			s.AutoLabel = true
 		}
-		s.Running = true
-		s.proc = proc
-		s.Mu.Unlock()
+		s.InitLive(label, autoLabel, true, proc)
 
-		if s.Label != "" {
-			h.Labels.Set(claudeID, s.Label)
+		if label != "" {
+			h.Labels.Set(claudeID, label)
 		}
 
 		// Bind SSE clients that were waiting on this cwd
@@ -403,8 +382,8 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		h.mu.RUnlock()
 
 		// Send chrome setup (session-id hidden field, label) to bound clients
-		sessionLabel := s.Label
-		if s.AutoLabel {
+		sessionLabel := label
+		if autoLabel {
 			sessionLabel = "(auto) " + sessionLabel
 		}
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", strings.Join([]string{
@@ -429,9 +408,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			case <-proc.turnDone:
 			case <-proc.dead:
 			}
-			s.Mu.Lock()
-			s.Running = false
-			s.Mu.Unlock()
+			s.SetRunning(false)
 			h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 		}()
 
@@ -439,18 +416,9 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Mu.Lock()
-	if s.Running {
-		if s.QueuedText != "" {
-			s.QueuedText += "\n" + text
-		} else {
-			s.QueuedText = text
-		}
-		queued := s.QueuedText
-		s.Mu.Unlock()
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queued)))
+	if queued, queuedText := s.EnqueueMessage(text); queued {
+		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)))
 	} else {
-		s.Mu.Unlock()
 		h.StartTurn(s, text, images)
 	}
 
@@ -469,9 +437,7 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Mu.Lock()
-	ch, ok := s.PermChans[permID]
-	s.Mu.Unlock()
+	ch, ok := s.GetPermChan(permID)
 
 	if ok {
 		var perms []PermSuggestion
@@ -480,9 +446,7 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal([]byte(suggestionJSON), &suggestion); err == nil {
 				perms = []PermSuggestion{suggestion}
 				if suggestion.Type == "setMode" && suggestion.Mode != "" {
-					s.Mu.Lock()
-					s.PermissionMode = suggestion.Mode
-					s.Mu.Unlock()
+					s.SetPermissionMode(suggestion.Mode)
 					h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: suggestion.Mode})
 				}
 			}
@@ -518,9 +482,7 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Mu.Lock()
-	ch, ok := s.PermChans[permID]
-	s.Mu.Unlock()
+	ch, ok := s.GetPermChan(permID)
 
 	if !ok {
 		w.WriteHeader(204)
@@ -528,15 +490,7 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reconstruct the original input from the stored permission request
-	var permInput *ToolInput
-	s.Mu.Lock()
-	for _, m := range s.Log {
-		if m.Type == "permission_request" && m.PermID == permID {
-			permInput = m.PermInput
-			break
-		}
-	}
-	s.Mu.Unlock()
+	permInput := s.FindPermInput(permID)
 
 	if permInput == nil || len(permInput.Questions) == 0 {
 		w.WriteHeader(204)
@@ -595,10 +549,7 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Mu.Lock()
-	s.PermissionMode = mode
-	proc := s.proc
-	s.Mu.Unlock()
+	proc := s.SetPermModeAndGetProc(mode)
 
 	if proc != nil && !proc.IsDead() {
 		if err := proc.SetPermissionMode(mode); err != nil {
@@ -640,11 +591,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 
 			metaExtra := ""
 			if s := h.Sessions.Get(ts.ClaudeID); s != nil {
-				s.Mu.Lock()
-				mc := len(s.Log)
-				ctxUsed := s.CostAccum.ContextUsed
-				ctxWindow := s.CostAccum.ContextWindow
-				s.Mu.Unlock()
+				mc, ctxUsed, ctxWindow := s.Stats()
 				if mc > 0 {
 					metaExtra = fmt.Sprintf(" · %d msgs", mc)
 				}
@@ -716,10 +663,7 @@ func (h *Hub) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Mu.Lock()
-	proc := s.proc
-	s.Interrupted = true
-	s.Mu.Unlock()
+	proc := s.InterruptAndGetProc()
 
 	if proc != nil && !proc.IsDead() {
 		if err := proc.Interrupt(); err != nil {
@@ -753,9 +697,7 @@ func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.FormValue("session_id")
 	s := h.Sessions.Get(sessionID)
 	if s != nil {
-		s.Mu.Lock()
-		s.QueuedText = ""
-		s.Mu.Unlock()
+		s.ClearQueue()
 		h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")))
 	}
 	w.WriteHeader(204)

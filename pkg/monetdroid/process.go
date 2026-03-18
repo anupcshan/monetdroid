@@ -203,10 +203,7 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 	}
 
 	<-p.ready // wait for session to be bound
-	ch := make(chan PermResponse, 1)
-	p.sess.Mu.Lock()
-	p.sess.PermChans[req.RequestID] = ch
-	p.sess.Mu.Unlock()
+	ch := p.sess.RegisterPermChan(req.RequestID)
 
 	broadcast(ServerMsg{
 		Type: "permission_request", SessionID: p.sess.ID,
@@ -216,9 +213,7 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 
 	resp := <-ch
 
-	p.sess.Mu.Lock()
-	delete(p.sess.PermChans, req.RequestID)
-	p.sess.Mu.Unlock()
+	p.sess.DeletePermChan(req.RequestID)
 
 	if resp.Allow {
 		input := req.Input

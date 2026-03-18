@@ -15,12 +15,7 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 	case "system":
 		if event.Subtype == "task_notification" && event.ToolUseID != "" {
 			broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: event.ToolUseID})
-			s.Mu.Lock()
-			if ch, ok := s.BgTaskStops[event.ToolUseID]; ok {
-				close(ch)
-				delete(s.BgTaskStops, event.ToolUseID)
-			}
-			s.Mu.Unlock()
+			s.CloseBgStop(event.ToolUseID)
 		}
 
 	case "assistant":
@@ -32,9 +27,7 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 				}
 			case "tool_use":
 				if suppressResultTools[b.Name] {
-					s.Mu.Lock()
-					s.SuppressedToolIDs[b.ID] = b.Name
-					s.Mu.Unlock()
+					s.SuppressTool(b.ID, b.Name)
 				}
 				if b.Name == "AskUserQuestion" {
 					continue // rendered by the permission prompt UI
@@ -73,12 +66,7 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 	case "user":
 		for _, b := range event.Message.Content.Blocks {
 			if b.Type == "tool_result" {
-				s.Mu.Lock()
-				_, suppressed := s.SuppressedToolIDs[b.ToolUseID]
-				if suppressed {
-					delete(s.SuppressedToolIDs, b.ToolUseID)
-				}
-				s.Mu.Unlock()
+				suppressed := s.RemoveSuppressed(b.ToolUseID)
 				if suppressed {
 					continue
 				}

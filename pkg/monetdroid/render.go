@@ -476,11 +476,8 @@ func RenderAskUserStatic(input *ToolInput) string {
 }
 
 func RenderCostBar(s *Session) string {
-	s.Mu.Lock()
-	c := s.CostAccum
-	ds := s.DiffStat
+	c, ds := s.GetCostBarInfo()
 	sid := s.ID
-	s.Mu.Unlock()
 	var parts []string
 	if c.TotalCostUSD > 0 {
 		parts = append(parts, fmt.Sprintf("$%.2f", c.TotalCostUSD))

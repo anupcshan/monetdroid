@@ -176,25 +176,13 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 
 	// Accumulate cost
 	if msg.Type == "cost" && msg.Cost != nil && s != nil {
-		s.Mu.Lock()
-		if msg.Cost.TotalCostUSD > 0 {
-			s.CostAccum.TotalCostUSD = msg.Cost.TotalCostUSD
-		}
-		if msg.Cost.ContextUsed > 0 {
-			s.CostAccum.ContextUsed = msg.Cost.ContextUsed
-		}
-		if msg.Cost.ContextWindow > 0 {
-			s.CostAccum.ContextWindow = msg.Cost.ContextWindow
-		}
-		s.Mu.Unlock()
+		s.AccumulateCost(msg.Cost)
 	}
 
 	// Update todos from TodoWrite tool_use events
 	if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
 		if todos := ParseTodos(msg.Input); todos != nil {
-			s.Mu.Lock()
-			s.Todos = todos
-			s.Mu.Unlock()
+			s.SetTodos(todos)
 		}
 	}
 
@@ -204,10 +192,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 
 	// OOB-swap the todos panel children (summary + body) to preserve open/closed state
 	if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
-		s.Mu.Lock()
-		todos := make([]Todo, len(s.Todos))
-		copy(todos, s.Todos)
-		s.Mu.Unlock()
+		todos := s.GetTodosCopy()
 		parts = append(parts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
 		parts = append(parts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
 	}
@@ -227,41 +212,24 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		if msg.PermReason != "" {
 			permLabel = msg.PermTool + ": " + msg.PermReason
 		}
-		s.Mu.Lock()
-		cwd := s.Cwd
-		sessionLabel := s.Label
-		autoLabel := s.AutoLabel
-		branches := s.Branches
-		s.Mu.Unlock()
-		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, s.ID, ShortPath(cwd))
+		info := s.GetTrackerInfo()
+		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, s.ID, ShortPath(info.Cwd))
 		h.notifyAll(FormatSSE("permission", data))
 
 		h.Tracker.Track(TrackedSession{
 			ClaudeID:  s.ID,
-			Label:     sessionLabel,
-			AutoLabel: autoLabel,
+			Label:     info.Label,
+			AutoLabel: info.AutoLabel,
 			Status:    "blocked",
 			Result:    permLabel,
-			Cwd:       cwd,
-			Branches:  branches,
+			Cwd:       info.Cwd,
+			Branches:  info.Branches,
 		})
 	}
 	if msg.Type == "done" && s != nil {
-		s.Mu.Lock()
-		cwd := s.Cwd
-		label := s.Label
-		autoLabel := s.AutoLabel
-		branches := s.Branches
-		// Find last assistant text for result summary
-		var result string
-		for i := len(s.Log) - 1; i >= 0; i-- {
-			if s.Log[i].Type == "text" && s.Log[i].Text != "" {
-				result = s.Log[i].Text
-				break
-			}
-		}
-		s.Mu.Unlock()
-		data := fmt.Sprintf(`{"text":"task complete","session":%q,"cwd":%q}`, s.ID, ShortPath(cwd))
+		info := s.GetTrackerInfo()
+		result := s.LastAssistantText()
+		data := fmt.Sprintf(`{"text":"task complete","session":%q,"cwd":%q}`, s.ID, ShortPath(info.Cwd))
 		h.notifyAll(FormatSSE("done", data))
 
 		if len(result) > 200 {
@@ -269,30 +237,25 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 		h.Tracker.Track(TrackedSession{
 			ClaudeID:  s.ID,
-			Label:     label,
-			AutoLabel: autoLabel,
+			Label:     info.Label,
+			AutoLabel: info.AutoLabel,
 			Status:    "completed",
 			Result:    result,
-			Cwd:       cwd,
-			Branches:  branches,
+			Cwd:       info.Cwd,
+			Branches:  info.Branches,
 		})
 	}
 
 	if msg.Type == "running" {
 		if s != nil {
-			s.Mu.Lock()
-			label := s.Label
-			autoLabel := s.AutoLabel
-			cwd := s.Cwd
-			branches := s.Branches
-			s.Mu.Unlock()
+			info := s.GetTrackerInfo()
 			h.Tracker.Track(TrackedSession{
 				ClaudeID:  s.ID,
-				Label:     label,
-				AutoLabel: autoLabel,
+				Label:     info.Label,
+				AutoLabel: info.AutoLabel,
 				Status:    "running",
-				Cwd:       cwd,
-				Branches:  branches,
+				Cwd:       info.Cwd,
+				Branches:  info.Branches,
 			})
 		}
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
@@ -305,13 +268,9 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		parts = append(parts, emptyThinking)
 		// Refresh git diff stat
 		if s != nil {
-			s.Mu.Lock()
-			cwd := s.Cwd
-			s.Mu.Unlock()
+			cwd := s.GetCwd()
 			if ds, err := GitDiffStat(cwd); err == nil {
-				s.Mu.Lock()
-				s.DiffStat = ds
-				s.Mu.Unlock()
+				s.SetDiffStat(ds)
 			}
 			parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
 		}
@@ -329,9 +288,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			toolUseID := msg.ToolUseID
 			stopCh := make(chan struct{})
 			if s != nil {
-				s.Mu.Lock()
-				s.BgTaskStops[toolUseID] = stopCh
-				s.Mu.Unlock()
+				s.RegisterBgStop(toolUseID, stopCh)
 			}
 			go func() {
 				TailBgTask(bgPath, stopCh, func(chunk string) {
@@ -388,10 +345,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 }
 
 func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
-	s.Mu.Lock()
-	s.Interrupted = false
-	proc := s.proc
-	s.Mu.Unlock()
+	proc := s.ResetInterruptAndGetProc()
 
 	// Ensure process is alive
 	if proc == nil || proc.IsDead() {
@@ -400,27 +354,16 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 			h.Broadcast(msg)
 		}
 		var err error
-		proc, err = StartProcess(s, s.Cwd, h.BuildClaudeCmd, logBroadcast, s.ID)
+		proc, err = StartProcess(s, s.GetCwd(), h.BuildClaudeCmd, logBroadcast, s.ID)
 		if err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return
 		}
-		s.Mu.Lock()
-		s.proc = proc
-		s.Mu.Unlock()
+		s.SetProc(proc)
 	}
 
 	// Auto-label from first user message
-	s.Mu.Lock()
-	if s.Label == "" && text != "" {
-		label := text
-		if len(label) > 60 {
-			label = label[:60] + "..."
-		}
-		s.Label = label
-		s.AutoLabel = true
-	}
-	s.Mu.Unlock()
+	s.TryAutoLabel(text)
 
 	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
@@ -441,13 +384,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 		h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 
 		// Handle queued message
-		s.Mu.Lock()
-		interrupted := s.Interrupted
-		next := s.QueuedText
-		if !interrupted {
-			s.QueuedText = ""
-		}
-		s.Mu.Unlock()
+		interrupted, next := s.DrainQueue()
 
 		if !interrupted && next != "" {
 			h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")))
@@ -471,45 +408,32 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 // Called once when loading a session from disk or when a new session is
 // created, before any live Broadcast events arrive.
 func (h *Hub) SeedEventLog(s *Session) {
-	s.Mu.Lock()
-	log_ := make([]ServerMsg, len(s.Log))
-	copy(log_, s.Log)
-	running := s.Running
-	permMode := s.PermissionMode
-	label := s.Label
-	autoLabel := s.AutoLabel
-	cwd := s.Cwd
-	queuedText := s.QueuedText
-	s.Mu.Unlock()
+	snap := s.SeedSnapshot()
 
 	// Refresh git diff stat
-	if cwd != "" {
-		if ds, err := GitDiffStat(cwd); err == nil {
-			s.Mu.Lock()
-			s.DiffStat = ds
-			s.Mu.Unlock()
+	if snap.Cwd != "" {
+		if ds, err := GitDiffStat(snap.Cwd); err == nil {
+			s.SetDiffStat(ds)
 		}
 	}
 
 	// Rebuild todos from the last TodoWrite in the log
 	var todos []Todo
-	for _, msg := range log_ {
+	for _, msg := range snap.Log {
 		if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
 			if t := ParseTodos(msg.Input); t != nil {
 				todos = t
 			}
 		}
 	}
-	s.Mu.Lock()
-	s.Todos = todos
-	s.Mu.Unlock()
+	s.SetTodos(todos)
 
 	// --- Chrome setup event: session-id, label, running state, cost, mode, todos, queue ---
 	var chromeParts []string
-	sessionLabel := ShortPath(cwd)
-	if label != "" {
-		sessionLabel = label
-		if autoLabel {
+	sessionLabel := ShortPath(snap.Cwd)
+	if snap.Label != "" {
+		sessionLabel = snap.Label
+		if snap.AutoLabel {
 			sessionLabel = "(auto) " + sessionLabel
 		}
 	}
@@ -519,7 +443,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 	chromeParts = append(chromeParts, OobSwap("close-btn", "outerHTML",
 		`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`))
 
-	if running {
+	if snap.Running {
 		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
 		chromeParts = append(chromeParts, OobSwap("stop-btn", "outerHTML",
 			`<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`))
@@ -531,28 +455,28 @@ func (h *Hub) SeedEventLog(s *Session) {
 	chromeParts = append(chromeParts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
 
 	var modeHTML string
-	if permMode != "" && permMode != "default" {
+	if snap.PermMode != "" && snap.PermMode != "default" {
 		names := map[string]string{
 			"acceptEdits": "Auto-accepting edits", "plan": "Plan mode (read-only)",
 			"bypassPermissions": "All permissions bypassed", "dontAsk": "Don't ask mode",
 		}
-		ml := names[permMode]
+		ml := names[snap.PermMode]
 		if ml == "" {
-			ml = permMode
+			ml = snap.PermMode
 		}
 		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(ml), Esc(s.ID))
 	}
 	chromeParts = append(chromeParts, OobSwap("mode-bar", "innerHTML", modeHTML))
 	chromeParts = append(chromeParts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
 	chromeParts = append(chromeParts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
-	chromeParts = append(chromeParts, RenderQueueBar(s.ID, queuedText))
+	chromeParts = append(chromeParts, RenderQueueBar(s.ID, snap.QueuedText))
 
 	s.EventLog.Append(FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 
 	// --- Render all messages from the log ---
 	// Find last compact boundary to wrap pre-compaction messages
 	lastCompact := -1
-	for i, msg := range log_ {
+	for i, msg := range snap.Log {
 		if msg.Type == "compact_boundary" {
 			lastCompact = i
 		}
@@ -560,7 +484,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 
 	// Collect tool_use IDs that have results (so we can strip spinners)
 	completedTools := make(map[string]bool)
-	for _, msg := range log_ {
+	for _, msg := range snap.Log {
 		if msg.Type == "tool_result" && msg.ToolUseID != "" {
 			completedTools[msg.ToolUseID] = true
 		}
@@ -571,7 +495,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 		msgsHTML.WriteString(`<div class="compacted-context">`)
 	}
 	suppressedIDs := make(map[string]bool)
-	for i, msg := range log_ {
+	for i, msg := range snap.Log {
 		if msg.Type == "compact_boundary" && i == lastCompact {
 			msgsHTML.WriteString(`</div>`)
 			msgsHTML.WriteString(RenderMsg(msg))

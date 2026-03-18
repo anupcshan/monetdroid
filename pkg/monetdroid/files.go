@@ -23,9 +23,7 @@ func (h *Hub) resolveFilesCwd(r *http.Request) (sessionID, cwd string, ok bool) 
 		if s == nil {
 			return "", "", false
 		}
-		s.Mu.Lock()
-		cwd = s.Cwd
-		s.Mu.Unlock()
+		cwd = s.GetCwd()
 		return sessionID, cwd, true
 	}
 	cwd = r.URL.Query().Get("cwd")
@@ -87,9 +85,7 @@ func (h *Hub) handleFilesStage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	s.Mu.Lock()
-	cwd := s.Cwd
-	s.Mu.Unlock()
+	cwd := s.GetCwd()
 
 	if r.FormValue("all") == "true" {
 		GitStage(cwd, nil)
@@ -108,9 +104,7 @@ func (h *Hub) handleFilesUnstage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	s.Mu.Lock()
-	cwd := s.Cwd
-	s.Mu.Unlock()
+	cwd := s.GetCwd()
 
 	if r.FormValue("all") == "true" {
 		GitUnstage(cwd, nil)
