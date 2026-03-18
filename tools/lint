@@ -1,0 +1,8 @@
+#!/bin/bash -eu
+
+rc=0
+go tool golangci-lint run ./... || rc=$?
+go build -o /tmp/exportedmutex ./tools/analyzers/cmd/exportedmutex && \
+  go vet -vettool=/tmp/exportedmutex ./... || rc=$?
+
+exit $rc

@@ -5,3 +5,8 @@ linters:
     - errcheck
   enable:
     - gocritic
+output:
+  show-stats: false
+  formats:
+    text:
+      print-issued-lines: false
