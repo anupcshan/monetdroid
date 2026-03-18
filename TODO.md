@@ -20,7 +20,7 @@ Different browsers work fine — each gets its own CID, its own SSEClient.
 ## Remove cookie and implicit session lookup
 
 Half the handlers already get session ID from form values (`/perm`, `/perm-answer`,
-`/mode`, `/cancel-queue`, `/ack`). The cookie is only used by handlers that call
+`/mode`, `/cancel-queue`, `/archive`). The cookie is only used by handlers that call
 `client.ActiveSession()`: `/send`, `/stop`, `/label`, `/label-edit`, `/diff`.
 
 For `/new`, `/switch`, `/load` the cookie is also used to route `ReplaySession` to

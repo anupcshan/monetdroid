@@ -637,7 +637,7 @@ func FormatSSE(event, data string) string {
 }
 
 
-func RenderQueue(items []QueueItem) string {
+func RenderTrackedSessions(items []TrackedSession) string {
 	if len(items) == 0 {
 		return ""
 	}
@@ -646,10 +646,15 @@ func RenderQueue(items []QueueItem) string {
 		statusIcon := "&#x2713;"
 		statusClass := "queue-completed"
 		statusLabel := "Completed"
-		if item.Status == "blocked" {
+		switch item.Status {
+		case "blocked":
 			statusIcon = "&#x25CF;"
 			statusClass = "queue-blocked"
 			statusLabel = "Blocked"
+		case "running":
+			statusIcon = "&#x25CB;"
+			statusClass = "queue-running"
+			statusLabel = "Running"
 		}
 		result := item.Result
 		if len(result) > 120 {
@@ -657,7 +662,7 @@ func RenderQueue(items []QueueItem) string {
 		}
 		fmt.Fprintf(&b, `<div class="queue-item %s">`, statusClass)
 		fmt.Fprintf(&b, `<div class="qi-header"><span class="qi-status">%s %s</span><span class="qi-time">%s</span></div>`,
-			statusIcon, Esc(statusLabel), Esc(TimeAgo(parseTime(item.Timestamp))))
+			statusIcon, Esc(statusLabel), Esc(TimeAgo(time.UnixMilli(item.UpdatedAtMillis))))
 		displayLabel := item.Label
 		if item.AutoLabel && displayLabel != "" {
 			displayLabel = "(auto) " + displayLabel
@@ -670,19 +675,14 @@ func RenderQueue(items []QueueItem) string {
 			fmt.Fprintf(&b, `<div class="qi-result">%s</div>`, Esc(result))
 		}
 		fmt.Fprintf(&b, `<div class="qi-actions">`+
-			`<form hx-post="/ack" hx-swap="none" hx-on::after-request="this.closest('.queue-item').remove()" style="display:inline">`+
+			`<form hx-post="/archive" hx-swap="none" hx-on::after-request="this.closest('.queue-item').remove()" style="display:inline">`+
 			`<input type="hidden" name="claude_id" value="%s">`+
-			`<button type="submit" class="qi-dismiss">Dismiss</button></form> `+
+			`<button type="submit" class="qi-archive">Archive</button></form> `+
 			`<a href="/?session=%s" class="qi-open">Open</a>`+
 			`</div>`, Esc(item.ClaudeID), Esc(item.ClaudeID))
 		b.WriteString(`</div>`)
 	}
 	return b.String()
-}
-
-func parseTime(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339, s)
-	return t
 }
 
 // stripSpinner removes the spinner span from a rendered tool_use HTML string.

@@ -83,7 +83,7 @@ type Hub struct {
 	clients       map[string]*SSEClient
 	notifyClients map[string]*NotifyClient
 	Sessions      *SessionManager
-	Queue         *NotificationQueue
+	Tracker       *SessionTracker
 	Labels        *LabelStore
 	mu            sync.RWMutex
 
@@ -95,12 +95,7 @@ type Hub struct {
 // Close kills all active claude processes.
 func (h *Hub) Close() {
 	for _, s := range h.Sessions.List() {
-		s.Mu.Lock()
-		proc := s.proc
-		s.Mu.Unlock()
-		if proc != nil && !proc.IsDead() {
-			proc.Kill()
-		}
+		s.Close()
 	}
 }
 
@@ -144,7 +139,7 @@ func NewHubWithDataDir(dataDir string) *Hub {
 		clients:       make(map[string]*SSEClient),
 		notifyClients: make(map[string]*NotifyClient),
 		Sessions:      NewSessionManager(),
-		Queue:         NewNotificationQueue(dataDir),
+		Tracker:       NewSessionTracker(dataDir),
 		Labels:        NewLabelStore(dataDir),
 	}
 }
@@ -240,7 +235,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		data := fmt.Sprintf(`{"text":%q,"session":%q,"cwd":%q}`, permLabel, s.ID, ShortPath(cwd))
 		h.notifyAll(FormatSSE("permission", data))
 
-		h.Queue.Enqueue(QueueItem{
+		h.Tracker.Track(TrackedSession{
 			ClaudeID:  s.ID,
 			Label:     sessionLabel,
 			AutoLabel: autoLabel,
@@ -269,7 +264,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		if len(result) > 200 {
 			result = result[:200] + "..."
 		}
-		h.Queue.Enqueue(QueueItem{
+		h.Tracker.Track(TrackedSession{
 			ClaudeID:  s.ID,
 			Label:     label,
 			AutoLabel: autoLabel,
@@ -280,13 +275,23 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 
 	if msg.Type == "running" {
+		if s != nil {
+			s.Mu.Lock()
+			label := s.Label
+			autoLabel := s.AutoLabel
+			cwd := s.Cwd
+			s.Mu.Unlock()
+			h.Tracker.Track(TrackedSession{
+				ClaudeID:  s.ID,
+				Label:     label,
+				AutoLabel: autoLabel,
+				Status:    "running",
+				Cwd:       cwd,
+			})
+		}
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
 		parts = append(parts, OobSwap("stop-btn", "outerHTML", stopBtnHTML))
 		parts = append(parts, OobSwap("messages", "beforeend", thinkingHTML))
-		// Remove any "blocked" queue item — session is running again
-		if s != nil {
-			h.Queue.Ack(s.ID)
-		}
 	}
 	if msg.Type == "done" {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))

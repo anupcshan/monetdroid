@@ -35,6 +35,16 @@ func (s *Session) Append(msg ServerMsg) {
 	s.Mu.Unlock()
 }
 
+// Close kills the session's claude process if running.
+func (s *Session) Close() {
+	s.Mu.Lock()
+	proc := s.proc
+	s.Mu.Unlock()
+	if proc != nil && !proc.IsDead() {
+		proc.Kill()
+	}
+}
+
 func (s *Session) RemovePermission(permID string) {
 	s.Mu.Lock()
 	for i, m := range s.Log {

@@ -40,7 +40,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/label-edit", hub.handleLabelEdit)
 	mux.HandleFunc("/label", hub.handleLabel)
 	mux.HandleFunc("/queue", hub.handleQueue)
-	mux.HandleFunc("/ack", hub.handleAck)
+	mux.HandleFunc("/archive", hub.handleArchive)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
 }
@@ -199,7 +199,6 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// Restore session from query params (forwarded from page URL via sse-connect)
 	if sessionID := r.URL.Query().Get("session"); sessionID != "" {
 		h.restoreSession(client, sessionID)
-		h.Queue.Ack(sessionID)
 	} else if cwd := r.URL.Query().Get("cwd"); cwd != "" {
 		if strings.HasPrefix(cwd, "~/") {
 			home, _ := os.UserHomeDir()
@@ -242,10 +241,10 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
 		} else {
-			// No active session — show the notification queue on the landing page
-			if queueHTML := RenderQueue(h.Queue.List()); queueHTML != "" {
+			// No active session — show tracked sessions on the landing page
+			if sessHTML := RenderTrackedSessions(h.Tracker.List()); sessHTML != "" {
 				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML",
-					`<div class="queue-header">Needs Attention</div>`+queueHTML)))
+					`<div class="queue-header">Sessions</div>`+sessHTML)))
 				flusher.Flush()
 			}
 		}
@@ -614,48 +613,51 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 	var buf strings.Builder
 
-	sessions := h.Sessions.List()
-	if len(sessions) > 0 {
-		buf.WriteString(`<div class="drawer-section-label">Active Sessions</div>`)
-		for _, s := range sessions {
-			s.Mu.Lock()
-			running := s.Running
-			sp := ShortPath(s.Cwd)
-			sid := s.ID
-			mc := len(s.Log)
-			ctxUsed := s.CostAccum.ContextUsed
-			ctxWindow := s.CostAccum.ContextWindow
-			label := s.Label
-			summary := ""
-			for _, m := range s.Log {
-				if m.Type == "user_message" && m.Text != "" {
-					summary = m.Text
-					break
-				}
-			}
-			s.Mu.Unlock()
-			if label != "" {
-				summary = label
-			} else if summary == "" {
-				summary = "(new)"
-			} else {
-				if len(summary) > 60 {
-					summary = summary[:60] + "…"
-				}
+	tracked := h.Tracker.List()
+	if len(tracked) > 0 {
+		buf.WriteString(`<div class="drawer-section-label">Sessions</div>`)
+		for _, ts := range tracked {
+			summary := ts.Label
+			if ts.AutoLabel && summary != "" {
 				summary = "(auto) " + summary
 			}
-			runHTML := ""
-			if running {
-				runHTML = `<span class="di-running"></span> running`
+			if summary == "" {
+				summary = "(no label)"
 			}
-			ctxStr := ""
-			if ctxUsed > 0 {
-				ctxStr = " · " + FormatTokens(ctxUsed, ctxWindow)
+
+			sp := ShortPath(ts.Cwd)
+
+			var statusHTML string
+			switch ts.Status {
+			case "running":
+				statusHTML = `<span class="di-running"></span> running`
+			case "completed":
+				statusHTML = `<span style="color:var(--tool)">&#x2713; done</span>`
+			case "blocked":
+				statusHTML = `<span style="color:var(--accent)">&#x25CF; blocked</span>`
 			}
+
+			metaExtra := ""
+			if s := h.Sessions.Get(ts.ClaudeID); s != nil {
+				s.Mu.Lock()
+				mc := len(s.Log)
+				ctxUsed := s.CostAccum.ContextUsed
+				ctxWindow := s.CostAccum.ContextWindow
+				s.Mu.Unlock()
+				if mc > 0 {
+					metaExtra = fmt.Sprintf(" · %d msgs", mc)
+				}
+				if ctxUsed > 0 {
+					metaExtra += " · " + FormatTokens(ctxUsed, ctxWindow)
+				}
+			} else {
+				metaExtra = " · " + TimeAgo(time.UnixMilli(ts.UpdatedAtMillis))
+			}
+
 			fmt.Fprintf(&buf,
-				`<div class="drawer-item-row"><a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s %d msgs%s</div></a>`+
-					`<form hx-post="/close" hx-swap="delete" hx-target="closest .drawer-item-row"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="from" value="drawer"><button type="submit" class="drawer-close-btn" title="Close session" onclick="event.stopPropagation()">✕</button></form></div>`,
-				Esc(sid), Esc(summary), Esc(sp), runHTML, mc, ctxStr, Esc(sid),
+				`<div class="drawer-item-row"><a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name">%s</div><div class="di-path">%s</div><div class="di-meta">%s%s</div></a>`+
+					`<form hx-post="/archive" hx-swap="delete" hx-target="closest .drawer-item-row"><input type="hidden" name="claude_id" value="%s"><button type="submit" class="drawer-close-btn" title="Archive session" onclick="event.stopPropagation()">✕</button></form></div>`,
+				Esc(ts.ClaudeID), Esc(summary), Esc(sp), statusHTML, metaExtra, Esc(ts.ClaudeID),
 			)
 		}
 	}
@@ -695,7 +697,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(sessions) == 0 && (err != nil || len(groups) == 0) {
+	if len(tracked) == 0 && (err != nil || len(groups) == 0) {
 		buf.WriteString(`<div style="padding:20px;text-align:center;color:var(--text2);font-size:13px">No sessions yet</div>`)
 	}
 
@@ -734,13 +736,7 @@ func (h *Hub) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Mu.Lock()
-	proc := s.proc
-	s.Mu.Unlock()
-
-	if proc != nil && !proc.IsDead() {
-		proc.Kill()
-	}
+	s.Close()
 
 	if r.FormValue("from") == "drawer" {
 		w.WriteHeader(200)
@@ -799,14 +795,17 @@ func (h *Hub) handleNotifications(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleQueue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(RenderQueue(h.Queue.List())))
+	w.Write([]byte(RenderTrackedSessions(h.Tracker.List())))
 }
 
-func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
+func (h *Hub) handleArchive(w http.ResponseWriter, r *http.Request) {
 	claudeID := r.FormValue("claude_id")
 	if claudeID != "" {
-		h.Queue.Ack(claudeID)
+		h.Tracker.Archive(claudeID)
+		if s := h.Sessions.Remove(claudeID); s != nil {
+			s.Close()
+		}
 	}
-	w.WriteHeader(204)
+	w.WriteHeader(200)
 }
 

@@ -640,8 +640,8 @@ func TestCloseSession(t *testing.T) {
 	// --- Close session 2 from header (should redirect to /) ---
 	page.MustElement(`#close-btn button`).MustClick()
 
-	// Should redirect to landing page showing the notification queue
-	WaitForText(t, page, ".queue-header", "NEEDS ATTENTION", 5*time.Second)
+	// Should redirect to landing page showing tracked sessions
+	WaitForText(t, page, ".queue-header", "SESSIONS", 5*time.Second)
 	Screenshot(t, page, "close_from_header")
 }
 
