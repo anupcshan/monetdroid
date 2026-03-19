@@ -26,8 +26,34 @@ func testMode() string {
 func TestMain(m *testing.M) {
 	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
 		// Inside the container: run the monetdroid server.
+		os.MkdirAll(containerWorkdir, 0o755)
 		hub := monetdroid.NewHub()
 		mux := monetdroid.RegisterRoutes(hub)
+
+		// Test-only endpoints for file I/O (no bind mount needed).
+		mux.HandleFunc("/test/write", func(w http.ResponseWriter, r *http.Request) {
+			path := r.FormValue("path")
+			content := r.FormValue("content")
+			dir := filepath.Dir(path)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.WriteHeader(204)
+		})
+		mux.HandleFunc("/test/read", func(w http.ResponseWriter, r *http.Request) {
+			data, err := os.ReadFile(r.FormValue("path"))
+			if err != nil {
+				http.Error(w, err.Error(), 404)
+				return
+			}
+			w.Write(data)
+		})
+
 		log.Printf("monetdroid server listening on :8222")
 		if err := http.ListenAndServe(":8222", mux); err != nil {
 			log.Fatal(err)
@@ -67,21 +93,21 @@ func TestMultiTurn(t *testing.T) {
 	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
 
 	// Write files for claude to explore
-	os.WriteFile(filepath.Join(f.TmpDir, "main.go"), []byte(`package main
+	f.WriteFile(containerWorkdir+"/main.go", `package main
 
 import "fmt"
 
 func main() {
 	fmt.Println("hello world")
 }
-`), 0o644)
-	os.WriteFile(filepath.Join(f.TmpDir, "util.go"), []byte(`package main
+`)
+	f.WriteFile(containerWorkdir+"/util.go", `package main
 
 // Add returns the sum of two integers.
 func Add(a, b int) int {
 	return a + b
 }
-`), 0o644)
+`)
 
 	page := f.Page()
 
@@ -130,26 +156,26 @@ func TestToolUse(t *testing.T) {
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 
 	// Write some files into workdir for claude to explore
-	os.WriteFile(filepath.Join(f.TmpDir, "main.go"), []byte(`package main
+	f.WriteFile(containerWorkdir+"/main.go", `package main
 
 import "fmt"
 
 func main() {
 	fmt.Println("hello world")
 }
-`), 0o644)
-	os.WriteFile(filepath.Join(f.TmpDir, "util.go"), []byte(`package main
+`)
+	f.WriteFile(containerWorkdir+"/util.go", `package main
 
 // Add returns the sum of two integers.
 func Add(a, b int) int {
 	return a + b
 }
-`), 0o644)
-	os.WriteFile(filepath.Join(f.TmpDir, "config.go"), []byte(`package main
+`)
+	f.WriteFile(containerWorkdir+"/config.go", `package main
 
 const AppName = "testapp"
 const Version = "1.0.0"
-`), 0o644)
+`)
 
 	page := f.Page()
 
@@ -216,11 +242,8 @@ func TestPermissionFlow(t *testing.T) {
 	}
 
 	// Verify hello.txt was created
-	content, err := os.ReadFile(filepath.Join(f.TmpDir, "hello.txt"))
-	if err != nil {
-		t.Fatalf("hello.txt not created: %v", err)
-	}
-	if !strings.Contains(string(content), "Hello") {
+	content := f.ReadFile(containerWorkdir + "/hello.txt")
+	if !strings.Contains(content, "Hello") {
 		t.Fatalf("hello.txt has unexpected content: %s", content)
 	}
 }
@@ -274,14 +297,14 @@ func TestEditDiff(t *testing.T) {
 	f := SetupWithContainer(t, "edit_diff.jsonl", testMode())
 
 	// Create a file for claude to edit
-	os.WriteFile(filepath.Join(f.TmpDir, "greeting.go"), []byte(`package main
+	f.WriteFile(containerWorkdir+"/greeting.go", `package main
 
 import "fmt"
 
 func main() {
 	fmt.Println("hello world")
 }
-`), 0o644)
+`)
 
 	page := f.Page()
 
@@ -313,14 +336,14 @@ func TestAcceptEdits(t *testing.T) {
 	f := SetupWithContainer(t, "accept_edits.jsonl", testMode())
 
 	// Create files for claude to edit
-	os.WriteFile(filepath.Join(f.TmpDir, "greeting.go"), []byte(`package main
+	f.WriteFile(containerWorkdir+"/greeting.go", `package main
 
 import "fmt"
 
 func main() {
 	fmt.Println("hello world")
 }
-`), 0o644)
+`)
 
 	page := f.Page()
 
@@ -378,11 +401,8 @@ func main() {
 	}
 
 	// Verify the file was edited
-	content, err := os.ReadFile(filepath.Join(f.TmpDir, "greeting.go"))
-	if err != nil {
-		t.Fatalf("greeting.go not found: %v", err)
-	}
-	if !strings.Contains(string(content), "greetings") {
+	content := f.ReadFile(containerWorkdir + "/greeting.go")
+	if !strings.Contains(content, "greetings") {
 		t.Fatalf("greeting.go should contain 'greetings', got: %s", content)
 	}
 
@@ -410,11 +430,8 @@ func main() {
 	Screenshot(t, page, "accept_edits_third_turn")
 
 	// Verify final edit landed
-	content, err = os.ReadFile(filepath.Join(f.TmpDir, "greeting.go"))
-	if err != nil {
-		t.Fatalf("greeting.go not found: %v", err)
-	}
-	if !strings.Contains(string(content), "howdy") {
+	content = f.ReadFile(containerWorkdir + "/greeting.go")
+	if !strings.Contains(content, "howdy") {
 		t.Fatalf("greeting.go should contain 'howdy', got: %s", content)
 	}
 }
@@ -424,21 +441,21 @@ func TestSessionReload(t *testing.T) {
 	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
 
 	// Write files (same as TestMultiTurn — needed for tool execution)
-	os.WriteFile(filepath.Join(f.TmpDir, "main.go"), []byte(`package main
+	f.WriteFile(containerWorkdir+"/main.go", `package main
 
 import "fmt"
 
 func main() {
 	fmt.Println("hello world")
 }
-`), 0o644)
-	os.WriteFile(filepath.Join(f.TmpDir, "util.go"), []byte(`package main
+`)
+	f.WriteFile(containerWorkdir+"/util.go", `package main
 
 // Add returns the sum of two integers.
 func Add(a, b int) int {
 	return a + b
 }
-`), 0o644)
+`)
 
 	page := f.Page()
 
@@ -499,8 +516,9 @@ func TestDrawer(t *testing.T) {
 	f := SetupWithContainer(t, "drawer.jsonl", testMode())
 
 	// Two distinct work directories so they appear as separate history groups.
-	os.MkdirAll(filepath.Join(f.TmpDir, "project-alpha"), 0o755)
-	os.MkdirAll(filepath.Join(f.TmpDir, "project-beta"), 0o755)
+	// Create subdirectories via WriteFile (it creates parent dirs).
+	f.WriteFile(containerWorkdir+"/project-alpha/.keep", "")
+	f.WriteFile(containerWorkdir+"/project-beta/.keep", "")
 	dir1 := containerWorkdir + "/project-alpha"
 	dir2 := containerWorkdir + "/project-beta"
 
@@ -600,8 +618,9 @@ func TestCloseSession(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "drawer.jsonl", testMode())
 
-	os.MkdirAll(filepath.Join(f.TmpDir, "project-alpha"), 0o755)
-	os.MkdirAll(filepath.Join(f.TmpDir, "project-beta"), 0o755)
+	// Create subdirectories via WriteFile (it creates parent dirs).
+	f.WriteFile(containerWorkdir+"/project-alpha/.keep", "")
+	f.WriteFile(containerWorkdir+"/project-beta/.keep", "")
 	dir1 := containerWorkdir + "/project-alpha"
 	dir2 := containerWorkdir + "/project-beta"
 

@@ -2,6 +2,7 @@ package integration
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -55,8 +56,38 @@ type ContainerFixture struct {
 	T           *testing.T
 	ServerURL   string
 	Browser     *rod.Browser
-	TmpDir      string // host path — use for file I/O (os.WriteFile, os.ReadFile)
 	ReplayerURL string
+}
+
+// WriteFile writes a file inside the container via the test HTTP endpoint.
+func (f *ContainerFixture) WriteFile(path, content string) {
+	f.T.Helper()
+	resp, err := http.PostForm(f.ServerURL+"/test/write", map[string][]string{
+		"path":    {path},
+		"content": {content},
+	})
+	if err != nil {
+		f.T.Fatalf("WriteFile(%s): %v", path, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		f.T.Fatalf("WriteFile(%s): status %d", path, resp.StatusCode)
+	}
+}
+
+// ReadFile reads a file from the container via the test HTTP endpoint.
+func (f *ContainerFixture) ReadFile(path string) string {
+	f.T.Helper()
+	resp, err := http.Get(f.ServerURL + "/test/read?path=" + path)
+	if err != nil {
+		f.T.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		f.T.Fatalf("ReadFile(%s): status %d: %s", path, resp.StatusCode, data)
+	}
+	return string(data)
 }
 
 // SetupWithContainer starts a docker container running the monetdroid server
@@ -92,8 +123,6 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 	replayer := NewReplayer(t, cassettePath, mode, upstream)
 	replayerURL := replayer.Start()
 
-	tmpDir := t.TempDir()
-
 	// Get the test binary path — we bind-mount it into the container
 	testBinary, err := os.Executable()
 	if err != nil {
@@ -105,7 +134,6 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		"--add-host=host.docker.internal:host-gateway",
 		"-p", "0:8222",
 		"-v", testBinary + ":/test:ro",
-		"-v", tmpDir + ":" + containerWorkdir,
 		"-e", "MONETDROID_IN_CONTAINER=1",
 		"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
 		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
@@ -183,7 +211,6 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		T:           t,
 		ServerURL:   serverURL,
 		Browser:     browser,
-		TmpDir:      tmpDir,
 		ReplayerURL: replayerURL,
 	}
 }
