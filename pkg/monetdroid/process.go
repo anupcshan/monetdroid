@@ -32,7 +32,7 @@ type ClaudeProcess struct {
 // StartProcess starts a new claude CLI subprocess.
 // sess may be nil for new sessions (before the ClaudeID is known).
 // If resume is non-empty, passes --resume to restore conversation state.
-func StartProcess(sess *Session, cwd string, buildCmd func(cwd string, args []string) *exec.Cmd, broadcast func(ServerMsg), resume string) (*ClaudeProcess, error) {
+func StartProcess(sess *Session, cwd string, broadcast func(ServerMsg), resume string) (*ClaudeProcess, error) {
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -45,14 +45,9 @@ func StartProcess(sess *Session, cwd string, buildCmd func(cwd string, args []st
 		args = append(args, "--resume", resume)
 	}
 
-	var cmd *exec.Cmd
-	if buildCmd != nil {
-		cmd = buildCmd(cwd, args)
-	} else {
-		cmd = exec.Command("claude", args...)
-		cmd.Dir = cwd
-		cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
-	}
+	cmd := exec.Command("claude", args...)
+	cmd.Dir = cwd
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

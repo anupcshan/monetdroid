@@ -229,7 +229,11 @@ func (r *Replayer) handleRecord(w http.ResponseWriter, req *http.Request) {
 // Start starts the replayer on a random port and returns its URL.
 // The server is automatically stopped when the test ends.
 func (r *Replayer) Start() string {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Listen on all interfaces so containers using bridge networking can reach
+	// the replayer via host.docker.internal. This exposes the replayer on the
+	// network during test runs. In record mode the replayer proxies to the real
+	// Anthropic API using your credentials — only run on trusted networks.
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		r.t.Fatalf("replayer listen: %v", err)
 	}
@@ -242,8 +246,9 @@ func (r *Replayer) Start() string {
 		}
 	})
 
-	url := "http://" + listener.Addr().String()
-	r.t.Logf("replayer: listening on %s (mode=%s)", url, r.mode)
+	port := listener.Addr().(*net.TCPAddr).Port
+	url := fmt.Sprintf("http://host.docker.internal:%d", port)
+	r.t.Logf("replayer: listening on :%d (mode=%s)", port, r.mode)
 	return url
 }
 

@@ -2,11 +2,16 @@ package integration
 
 import (
 	"flag"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anupcshan/monetdroid/pkg/monetdroid"
+	"github.com/go-rod/rod"
 )
 
 var record = flag.Bool("record", false, "record new cassettes (requires subscription auth)")
@@ -16,6 +21,20 @@ func testMode() string {
 		return "record"
 	}
 	return "replay"
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
+		// Inside the container: run the monetdroid server.
+		hub := monetdroid.NewHub()
+		mux := monetdroid.RegisterRoutes(hub)
+		log.Printf("monetdroid server listening on :8222")
+		if err := http.ListenAndServe(":8222", mux); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	os.Exit(m.Run())
 }
 
 func TestEmptyState(t *testing.T) {
@@ -36,10 +55,10 @@ func TestCreateSession(t *testing.T) {
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
 	Screenshot(t, page, "new_session_popover")
 
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
 
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 	Screenshot(t, page, "session_created")
 }
 
@@ -48,7 +67,7 @@ func TestMultiTurn(t *testing.T) {
 	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
 
 	// Write files for claude to explore
-	os.WriteFile(filepath.Join(f.WorkDir, "main.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "main.go"), []byte(`package main
 
 import "fmt"
 
@@ -56,7 +75,7 @@ func main() {
 	fmt.Println("hello world")
 }
 `), 0o644)
-	os.WriteFile(filepath.Join(f.WorkDir, "util.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "util.go"), []byte(`package main
 
 // Add returns the sum of two integers.
 func Add(a, b int) int {
@@ -69,9 +88,9 @@ func Add(a, b int) int {
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// First turn: ask about the files
 	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
@@ -111,7 +130,7 @@ func TestToolUse(t *testing.T) {
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 
 	// Write some files into workdir for claude to explore
-	os.WriteFile(filepath.Join(f.WorkDir, "main.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "main.go"), []byte(`package main
 
 import "fmt"
 
@@ -119,14 +138,14 @@ func main() {
 	fmt.Println("hello world")
 }
 `), 0o644)
-	os.WriteFile(filepath.Join(f.WorkDir, "util.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "util.go"), []byte(`package main
 
 // Add returns the sum of two integers.
 func Add(a, b int) int {
 	return a + b
 }
 `), 0o644)
-	os.WriteFile(filepath.Join(f.WorkDir, "config.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "config.go"), []byte(`package main
 
 const AppName = "testapp"
 const Version = "1.0.0"
@@ -137,9 +156,9 @@ const Version = "1.0.0"
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Send a prompt that triggers multiple tool calls
 	page.MustElement(`textarea[name="text"]`).MustInput("Read all three Go files and summarize what each one does")
@@ -166,9 +185,9 @@ func TestPermissionFlow(t *testing.T) {
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask claude to create a file (triggers Write permission)
 	page.MustElement(`textarea[name="text"]`).MustInput("Create a file called hello.txt containing 'Hello, World!'")
@@ -197,7 +216,7 @@ func TestPermissionFlow(t *testing.T) {
 	}
 
 	// Verify hello.txt was created
-	content, err := os.ReadFile(filepath.Join(f.WorkDir, "hello.txt"))
+	content, err := os.ReadFile(filepath.Join(f.TmpDir, "hello.txt"))
 	if err != nil {
 		t.Fatalf("hello.txt not created: %v", err)
 	}
@@ -214,9 +233,9 @@ func TestAskUserQuestion(t *testing.T) {
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask something that triggers AskUserQuestion
 	page.MustElement(`textarea[name="text"]`).MustInput("I want to set up a new project. Use the AskUserQuestion tool to ask me what programming language I prefer, with options: Go, Python, Rust, TypeScript")
@@ -255,7 +274,7 @@ func TestEditDiff(t *testing.T) {
 	f := SetupWithContainer(t, "edit_diff.jsonl", testMode())
 
 	// Create a file for claude to edit
-	os.WriteFile(filepath.Join(f.WorkDir, "greeting.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "greeting.go"), []byte(`package main
 
 import "fmt"
 
@@ -269,9 +288,9 @@ func main() {
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask claude to edit the file
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
@@ -294,7 +313,7 @@ func TestAcceptEdits(t *testing.T) {
 	f := SetupWithContainer(t, "accept_edits.jsonl", testMode())
 
 	// Create files for claude to edit
-	os.WriteFile(filepath.Join(f.WorkDir, "greeting.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "greeting.go"), []byte(`package main
 
 import "fmt"
 
@@ -308,9 +327,9 @@ func main() {
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask claude to edit the file — triggers Edit permission with "Accept Edits" suggestion
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
@@ -359,7 +378,7 @@ func main() {
 	}
 
 	// Verify the file was edited
-	content, err := os.ReadFile(filepath.Join(f.WorkDir, "greeting.go"))
+	content, err := os.ReadFile(filepath.Join(f.TmpDir, "greeting.go"))
 	if err != nil {
 		t.Fatalf("greeting.go not found: %v", err)
 	}
@@ -391,7 +410,7 @@ func main() {
 	Screenshot(t, page, "accept_edits_third_turn")
 
 	// Verify final edit landed
-	content, err = os.ReadFile(filepath.Join(f.WorkDir, "greeting.go"))
+	content, err = os.ReadFile(filepath.Join(f.TmpDir, "greeting.go"))
 	if err != nil {
 		t.Fatalf("greeting.go not found: %v", err)
 	}
@@ -405,7 +424,7 @@ func TestSessionReload(t *testing.T) {
 	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
 
 	// Write files (same as TestMultiTurn — needed for tool execution)
-	os.WriteFile(filepath.Join(f.WorkDir, "main.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "main.go"), []byte(`package main
 
 import "fmt"
 
@@ -413,7 +432,7 @@ func main() {
 	fmt.Println("hello world")
 }
 `), 0o644)
-	os.WriteFile(filepath.Join(f.WorkDir, "util.go"), []byte(`package main
+	os.WriteFile(filepath.Join(f.TmpDir, "util.go"), []byte(`package main
 
 // Add returns the sum of two integers.
 func Add(a, b int) int {
@@ -426,9 +445,9 @@ func Add(a, b int) int {
 	// Create session and do two turns (generates enough content to overflow)
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// First turn
 	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
@@ -480,10 +499,10 @@ func TestDrawer(t *testing.T) {
 	f := SetupWithContainer(t, "drawer.jsonl", testMode())
 
 	// Two distinct work directories so they appear as separate history groups.
-	dir1 := filepath.Join(f.WorkDir, "project-alpha")
-	dir2 := filepath.Join(f.WorkDir, "project-beta")
-	os.MkdirAll(dir1, 0o755)
-	os.MkdirAll(dir2, 0o755)
+	os.MkdirAll(filepath.Join(f.TmpDir, "project-alpha"), 0o755)
+	os.MkdirAll(filepath.Join(f.TmpDir, "project-beta"), 0o755)
+	dir1 := containerWorkdir + "/project-alpha"
+	dir2 := containerWorkdir + "/project-beta"
 
 	page := f.Page()
 
@@ -581,10 +600,10 @@ func TestCloseSession(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "drawer.jsonl", testMode())
 
-	dir1 := filepath.Join(f.WorkDir, "project-alpha")
-	dir2 := filepath.Join(f.WorkDir, "project-beta")
-	os.MkdirAll(dir1, 0o755)
-	os.MkdirAll(dir2, 0o755)
+	os.MkdirAll(filepath.Join(f.TmpDir, "project-alpha"), 0o755)
+	os.MkdirAll(filepath.Join(f.TmpDir, "project-beta"), 0o755)
+	dir1 := containerWorkdir + "/project-alpha"
+	dir2 := containerWorkdir + "/project-beta"
 
 	page := f.Page()
 
@@ -625,7 +644,9 @@ func TestCloseSession(t *testing.T) {
 	row1.MustElement(".drawer-close-btn").MustClick()
 
 	// Wait for the row to be removed (drawer stays open for multi-close)
-	page.MustWait(`() => !document.querySelector('#drawer-content').innerHTML.includes('Say hello')`)
+	if err := page.Timeout(10 * time.Second).Wait(rod.Eval(`() => ![...document.querySelectorAll('.drawer-item-row')].some(el => el.textContent.includes('Say hello'))`)); err != nil {
+		t.Fatalf("drawer item 'Say hello' was not removed: %v", err)
+	}
 	Screenshot(t, page, "close_from_drawer")
 
 	// Only 1 active session remaining in the still-open drawer
@@ -646,17 +667,16 @@ func TestCloseSession(t *testing.T) {
 }
 
 func TestBashSpinner(t *testing.T) {
-	// Not parallel: uses shared /tmp/claude-0 bind mount for background task output
-	// t.Parallel()
+	t.Parallel()
 	f := SetupWithContainer(t, "bash_spinner.jsonl", testMode())
 	page := f.Page()
 
 	// Create session
 	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
 	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(f.WorkDir)
+	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
 	page.MustElement(`#new-session-popover .btn-create`).MustClick()
-	WaitForText(t, page, "#session-label", f.WorkDir, 5*time.Second)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Background Bash command — tests spinner lifecycle AND streaming output.
 	// The sleep between steps gives time to observe partial output.
@@ -731,4 +751,3 @@ func TestBashSpinner(t *testing.T) {
 	}
 	Screenshot(t, page, "bash_spinner_reload")
 }
-

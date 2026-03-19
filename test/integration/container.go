@@ -2,22 +2,28 @@ package integration
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 )
 
 const dockerImage = "monetdroid-claude-test"
+
+const containerWorkdir = "/work"
+
+// containerTimeout is the maximum lifetime of a test container.
+// The container's entrypoint uses `timeout` to self-terminate after this duration,
+// ensuring cleanup even if the test process crashes or CI is killed.
+const containerTimeout = 300 // seconds
 
 var buildOnce sync.Once
 var buildErr error
@@ -49,16 +55,16 @@ type ContainerFixture struct {
 	T           *testing.T
 	ServerURL   string
 	Browser     *rod.Browser
-	Hub         *monetdroid.Hub
-	WorkDir     string
+	TmpDir      string // host path — use for file I/O (os.WriteFile, os.ReadFile)
 	ReplayerURL string
 }
 
-// SetupWithContainer starts the server with claude running inside a docker container
+// SetupWithContainer starts a docker container running the monetdroid server
+// (the test binary itself in server mode) with claude available as a subprocess,
 // and an API replayer intercepting Anthropic API calls.
 //
 // mode is "record" or "replay".
-// cassetteName is the filename under testdata/cassettes/ (e.g. "simple_hello.jsonl").
+// cassetteName is the filename under testdata/cassettes/ (e.g. "tool_use.jsonl").
 func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixture {
 	t.Helper()
 
@@ -81,93 +87,91 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		}
 	}
 
-	// Start replayer
+	// Start replayer on the host
 	upstream := "https://api.anthropic.com"
 	replayer := NewReplayer(t, cassettePath, mode, upstream)
 	replayerURL := replayer.Start()
 
-	workDir := t.TempDir()
+	tmpDir := t.TempDir()
 
-	// The CLI writes background task output to /tmp/claude-<uid>/<cwd>/tasks/.
-	// Container runs as root (uid 0), so the path is /tmp/claude-0/.
-	// Bind-mount at the same absolute path so TailBgTask on the host can read
-	// the files at the path reported in the tool_result.
-	// NOTE: concurrent container tests sharing this path may interfere.
-	const claudeTmpDir = "/tmp/claude-0"
-	os.RemoveAll(claudeTmpDir)
-	os.MkdirAll(claudeTmpDir, 0o755)
-
-	// Named docker volume for persistent claude home across container invocations.
-	// Needed for --resume to find the session file from a previous turn.
-	volName := fmt.Sprintf("monetdroid-test-%s-%d", t.Name(), time.Now().UnixNano())
-	out, err := exec.Command("docker", "volume", "create", volName).CombinedOutput()
+	// Get the test binary path — we bind-mount it into the container
+	testBinary, err := os.Executable()
 	if err != nil {
-		t.Fatalf("docker volume create: %v\n%s", err, out)
+		t.Fatalf("os.Executable: %v", err)
 	}
+
+	dockerArgs := []string{
+		"run", "--rm", "-d",
+		"--add-host=host.docker.internal:host-gateway",
+		"-p", "0:8222",
+		"-v", testBinary + ":/test:ro",
+		"-v", tmpDir + ":" + containerWorkdir,
+		"-e", "MONETDROID_IN_CONTAINER=1",
+		"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
+		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+	}
+
+	if mode == "record" {
+		home, _ := os.UserHomeDir()
+		credsFile := filepath.Join(home, ".claude", ".credentials.json")
+		if _, err := os.Stat(credsFile); err == nil {
+			dockerArgs = append(dockerArgs,
+				"-v", credsFile+":/root/.claude/.credentials.json:ro",
+			)
+		} else {
+			t.Logf("warning: credentials file %s not found, recording may fail", credsFile)
+		}
+	} else {
+		dockerArgs = append(dockerArgs, "-e", "ANTHROPIC_API_KEY=dummy-replay-key")
+	}
+
+	dockerArgs = append(dockerArgs, dockerImage,
+		"timeout", fmt.Sprintf("%d", containerTimeout), "/test",
+	)
+
+	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v\n%s", err, out)
+	}
+	containerID := strings.TrimSpace(string(out))
+	t.Logf("started container %s", containerID[:12])
+
+	// Stream container logs to test output
+	logCmd := exec.Command("docker", "logs", "-f", containerID)
+	logCmd.Stdout = t.Output()
+	logCmd.Stderr = t.Output()
+	logCmd.Start()
+
 	t.Cleanup(func() {
-		exec.Command("docker", "volume", "rm", volName).Run()
+		exec.Command("docker", "stop", "-t", "5", containerID).Run()
+		logCmd.Wait()
 	})
 
-	// Start server (use temp dir for queue/labels to isolate from host)
-	hub := monetdroid.NewHubWithDataDir(t.TempDir())
-
-	// Set BuildClaudeCmd on the hub to run claude in a container
-	hub.BuildClaudeCmd = func(cwd string, args []string) *exec.Cmd {
-		dockerArgs := []string{
-			"run", "--rm", "-i",
-			"--network=host",
-			"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
-			"-v", cwd + ":/work",
-			"-w", "/work",
-			"-v", volName + ":/root/.claude",
-			"-v", claudeTmpDir + ":" + claudeTmpDir,
-		}
-
-		if mode == "record" {
-			// Bind-mount credentials into the persistent claude home for subscription auth
-			home, _ := os.UserHomeDir()
-			credsFile := filepath.Join(home, ".claude", ".credentials.json")
-			if _, err := os.Stat(credsFile); err == nil {
-				dockerArgs = append(dockerArgs,
-					"-v", credsFile+":/root/.claude/.credentials.json:ro",
-				)
-			} else {
-				t.Logf("warning: credentials file %s not found, recording may fail", credsFile)
-			}
-		} else {
-			// Replay mode: dummy API key so CLI doesn't complain
-			dockerArgs = append(dockerArgs, "-e", "ANTHROPIC_API_KEY=dummy-replay-key")
-		}
-
-		dockerArgs = append(dockerArgs, dockerImage)
-		// claude args follow the image name (ENTRYPOINT is "claude")
-		dockerArgs = append(dockerArgs, args...)
-
-		cmd := exec.Command("docker", dockerArgs...)
-		cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
-		return cmd
-	}
-	t.Cleanup(func() { hub.Close() })
-
-	mux := monetdroid.RegisterRoutes(hub)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Discover the host port mapped to container port 8222
+	portOut, err := exec.Command("docker", "port", containerID, "8222").Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("docker port: %v", err)
 	}
-	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
-	t.Cleanup(func() { server.Close() })
+	hostAddr := strings.TrimSpace(string(portOut))
+	// Output is like "0.0.0.0:32768\n[::]:32768"; take the first line
+	if i := strings.Index(hostAddr, "\n"); i >= 0 {
+		hostAddr = hostAddr[:i]
+	}
+	serverURL := fmt.Sprintf("http://127.0.0.1:%s", hostAddr[strings.LastIndex(hostAddr, ":")+1:])
 
-	serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
-
-	// Wait for server
-	for i := 0; i < 50; i++ {
+	// Wait for server to be ready
+	ready := false
+	for i := 0; i < 100; i++ {
 		resp, err := http.Get(serverURL)
 		if err == nil {
 			resp.Body.Close()
+			ready = true
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatalf("server not ready after 10s (check container output above)")
 	}
 
 	// Launch headless browser
@@ -179,8 +183,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		T:           t,
 		ServerURL:   serverURL,
 		Browser:     browser,
-		Hub:         hub,
-		WorkDir:     workDir,
+		TmpDir:      tmpDir,
 		ReplayerURL: replayerURL,
 	}
 }

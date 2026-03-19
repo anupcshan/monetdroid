@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -86,10 +85,6 @@ type Hub struct {
 	Tracker       *SessionTracker
 	Labels        *LabelStore
 	mu            sync.RWMutex
-
-	// BuildClaudeCmd overrides how the claude command is constructed.
-	// If nil, defaults to exec.Command("claude", args...) with cwd set.
-	BuildClaudeCmd func(cwd string, args []string) *exec.Cmd
 }
 
 // Close kills all active claude processes.
@@ -354,7 +349,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 			h.Broadcast(msg)
 		}
 		var err error
-		proc, err = StartProcess(s, s.GetCwd(), h.BuildClaudeCmd, logBroadcast, s.ID)
+		proc, err = StartProcess(s, s.GetCwd(), logBroadcast, s.ID)
 		if err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return

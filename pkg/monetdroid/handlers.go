@@ -324,7 +324,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			s.Append(msg)
 			h.Broadcast(msg)
 		}
-		proc, err := StartProcess(nil, cwd, h.BuildClaudeCmd, logBroadcast, "")
+		proc, err := StartProcess(nil, cwd, logBroadcast, "")
 		if err != nil {
 			log.Printf("[send] start process failed: %s", err)
 			w.WriteHeader(500)
