@@ -2,10 +2,12 @@ package integration
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,7 @@ func TestMain(m *testing.M) {
 		}
 		return
 	}
+	flag.Set("test.parallel", fmt.Sprintf("%d", runtime.NumCPU()/2))
 	os.Exit(m.Run())
 }
 
