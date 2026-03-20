@@ -521,14 +521,14 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 	// Reconstruct the original input from the stored permission request
 	permInput := s.FindPermInput(permID)
 
-	if permInput == nil || len(permInput.Questions) == 0 {
+	if permInput == nil || permInput.Ask == nil || len(permInput.Ask.Questions) == 0 {
 		w.WriteHeader(204)
 		return
 	}
 
 	// Build the answers map from form values
 	answers := make(map[string]string)
-	for qi, q := range permInput.Questions {
+	for qi, q := range permInput.Ask.Questions {
 		fieldName := fmt.Sprintf("answer_%d", qi)
 
 		if q.MultiSelect {

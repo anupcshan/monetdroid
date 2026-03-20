@@ -32,7 +32,7 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 				if b.Name == "AskUserQuestion" {
 					continue // rendered by the permission prompt UI
 				}
-				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: b.Input})
+				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: ParseToolInput(b.Name, b.RawInput)})
 			}
 		}
 		if u := event.Message.Usage; u != nil {

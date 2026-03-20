@@ -43,42 +43,41 @@ func ToolChipSummary(tool string, input *ToolInput) string {
 	if input == nil {
 		return tool
 	}
-	filePath := input.ResolvedPath()
 	short := filepath.Base
-	switch tool {
-	case "Read", "FileRead":
-		if filePath == "" {
+	switch {
+	case input.Read != nil:
+		if input.Read.FilePath == "" {
 			return "Read"
 		}
-		name := short(filePath)
-		if input.Offset > 0 && input.Limit > 0 {
-			return fmt.Sprintf("Read %s:%d-%d", name, input.Offset, input.Offset+input.Limit)
+		name := short(input.Read.FilePath)
+		if input.Read.Offset > 0 && input.Read.Limit > 0 {
+			return fmt.Sprintf("Read %s:%d-%d", name, input.Read.Offset, input.Read.Offset+input.Read.Limit)
 		}
-		if input.Offset > 0 {
-			return fmt.Sprintf("Read %s:%d+", name, input.Offset)
+		if input.Read.Offset > 0 {
+			return fmt.Sprintf("Read %s:%d+", name, input.Read.Offset)
 		}
 		return "Read " + name
-	case "Write", "FileWrite":
-		if filePath != "" {
-			return "Write " + short(filePath)
+	case input.Write != nil:
+		if input.Write.FilePath != "" {
+			return "Write " + short(input.Write.FilePath)
 		}
 		return "Write"
-	case "Grep":
-		if input.Pattern == "" {
+	case input.Grep != nil:
+		if input.Grep.Pattern == "" {
 			return "Grep"
 		}
-		if filePath != "" {
-			return fmt.Sprintf("Grep /%s/ in %s", input.Pattern, short(filePath))
+		if input.Grep.Path != "" {
+			return fmt.Sprintf("Grep /%s/ in %s", input.Grep.Pattern, short(input.Grep.Path))
 		}
-		return fmt.Sprintf("Grep /%s/", input.Pattern)
-	case "Glob":
-		if input.Pattern != "" {
-			return "Glob " + input.Pattern
+		return fmt.Sprintf("Grep /%s/", input.Grep.Pattern)
+	case input.Glob != nil:
+		if input.Glob.Pattern != "" {
+			return "Glob " + input.Glob.Pattern
 		}
 		return "Glob"
-	case "Bash":
-		if input.Command != "" {
-			return input.Command
+	case input.Bash != nil:
+		if input.Bash.Command != "" {
+			return input.Bash.Command
 		}
 		return "Bash"
 	}
@@ -89,73 +88,81 @@ func FormatToolInput(tool string, input *ToolInput) string {
 	if input == nil {
 		return ""
 	}
-	filePath := input.ResolvedPath()
-	switch tool {
-	case "Bash":
-		if input.Command != "" {
-			return input.Command
+	switch {
+	case input.Bash != nil:
+		if input.Bash.Command != "" {
+			return input.Bash.Command
 		}
-	case "Read", "FileRead":
-		if filePath != "" {
-			return filePath
+	case input.Read != nil:
+		if input.Read.FilePath != "" {
+			return input.Read.FilePath
 		}
-	case "Write", "FileWrite":
-		content := input.Content
+	case input.Write != nil:
+		content := input.Write.Content
 		if len(content) > 200 {
 			content = content[:200]
 		}
-		return filePath + "\n" + content
-	case "Edit", "FileEdit":
+		return input.Write.FilePath + "\n" + content
+	case input.Edit != nil:
 		var lines []string
-		lines = append(lines, filePath)
-		if input.OldString != "" {
-			lines = append(lines, "--- old ---", input.OldString)
+		lines = append(lines, input.Edit.FilePath)
+		if input.Edit.OldString != "" {
+			lines = append(lines, "--- old ---", input.Edit.OldString)
 		}
-		if input.NewString != "" {
-			lines = append(lines, "+++ new +++", input.NewString)
+		if input.Edit.NewString != "" {
+			lines = append(lines, "+++ new +++", input.Edit.NewString)
 		}
 		return strings.Join(lines, "\n")
-	case "Grep":
-		if input.Pattern != "" {
-			return input.Pattern
+	case input.Grep != nil:
+		if input.Grep.Pattern != "" {
+			return input.Grep.Pattern
 		}
-	case "Glob":
-		if input.Pattern != "" {
-			return input.Pattern
+	case input.Glob != nil:
+		if input.Glob.Pattern != "" {
+			return input.Glob.Pattern
 		}
 	}
-	j, _ := json.MarshalIndent(input, "", "  ")
-	return string(j)
+	// Fallback: pretty-print raw JSON (works for unknown tools)
+	if input.Raw != nil {
+		var buf bytes.Buffer
+		json.Indent(&buf, input.Raw, "", "  ")
+		return buf.String()
+	}
+	return ""
 }
 
 func FormatPermDetail(tool string, input *ToolInput) string {
 	if input == nil {
 		return ""
 	}
-	filePath := input.ResolvedPath()
-	switch tool {
-	case "Bash":
-		if input.Description != "" {
-			return input.Description + "\n\n" + input.Command
+	switch {
+	case input.Bash != nil:
+		if input.Bash.Description != "" {
+			return input.Bash.Description + "\n\n" + input.Bash.Command
 		}
-		return input.Command
-	case "Edit", "FileEdit":
+		return input.Bash.Command
+	case input.Edit != nil:
 		var lines []string
-		lines = append(lines, filePath)
-		if input.OldString != "" {
-			lines = append(lines, "--- old ---", input.OldString)
+		lines = append(lines, input.Edit.FilePath)
+		if input.Edit.OldString != "" {
+			lines = append(lines, "--- old ---", input.Edit.OldString)
 		}
-		if input.NewString != "" {
-			lines = append(lines, "+++ new +++", input.NewString)
+		if input.Edit.NewString != "" {
+			lines = append(lines, "+++ new +++", input.Edit.NewString)
 		}
 		return strings.Join(lines, "\n")
-	case "Write", "FileWrite":
-		return filePath + "\n\n" + input.Content
-	case "Read", "FileRead":
-		return filePath
+	case input.Write != nil:
+		return input.Write.FilePath + "\n\n" + input.Write.Content
+	case input.Read != nil:
+		return input.Read.FilePath
 	}
-	j, _ := json.MarshalIndent(input, "", "  ")
-	return string(j)
+	// Fallback: pretty-print raw JSON (works for unknown tools)
+	if input.Raw != nil {
+		var buf bytes.Buffer
+		json.Indent(&buf, input.Raw, "", "  ")
+		return buf.String()
+	}
+	return ""
 }
 
 var chromaFormatter = chromahtml.New()
@@ -242,12 +249,12 @@ func splitDiffByFile(fullDiff string) []string {
 }
 
 func editDiffFromInput(input *ToolInput) (filePath, oldStr, newStr string, ok bool) {
-	if input == nil {
+	if input == nil || input.Edit == nil {
 		return
 	}
-	filePath = input.ResolvedPath()
-	oldStr = input.OldString
-	newStr = input.NewString
+	filePath = input.Edit.FilePath
+	oldStr = input.Edit.OldString
+	newStr = input.Edit.NewString
 	ok = true
 	return
 }
@@ -396,7 +403,7 @@ func RenderPermission(msg ServerMsg) string {
 }
 
 func RenderAskUser(msg ServerMsg) string {
-	if msg.PermInput == nil || len(msg.PermInput.Questions) == 0 {
+	if msg.PermInput == nil || msg.PermInput.Ask == nil || len(msg.PermInput.Ask.Questions) == 0 {
 		return ""
 	}
 
@@ -406,7 +413,7 @@ func RenderAskUser(msg ServerMsg) string {
 	fmt.Fprintf(&b, `<input type="hidden" name="session_id" value="%s">`, Esc(msg.SessionID))
 	fmt.Fprintf(&b, `<input type="hidden" name="perm_id" value="%s">`, Esc(msg.PermID))
 
-	for qi, q := range msg.PermInput.Questions {
+	for qi, q := range msg.PermInput.Ask.Questions {
 		b.WriteString(`<div class="ask-question">`)
 		if q.Header != "" {
 			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(q.Header))
@@ -453,18 +460,18 @@ func RenderAskUser(msg ServerMsg) string {
 
 // RenderAskUserStatic renders a read-only Q&A summary for history/replay.
 func RenderAskUserStatic(input *ToolInput) string {
-	if input == nil || len(input.Questions) == 0 {
+	if input == nil || input.Ask == nil || len(input.Ask.Questions) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString(`<div class="perm-prompt ask-user">`)
-	for _, q := range input.Questions {
+	for _, q := range input.Ask.Questions {
 		b.WriteString(`<div class="ask-question">`)
 		if q.Header != "" {
 			fmt.Fprintf(&b, `<div class="ask-header">%s</div>`, Esc(q.Header))
 		}
-		if ans, ok := input.Answers[q.Question]; ok {
+		if ans, ok := input.Ask.Answers[q.Question]; ok {
 			fmt.Fprintf(&b, `<div class="ask-answered"><span class="ask-text">%s</span> <span style="color:var(--tool)">%s</span></div>`, Esc(q.Question), Esc(ans))
 		} else {
 			fmt.Fprintf(&b, `<div class="ask-text">%s</div>`, Esc(q.Question))
@@ -550,10 +557,10 @@ func FormatTokens(used, window int) string {
 }
 
 func ParseTodos(input *ToolInput) []Todo {
-	if input == nil {
+	if input == nil || input.Todo == nil {
 		return nil
 	}
-	return input.Todos
+	return input.Todo.Todos
 }
 
 func RenderTodosSummary(todos []Todo) string {

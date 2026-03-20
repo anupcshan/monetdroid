@@ -73,7 +73,7 @@ func (r *ctlIncomingRequest) UnmarshalJSON(data []byte) error {
 		Subtype               string           `json:"subtype"`
 		ToolName              string           `json:"tool_name"`
 		ToolUseID             string           `json:"tool_use_id"`
-		Input                 *ToolInput       `json:"input"`
+		RawInput              json.RawMessage  `json:"input"`
 		DecisionReason        string           `json:"decision_reason"`
 		PermissionSuggestions []PermSuggestion `json:"permission_suggestions"`
 		BlockedPath           string           `json:"blocked_path"`
@@ -84,7 +84,7 @@ func (r *ctlIncomingRequest) UnmarshalJSON(data []byte) error {
 	r.Subtype = req.Subtype
 	r.ToolName = req.ToolName
 	r.ToolUseID = req.ToolUseID
-	r.Input = req.Input
+	r.Input = ParseToolInput(req.ToolName, req.RawInput)
 	r.DecisionReason = req.DecisionReason
 	r.PermissionSuggestions = req.PermissionSuggestions
 	r.BlockedPath = req.BlockedPath
@@ -173,13 +173,13 @@ func (c *streamMessageContent) UnmarshalJSON(data []byte) error {
 }
 
 type streamBlock struct {
-	Type      string       `json:"type"`
-	Text      string       `json:"text,omitempty"`
-	Name      string       `json:"name,omitempty"`
-	ID        string       `json:"id,omitempty"`
-	Input     *ToolInput   `json:"input,omitempty"`
-	ToolUseID string       `json:"tool_use_id,omitempty"`
-	Content   blockContent `json:"content,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	RawInput  json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   blockContent    `json:"content,omitempty"`
 }
 
 type streamUsage struct {
@@ -219,40 +219,114 @@ type userTextBlock struct {
 	Text string `json:"text"`
 }
 
-// --- ToolInput: flat struct for all tool inputs ---
+// --- ToolInput: typed variants per tool + raw JSON for round-tripping ---
 
-// ToolInput is a "fat" struct containing fields from all known tools.
-// Discriminate by tool name; unused fields are zero for other tools.
+// ToolInput wraps per-tool typed structs for rendering/routing and preserves
+// the original raw JSON for lossless round-tripping back to the CLI.
+// Exactly one typed variant is set for known tools; Raw is always set.
 type ToolInput struct {
-	// Bash
+	// Raw is the original JSON. Used for MarshalJSON (round-trip) and as
+	// display fallback for unknown tools. Always set by ParseToolInput.
+	Raw json.RawMessage
+
+	// Typed variants — at most one is non-nil.
+	Bash  *BashInput
+	Read  *ReadInput
+	Write *WriteInput
+	Edit  *EditInput
+	Grep  *GrepInput
+	Glob  *GlobInput
+	Todo  *TodoInput
+	Ask   *AskInput
+}
+
+// MarshalJSON returns the preserved raw JSON so unknown fields survive round-trips.
+func (t ToolInput) MarshalJSON() ([]byte, error) {
+	if t.Raw != nil {
+		return t.Raw, nil
+	}
+	return []byte("{}"), nil
+}
+
+// ParseToolInput creates a ToolInput from raw JSON, populating the appropriate
+// typed variant based on tool name. Raw is always preserved.
+func ParseToolInput(tool string, raw json.RawMessage) *ToolInput {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	t := &ToolInput{Raw: append(json.RawMessage(nil), raw...)}
+	switch tool {
+	case "Bash":
+		t.Bash = &BashInput{}
+		json.Unmarshal(raw, t.Bash)
+	case "Read", "FileRead":
+		t.Read = &ReadInput{}
+		json.Unmarshal(raw, t.Read)
+	case "Write", "FileWrite":
+		t.Write = &WriteInput{}
+		json.Unmarshal(raw, t.Write)
+	case "Edit", "FileEdit":
+		t.Edit = &EditInput{}
+		json.Unmarshal(raw, t.Edit)
+	case "Grep":
+		t.Grep = &GrepInput{}
+		json.Unmarshal(raw, t.Grep)
+	case "Glob":
+		t.Glob = &GlobInput{}
+		json.Unmarshal(raw, t.Glob)
+	case "TodoWrite":
+		t.Todo = &TodoInput{}
+		json.Unmarshal(raw, t.Todo)
+	case "AskUserQuestion":
+		t.Ask = &AskInput{}
+		json.Unmarshal(raw, t.Ask)
+	}
+	return t
+}
+
+type BashInput struct {
 	Command         string `json:"command,omitempty"`
 	Description     string `json:"description,omitempty"`
 	Timeout         int    `json:"timeout,omitempty"`
-	RunInBackground *bool  `json:"run_in_background,omitempty"` // pointer: false must round-trip
-	// Read/Write/Edit + Grep/Glob
-	FilePath   string `json:"file_path,omitempty"`
-	Content    string `json:"content,omitempty"`
-	OldString  string `json:"old_string,omitempty"`
-	NewString  string `json:"new_string,omitempty"`
-	ReplaceAll *bool  `json:"replace_all,omitempty"` // pointer: false must round-trip
-	Offset     int    `json:"offset,omitempty"`
-	Limit      int    `json:"limit,omitempty"`
-	Pattern    string `json:"pattern,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Glob       string `json:"glob,omitempty"`
-	// TodoWrite
-	Todos []Todo `json:"todos,omitempty"`
-	// AskUserQuestion
-	Questions []AskQuestion     `json:"questions,omitempty"`
-	Answers   map[string]string `json:"answers,omitempty"`
+	RunInBackground *bool  `json:"run_in_background,omitempty"`
 }
 
-// ResolvedPath returns FilePath if set, else Path.
-func (t *ToolInput) ResolvedPath() string {
-	if t.FilePath != "" {
-		return t.FilePath
-	}
-	return t.Path
+type ReadInput struct {
+	FilePath string `json:"file_path,omitempty"`
+	Offset   int    `json:"offset,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+}
+
+type WriteInput struct {
+	FilePath string `json:"file_path,omitempty"`
+	Content  string `json:"content,omitempty"`
+}
+
+type EditInput struct {
+	FilePath   string `json:"file_path,omitempty"`
+	OldString  string `json:"old_string,omitempty"`
+	NewString  string `json:"new_string,omitempty"`
+	ReplaceAll *bool  `json:"replace_all,omitempty"`
+}
+
+type GrepInput struct {
+	Pattern string `json:"pattern,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Glob    string `json:"glob,omitempty"`
+}
+
+type GlobInput struct {
+	Pattern string `json:"pattern,omitempty"`
+	Path    string `json:"path,omitempty"`
+}
+
+type TodoInput struct {
+	Todos []Todo `json:"todos,omitempty"`
+}
+
+type AskInput struct {
+	Questions []AskQuestion     `json:"questions,omitempty"`
+	Answers   map[string]string `json:"answers,omitempty"`
 }
 
 // AskQuestion represents a single question in AskUserQuestion.
@@ -285,10 +359,21 @@ type PermissionRuleVal struct {
 	RuleContent string `json:"ruleContent,omitempty"`
 }
 
-// buildAskUserResponse creates the updatedInput by copying the original input
-// and adding the answers map, preserving all original fields.
+// buildAskUserResponse creates the updatedInput by merging answers into the
+// raw JSON, preserving all original fields for the CLI round-trip.
 func buildAskUserResponse(input *ToolInput, answers map[string]string) *ToolInput {
-	out := *input
-	out.Answers = answers
-	return &out
+	// Merge "answers" into Raw so MarshalJSON includes it
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(input.Raw, &m); err != nil {
+		m = make(map[string]json.RawMessage)
+	}
+	answersJSON, _ := json.Marshal(answers)
+	m["answers"] = json.RawMessage(answersJSON)
+	merged, _ := json.Marshal(m)
+
+	ask := &AskInput{Answers: answers}
+	if input.Ask != nil {
+		ask.Questions = input.Ask.Questions
+	}
+	return &ToolInput{Raw: merged, Ask: ask}
 }
