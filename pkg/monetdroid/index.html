@@ -835,23 +835,23 @@
   }
 
   /* --- New session (popover) --- */
-  #new-session-popover {
+  #new-session-popover, .ws-popover {
     padding: 24px 20px;
     width: min(400px, 90vw);
   }
-  #new-session-popover h3 {
+  #new-session-popover h3, .ws-popover h3 {
     font-size: 16px;
     font-weight: 600;
     margin-bottom: 16px;
   }
-  #new-session-popover label {
+  #new-session-popover label, .ws-popover label {
     font-size: 13px;
     color: var(--text2);
     display: block;
     margin-bottom: 6px;
     font-weight: 500;
   }
-  #new-session-popover input[type="text"] {
+  #new-session-popover input[type="text"], .ws-popover input[type="text"] {
     width: 100%;
     background: var(--surface2);
     border: 1px solid var(--border);
@@ -863,7 +863,7 @@
     outline: none;
     margin-bottom: 16px;
   }
-  #new-session-popover input:focus { border-color: var(--accent); }
+  #new-session-popover input:focus, .ws-popover input:focus { border-color: var(--accent); }
   .modal-actions {
     display: flex;
     gap: 10px;
@@ -1055,11 +1055,11 @@
 
 <!-- New session popover -->
 <div popover id="new-session-popover">
-  <h3>New Session</h3>
-  <form hx-post="/new" hx-swap="none"
+  <h3>New Workstream</h3>
+  <form hx-post="/new-workstream" hx-swap="none"
         hx-on::after-request="document.getElementById('new-session-popover').hidePopover()">
-    <label>Label</label>
-    <input type="text" name="label" placeholder="fix auth flaky test">
+    <label>Name</label>
+    <input type="text" name="name" placeholder="auth-refactor" required>
     <label>Project directory</label>
     <input type="text" name="cwd" placeholder="~/projects/my-app">
     <div class="modal-actions">
@@ -1067,7 +1067,21 @@
       <button type="submit" class="btn-create">Create</button>
     </div>
   </form>
+  <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+  <details>
+    <summary style="font-size:13px;color:var(--text2);cursor:pointer">Plain session (no branch)</summary>
+    <form hx-post="/new" hx-swap="none" style="margin-top:12px"
+          hx-on::after-request="document.getElementById('new-session-popover').hidePopover()">
+      <label>Label</label>
+      <input type="text" name="label" placeholder="fix auth flaky test">
+      <label>Project directory</label>
+      <input type="text" name="cwd" placeholder="~/projects/my-app">
+      <div class="modal-actions">
+        <button type="button" class="btn-cancel" popovertarget="new-session-popover" popovertargetaction="hide">Cancel</button>
+        <button type="submit" class="btn-create">Create</button>
+      </div>
+    </form>
+  </details>
 </div>
-undefined
 </body>
 </html>

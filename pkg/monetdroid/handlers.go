@@ -26,6 +26,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/", hub.handleIndex)
 	mux.HandleFunc("/events", hub.handleEvents)
 	mux.HandleFunc("/new", hub.handleNewSession)
+	mux.HandleFunc("/new-workstream", hub.handleNewWorkstream)
 	mux.HandleFunc("/send", hub.handleSend)
 	mux.HandleFunc("/perm", hub.handlePerm)
 	mux.HandleFunc("/perm-answer", hub.handlePermAnswer)
@@ -270,6 +271,32 @@ func (h *Hub) handleNewSession(w http.ResponseWriter, r *http.Request) {
 	if label := r.FormValue("label"); label != "" {
 		u += "&label=" + url.QueryEscape(label)
 	}
+	w.Header().Set("HX-Redirect", u)
+}
+
+func (h *Hub) handleNewWorkstream(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	cwd := r.FormValue("cwd")
+	if cwd == "" {
+		http.Error(w, "cwd is required", http.StatusBadRequest)
+		return
+	}
+	if strings.HasPrefix(cwd, "~/") {
+		home, _ := os.UserHomeDir()
+		cwd = home + cwd[1:]
+	}
+
+	wtPath, err := CreateWorkstream(cwd, name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	u := "/?cwd=" + url.QueryEscape(wtPath) + "&label=" + url.QueryEscape(name)
 	w.Header().Set("HX-Redirect", u)
 }
 
@@ -577,7 +604,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				summary = "(no label)"
 			}
 
-			sp := ShortPath(ts.Cwd)
+			sp := ShortPath(MainWorktree(ts.Cwd))
 
 			var statusHTML string
 			switch ts.Status {
@@ -614,9 +641,10 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 	groups, err := ScanHistory()
 	if err == nil && len(groups) > 0 {
 		buf.WriteString(`<div class="drawer-section-label">History</div>`)
-		for _, group := range groups {
+		for i, group := range groups {
 			sp := ShortPath(group.Dir)
-			fmt.Fprintf(&buf, `<details class="history-group"><summary class="history-group-header">%s <span style="color:var(--text2);font-size:10px">(%d)</span><button class="new-session-btn" hx-post="/new" hx-vals='{"cwd":"%s"}' hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover()" onclick="event.stopPropagation()">+</button></summary><div class="history-group-items">`, Esc(sp), len(group.Sessions), Esc(group.Dir))
+			popoverID := fmt.Sprintf("new-ws-%d", i)
+			fmt.Fprintf(&buf, `<details class="history-group"><summary class="history-group-header">%s <span style="color:var(--text2);font-size:10px">(%d)</span><button class="new-session-btn" popovertarget="%s" onclick="event.stopPropagation()">+</button></summary><div class="history-group-items">`, Esc(sp), len(group.Sessions), popoverID)
 			for _, sess := range group.Sessions {
 				ago := TimeAgo(sess.ModTime)
 				summary := h.Labels.Get(sess.ID)
@@ -644,6 +672,19 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				)
 			}
 			buf.WriteString(`</div></details>`)
+			fmt.Fprintf(&buf,
+				`<div popover id="%s" class="ws-popover">`+
+					`<h3>New Workstream</h3>`+
+					`<form hx-post="/new-workstream" hx-swap="none" hx-on::after-request="document.getElementById('drawer').hidePopover();document.getElementById('%s').hidePopover()">`+
+					`<input type="hidden" name="cwd" value="%s">`+
+					`<label>Name</label>`+
+					`<input type="text" name="name" placeholder="auth-refactor" required>`+
+					`<div class="modal-actions">`+
+					`<button type="button" class="btn-cancel" popovertarget="%s" popovertargetaction="hide">Cancel</button>`+
+					`<button type="submit" class="btn-create">Create</button>`+
+					`</div></form></div>`,
+				popoverID, popoverID, Esc(group.Dir), popoverID,
+			)
 		}
 	}
 

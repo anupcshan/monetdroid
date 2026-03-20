@@ -222,7 +222,7 @@ func ScanHistory() ([]HistoryGroup, error) {
 		}
 		mg, exists := merged[key]
 		if !exists {
-			mg = &mergedGroup{dir: rg.cwd}
+			mg = &mergedGroup{dir: MainWorktree(rg.cwd)}
 			merged[key] = mg
 			mergeOrder = append(mergeOrder, key)
 		}

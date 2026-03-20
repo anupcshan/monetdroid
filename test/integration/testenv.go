@@ -56,3 +56,15 @@ func TestdataDir() string {
 	_, filename, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(filename), "testdata")
 }
+
+// CreatePlainSession opens the header "+" popover, expands the "Plain session"
+// details, fills in the cwd, and clicks Create.
+func CreatePlainSession(t *testing.T, page *rod.Page, cwd string) {
+	t.Helper()
+	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
+	WaitForElement(t, page, `#new-session-popover details summary`, 5*time.Second)
+	page.MustElement(`#new-session-popover details summary`).MustClick()
+	WaitForElement(t, page, `#new-session-popover details input[name="cwd"]`, 5*time.Second)
+	page.MustElement(`#new-session-popover details input[name="cwd"]`).MustInput(cwd)
+	page.MustElement(`#new-session-popover details .btn-create`).MustClick()
+}

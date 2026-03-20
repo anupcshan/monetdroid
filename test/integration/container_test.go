@@ -77,12 +77,8 @@ func TestCreateSession(t *testing.T) {
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 	page := f.Page()
 
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
+	CreatePlainSession(t, page, containerWorkdir)
 	Screenshot(t, page, "new_session_popover")
-
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
 
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 	Screenshot(t, page, "session_created")
@@ -112,10 +108,7 @@ func Add(a, b int) int {
 	page := f.Page()
 
 	// Create session
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// First turn: ask about the files
@@ -180,10 +173,7 @@ const Version = "1.0.0"
 	page := f.Page()
 
 	// Create session
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Send a prompt that triggers multiple tool calls
@@ -209,10 +199,7 @@ func TestPermissionFlow(t *testing.T) {
 	page := f.Page()
 
 	// Create session
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask claude to create a file (triggers Write permission)
@@ -254,10 +241,7 @@ func TestAskUserQuestion(t *testing.T) {
 	page := f.Page()
 
 	// Create session
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask something that triggers AskUserQuestion
@@ -309,10 +293,7 @@ func main() {
 	page := f.Page()
 
 	// Create session
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask claude to edit the file
@@ -348,10 +329,7 @@ func main() {
 	page := f.Page()
 
 	// Create session
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Ask claude to edit the file — triggers Edit permission with "Accept Edits" suggestion
@@ -460,10 +438,7 @@ func Add(a, b int) int {
 	page := f.Page()
 
 	// Create session and do two turns (generates enough content to overflow)
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// First turn
@@ -525,10 +500,7 @@ func TestDrawer(t *testing.T) {
 	page := f.Page()
 
 	// --- Session 1 ---
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir1)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, dir1)
 
 	// Wait for redirect to ?cwd= and session label to render
 	WaitForText(t, page, "#session-label", "project-alpha", 5*time.Second)
@@ -553,10 +525,7 @@ func TestDrawer(t *testing.T) {
 	Screenshot(t, page, "drawer_session1")
 
 	// --- Session 2 ---
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir2)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, dir2)
 
 	WaitForText(t, page, "#session-label", "project-beta", 5*time.Second)
 
@@ -627,10 +596,7 @@ func TestCloseSession(t *testing.T) {
 	page := f.Page()
 
 	// --- Create two sessions ---
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir1)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, dir1)
 	WaitForText(t, page, "#session-label", "project-alpha", 5*time.Second)
 
 	page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
@@ -638,10 +604,7 @@ func TestCloseSession(t *testing.T) {
 	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(dir2)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, dir2)
 	WaitForText(t, page, "#session-label", "project-beta", 5*time.Second)
 
 	page.MustElement(`textarea[name="text"]`).MustInput("Say goodbye")
@@ -691,10 +654,7 @@ func TestBashSpinner(t *testing.T) {
 	page := f.Page()
 
 	// Create session
-	page.MustElement(`button[popovertarget="new-session-popover"]`).MustClick()
-	WaitForElement(t, page, `#new-session-popover input[name="cwd"]`, 5*time.Second)
-	page.MustElement(`#new-session-popover input[name="cwd"]`).MustInput(containerWorkdir)
-	page.MustElement(`#new-session-popover .btn-create`).MustClick()
+	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Background Bash command — tests spinner lifecycle AND streaming output.
@@ -769,4 +729,124 @@ func TestBashSpinner(t *testing.T) {
 		t.Fatalf("expected 0 spinners after reload, got %d", reloadSpinners)
 	}
 	Screenshot(t, page, "bash_spinner_reload")
+}
+
+// initGitRepo initializes a git repo inside the container at the given path.
+func initGitRepo(t *testing.T, f *ContainerFixture, dir string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"git", "config", "--global", "safe.directory", "*"},
+		{"git", "init", dir},
+		{"git", "-C", dir, "config", "user.email", "test@test.com"},
+		{"git", "-C", dir, "config", "user.name", "Test"},
+		{"git", "-C", dir, "commit", "--allow-empty", "-m", "init"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("initGitRepo %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+func TestDrawerNewWorkstream(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "drawer.jsonl", testMode())
+
+	initGitRepo(t, f, containerWorkdir)
+
+	page := f.Page()
+
+	// Create a plain session and do a turn so the repo appears in history.
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Open drawer — history group should have the repo.
+	page.MustElement(`button[popovertarget="drawer"]`).MustClick()
+	WaitForElement(t, page, ".history-group", 5*time.Second)
+	Screenshot(t, page, "drawer_ws_history")
+
+	// Click "+" on the history group to open the workstream popover.
+	page.MustElement(`.new-session-btn`).MustClick()
+	WaitForElement(t, page, `.ws-popover input[name="name"]`, 5*time.Second)
+	Screenshot(t, page, "drawer_ws_popover")
+
+	// Fill in the workstream name and submit.
+	page.MustElement(`.ws-popover input[name="name"]`).MustInput("test-ws")
+	page.MustElement(`.ws-popover .btn-create`).MustClick()
+
+	// Should redirect to a session in the worktree with the label.
+	WaitForText(t, page, "#session-label", "test-ws", 10*time.Second)
+	Screenshot(t, page, "drawer_ws_created")
+
+	// URL should contain the worktree path and label.
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	if !strings.Contains(currentURL, "label=test-ws") {
+		t.Fatalf("URL should contain label=test-ws, got: %s", currentURL)
+	}
+	if !strings.Contains(currentURL, "worktrees") {
+		t.Fatalf("URL should contain worktrees path, got: %s", currentURL)
+	}
+
+	// Verify the branch was created inside the container.
+	out, err := f.DockerExec("git", "-C", containerWorkdir, "branch", "--list", "test-ws")
+	if err != nil {
+		t.Fatalf("git branch --list: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "test-ws") {
+		t.Fatalf("branch test-ws not found, got: %s", out)
+	}
+
+	// Do a turn in the workstream so it generates a JSONL file.
+	page.MustElement(`textarea[name="text"]`).MustInput("Say hello from workstream")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Open drawer — both sessions should be in the same history group.
+	page.MustElement(`button[popovertarget="drawer"]`).MustClick()
+	WaitForElement(t, page, ".history-group", 5*time.Second)
+	Screenshot(t, page, "drawer_ws_grouped")
+
+	// There should be exactly one history group (worktree merged with main repo).
+	groups := page.MustElements(".history-group")
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 history group, got %d", len(groups))
+	}
+
+	// Both tracked sessions should show /work as their path.
+	items := page.MustElements(".drawer-item")
+	if len(items) != 2 {
+		t.Fatalf("expected 2 tracked sessions, got %d", len(items))
+	}
+	for i, item := range items {
+		path := item.MustElement(".di-path").MustText()
+		if strings.Contains(path, "worktrees") {
+			t.Fatalf("session %d path should show main repo, not worktree: %s", i, path)
+		}
+		if !strings.Contains(path, "/work") {
+			t.Fatalf("session %d path should contain /work, got: %s", i, path)
+		}
+	}
+	// First session (most recent) should be the workstream.
+	wsName := items[0].MustElement(".di-name").MustText()
+	if !strings.Contains(wsName, "test-ws") {
+		t.Fatalf("first tracked session should be test-ws, got: %s", wsName)
+	}
+
+	// Navigate to home page (no active session) and verify landing page cards.
+	page.MustNavigate(f.ServerURL + "/")
+	WaitForElement(t, page, ".queue-item", 10*time.Second)
+	Screenshot(t, page, "drawer_ws_landing")
+
+	qiCwds := page.MustElements(".qi-cwd")
+	for i, el := range qiCwds {
+		cwd := el.MustText()
+		if strings.Contains(cwd, "worktrees") {
+			t.Fatalf("landing page session %d should show main repo, not worktree: %s", i, cwd)
+		}
+	}
 }

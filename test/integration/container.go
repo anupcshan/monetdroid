@@ -54,6 +54,7 @@ func buildDockerImage(t *testing.T) {
 // ContainerFixture holds everything needed for a container-based integration test.
 type ContainerFixture struct {
 	T           *testing.T
+	containerID string
 	ServerURL   string
 	Browser     *rod.Browser
 	ReplayerURL string
@@ -88,6 +89,14 @@ func (f *ContainerFixture) ReadFile(path string) string {
 		f.T.Fatalf("ReadFile(%s): status %d: %s", path, resp.StatusCode, data)
 	}
 	return string(data)
+}
+
+// DockerExec runs a command inside the test container.
+func (f *ContainerFixture) DockerExec(args ...string) (string, error) {
+	f.T.Helper()
+	cmdArgs := append([]string{"exec", f.containerID}, args...)
+	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
 // SetupWithContainer starts a docker container running the monetdroid server
@@ -209,6 +218,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 
 	return &ContainerFixture{
 		T:           t,
+		containerID: containerID,
 		ServerURL:   serverURL,
 		Browser:     browser,
 		ReplayerURL: replayerURL,

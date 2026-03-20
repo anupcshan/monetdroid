@@ -2,6 +2,7 @@ package monetdroid
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -25,6 +26,91 @@ func GitCommonDir(cwd string) string {
 	}
 	p = filepath.Clean(p)
 	return p
+}
+
+// MainWorktree resolves a cwd (which may be a linked worktree) to the main
+// worktree's root directory. Falls back to cwd if not a git repo.
+func MainWorktree(cwd string) string {
+	gcd := GitCommonDir(cwd)
+	if gcd == "" {
+		return cwd
+	}
+	return filepath.Dir(gcd) // /work/.git → /work
+}
+
+// GitToplevel returns the repository root directory.
+func GitToplevel(cwd string) string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// GitDefaultBranch returns the default branch name (e.g. "main" or "master").
+func GitDefaultBranch(cwd string) string {
+	// Try the symbolic ref for origin/HEAD first.
+	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd.Dir = cwd
+	if out, err := cmd.Output(); err == nil {
+		ref := strings.TrimSpace(string(out))
+		// refs/remotes/origin/main → main
+		if i := strings.LastIndex(ref, "/"); i >= 0 {
+			return ref[i+1:]
+		}
+	}
+	// Fallback: check if "main" exists, otherwise "master".
+	for _, name := range []string{"main", "master"} {
+		cmd = exec.Command("git", "rev-parse", "--verify", "refs/heads/"+name)
+		cmd.Dir = cwd
+		if cmd.Run() == nil {
+			return name
+		}
+	}
+	return "main"
+}
+
+// WorktreeDir returns the path where Monetdroid stores worktrees for a repo.
+// Layout: ~/.monetdroid/worktrees/<repo-basename>/
+func WorktreeDir(repoRoot string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".monetdroid", "worktrees", filepath.Base(repoRoot))
+}
+
+// CreateWorkstream creates a new branch off the default branch and a worktree for it.
+// Returns the worktree path.
+func CreateWorkstream(cwd, name string) (string, error) {
+	repoRoot := GitToplevel(cwd)
+	if repoRoot == "" {
+		return "", fmt.Errorf("not a git repository: %s", cwd)
+	}
+
+	defaultBranch := GitDefaultBranch(repoRoot)
+
+	// Create branch off the default branch.
+	cmd := exec.Command("git", "branch", name, defaultBranch)
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git branch: %s", strings.TrimSpace(string(out)))
+	}
+
+	// Create worktree.
+	wtDir := WorktreeDir(repoRoot)
+	wtPath := filepath.Join(wtDir, name)
+	cmd = exec.Command("git", "worktree", "add", wtPath, name)
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Clean up the branch if worktree creation fails.
+		exec.Command("git", "-C", repoRoot, "branch", "-d", name).Run()
+		return "", fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
+	}
+
+	return wtPath, nil
 }
 
 type DiffStat struct {

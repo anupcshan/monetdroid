@@ -677,7 +677,7 @@ func RenderTrackedSessions(items []TrackedSession) string {
 		}
 		fmt.Fprintf(&b, `<div class="qi-label"><span>%s</span>%s</div>`, Esc(displayLabel), renderBranchChips(item.Branches))
 		if item.Cwd != "" {
-			fmt.Fprintf(&b, `<div class="qi-cwd">%s</div>`, Esc(ShortPath(item.Cwd)))
+			fmt.Fprintf(&b, `<div class="qi-cwd">%s</div>`, Esc(ShortPath(MainWorktree(item.Cwd))))
 		}
 		if result != "" {
 			fmt.Fprintf(&b, `<div class="qi-result">%s</div>`, Esc(result))
