@@ -437,6 +437,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 		fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))))
 	chromeParts = append(chromeParts, OobSwap("close-btn", "outerHTML",
 		`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`))
+	chromeParts = append(chromeParts, CwdCopyButton(s.GetCwd()))
 
 	if snap.Running {
 		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))

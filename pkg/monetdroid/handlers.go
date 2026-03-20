@@ -224,6 +224,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf(`<input type="hidden" name="cwd" id="session-cwd" value="%s">`, Esc(cwd))))
 			chromeParts = append(chromeParts, OobSwap("session-label-value", "outerHTML",
 				fmt.Sprintf(`<input type="hidden" name="label" id="session-label-value" value="%s">`, Esc(label))))
+			chromeParts = append(chromeParts, CwdCopyButton(cwd))
 			chromeParts = append(chromeParts, OobSwap("messages", "innerHTML", ""))
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
@@ -419,6 +420,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			OobSwap("session-label", "innerHTML", Esc(sessionLabel)),
 			OobSwap("close-btn", "outerHTML",
 				`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`),
+			CwdCopyButton(s.GetCwd()),
 		}, "\n")))
 
 		// Broadcast user message and running state

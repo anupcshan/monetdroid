@@ -723,6 +723,18 @@ func stripSpinner(html, toolUseID string) string {
 	return html
 }
 
+// CwdCopyButton returns the OOB-swappable cwd toggle button and cwd row HTML.
+// Pass empty cwd to hide the button and clear the row.
+func CwdCopyButton(cwd string) string {
+	if cwd == "" {
+		return `<button class="header-btn" id="cwd-copy" hx-swap-oob="outerHTML" style="display:none">📁</button>` +
+			`<div class="cwd-row" id="cwd-row" hx-swap-oob="outerHTML"></div>`
+	}
+	return fmt.Sprintf(`<button class="header-btn" id="cwd-copy" hx-swap-oob="outerHTML" hx-on:click="this.closest('.header').classList.toggle('show-cwd')">📁</button>`+
+		`<div class="cwd-row" id="cwd-row" hx-swap-oob="outerHTML">%s</div>`,
+		Esc(ShortPath(cwd)))
+}
+
 func OobSwap(id, strategy, content string) string {
 	return fmt.Sprintf(`<div id="%s" hx-swap-oob="%s">%s</div>`, id, strategy, content)
 }

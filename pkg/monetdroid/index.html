@@ -56,7 +56,21 @@
     background: var(--surface);
     flex-shrink: 0;
     gap: 12px;
+    flex-wrap: wrap;
   }
+  .cwd-row {
+    display: none;
+    width: 100%;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text2);
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 0 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .header.show-cwd .cwd-row { display: block; }
   .session-label {
     font-size: 12px;
     color: var(--text2);
@@ -1007,9 +1021,11 @@
     <button class="header-btn" popovertarget="drawer" hx-get="/drawer" hx-target="#drawer-content" hx-swap="innerHTML">☰</button>
     <a href="/" class="header-btn" style="text-decoration:none">⌂</a>
     <div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">no session</div>
+    <button class="header-btn" id="cwd-copy" style="display:none" hx-on:click="this.closest('.header').classList.toggle('show-cwd')">📁</button>
     <span id="running-dot" style="display:none"></span>
     <form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id" style="display:none"><button class="header-btn" type="submit" title="Close session">✕</button></form>
     <button class="header-btn" popovertarget="new-session-popover">+</button>
+    <div class="cwd-row" id="cwd-row"></div>
   </div>
 
   <div class="mode-bar" id="mode-bar"></div>
