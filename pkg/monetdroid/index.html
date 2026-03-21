@@ -731,19 +731,20 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
   }
+  .queue-content form { display: contents; }
   .queue-label {
     color: var(--accent);
     font-weight: 600;
     flex-shrink: 0;
   }
-  .queue-text {
+  .queue-preview {
     color: var(--text2);
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .queue-cancel {
+  .queue-btn {
     background: none;
     border: 1px solid var(--border);
     color: var(--text2);
@@ -753,7 +754,26 @@
     cursor: pointer;
     flex-shrink: 0;
   }
-  .queue-cancel:active { background: var(--surface2); }
+  .queue-btn:active { background: var(--surface2); }
+  .queue-send { color: var(--accent); border-color: var(--accent); }
+  .queue-editing { flex-wrap: wrap; }
+  .queue-editing form { display: flex; flex: 1; gap: 8px; align-items: flex-start; min-width: 0; }
+  .queue-text {
+    color: var(--text);
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    resize: none;
+    min-height: 1.4em;
+    max-height: 4em;
+    field-sizing: content;
+  }
+  .queue-text:focus { outline: none; border-color: var(--accent); }
+  .queue-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
   /* --- Input --- */
   .input-area {

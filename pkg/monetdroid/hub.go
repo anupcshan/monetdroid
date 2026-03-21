@@ -342,6 +342,15 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	proc := s.ResetInterruptAndGetProc()
 
+	// Drain any stale turnDone from previously untracked turns
+	// (e.g. messages injected during permission-blocked state).
+	if proc != nil {
+		select {
+		case <-proc.turnDone:
+		default:
+		}
+	}
+
 	// Ensure process is alive
 	if proc == nil || proc.IsDead() {
 		logBroadcast := func(msg ServerMsg) {
@@ -360,6 +369,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	// Auto-label from first user message
 	s.TryAutoLabel(text)
 
+	s.SetRunning(true)
 	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
@@ -367,36 +377,43 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	go func() {
 		if err := proc.SendUserMessage(text, images); err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+			s.SetRunning(false)
 			return
 		}
+		h.waitAndDrainLoop(s, proc)
+	}()
+}
 
-		// Wait for turn to complete (result event or process death)
+// waitAndDrainLoop waits for the current turn to complete, then drains
+// any queued messages, sending each as a new turn. Loops until the queue
+// is empty or the session is interrupted.
+func (h *Hub) waitAndDrainLoop(s *Session, proc *ClaudeProcess) {
+	for {
 		select {
 		case <-proc.turnDone:
 		case <-proc.dead:
 		}
 
+		s.SetRunning(false)
 		h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 
-		// Handle queued message
 		interrupted, next := s.DrainQueue()
-
-		if !interrupted && next != "" {
-			h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")))
-			s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
-			h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
-			h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
-			if err := proc.SendUserMessage(next, nil); err != nil {
-				h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
-				return
-			}
-			select {
-			case <-proc.turnDone:
-			case <-proc.dead:
-			}
-			h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
+		if interrupted || next == "" {
+			break
 		}
-	}()
+
+		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")))
+		s.SetRunning(true)
+		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
+		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
+
+		if err := proc.SendUserMessage(next, nil); err != nil {
+			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+			s.SetRunning(false)
+			return
+		}
+	}
 }
 
 // SeedEventLog populates a session's EventLog from its current state.

@@ -116,6 +116,18 @@ func (s *Session) GetPermChan(id string) (chan PermResponse, bool) {
 	return ch, ok
 }
 
+func (s *Session) HasPendingPerms() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.PermChans) > 0
+}
+
+func (s *Session) GetProc() *ClaudeProcess {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.proc
+}
+
 func (s *Session) LastAssistantText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -174,6 +186,12 @@ func (s *Session) ClearQueue() {
 	s.mu.Lock()
 	s.QueuedText = ""
 	s.mu.Unlock()
+}
+
+func (s *Session) GetQueuedText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.QueuedText
 }
 
 // --- Map operations ---
@@ -306,18 +324,13 @@ func (s *Session) ResetInterruptAndGetProc() *ClaudeProcess {
 	return proc
 }
 
-// EnqueueMessage adds text to the queue if running. Returns whether queued and the full queue text.
-//
-// Known race: two concurrent enqueues (e.g. from two browsers) can return queue snapshots
-// that, if broadcast by the caller, arrive out of order — leaving the UI showing a stale
-// queue that is missing a message. The user may believe their message was lost.
-// Fixing this properly requires atomically serializing enqueue and broadcast, but Session
-// is a state object with no view concerns. A per-session mutex at the Hub level would
-// deadlock with turn-completion goroutines that hold Session.mu and then broadcast.
+// EnqueueMessage adds text to the queue if actively streaming (running with
+// no pending permission requests). Returns whether queued and the full queue text.
+// When permission-blocked, returns false so the caller can inject immediately.
 func (s *Session) EnqueueMessage(text string) (bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.Running {
+	if !s.Running || len(s.PermChans) > 0 {
 		return false, ""
 	}
 	if s.QueuedText != "" {

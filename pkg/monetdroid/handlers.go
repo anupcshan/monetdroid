@@ -431,14 +431,9 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		// Unblock scan goroutine to start broadcasting stream events
 		proc.BindSession(s)
 
-		// Wait for turn completion in background
+		// Wait for turn completion and drain queue in background
 		go func() {
-			select {
-			case <-proc.turnDone:
-			case <-proc.dead:
-			}
-			s.SetRunning(false)
-			h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
+			h.waitAndDrainLoop(s, proc)
 		}()
 
 		w.Header().Set("HX-Replace-Url", sessionURL(s))
@@ -446,8 +441,18 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if queued, queuedText := s.EnqueueMessage(text); queued {
+		// Actively streaming: show editable queue bar
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)))
+	} else if s.HasPendingPerms() {
+		// Permission-blocked: inject message directly into stdin.
+		// The CLI queues it internally and processes it after the current turn.
+		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+		if proc := s.GetProc(); proc != nil {
+			proc.SendUserMessage(text, images)
+		}
 	} else {
+		// Idle: start a new turn
 		h.StartTurn(s, text, images)
 	}
 
@@ -738,12 +743,25 @@ func (h *Hub) handleClose(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.FormValue("session_id")
+	edit := r.FormValue("edit") == "true"
 	s := h.Sessions.Get(sessionID)
-	if s != nil {
-		s.ClearQueue()
-		h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")))
+	if s == nil {
+		w.WriteHeader(204)
+		return
 	}
-	w.WriteHeader(204)
+
+	if edit {
+		text := s.GetQueuedText()
+		s.ClearQueue()
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(RenderQueueEdit(sessionID, text)))
+		return
+	}
+
+	s.ClearQueue()
+	h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")))
+	w.Header().Set("Content-Type", "text/html")
+	w.Write(nil)
 }
 
 func (h *Hub) handleNotifications(w http.ResponseWriter, r *http.Request) {

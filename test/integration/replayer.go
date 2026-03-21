@@ -41,7 +41,18 @@ type Replayer struct {
 	upstream     string // upstream URL for record mode (e.g. "https://api.anthropic.com")
 	cassettePath string
 	t            *testing.T
+
+	// pauseMu acts as a gate for incoming requests. Pause() locks it;
+	// Unpause() unlocks it. Requests acquire and immediately release it,
+	// so they pass through instantly when unpaused but block when paused.
+	pauseMu sync.Mutex
 }
+
+// Pause blocks all future API requests until Unpause is called.
+func (r *Replayer) Pause() { r.pauseMu.Lock() }
+
+// Unpause releases all blocked API requests and resumes normal flow.
+func (r *Replayer) Unpause() { r.pauseMu.Unlock() }
 
 // NewReplayer creates a new replayer. In replay mode, it loads the cassette immediately.
 // In record mode, upstream must be set (e.g. "https://api.anthropic.com").
@@ -103,6 +114,10 @@ func (r *Replayer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
 	req.Body.Close()
+
+	// Gate: blocks while paused, passes through instantly when unpaused.
+	r.pauseMu.Lock()   //nolint:staticcheck // intentional gate pattern
+	r.pauseMu.Unlock() //nolint:staticcheck
 
 	r.mu.Lock()
 	idx := r.nextIdx

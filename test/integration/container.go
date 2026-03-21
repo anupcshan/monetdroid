@@ -58,6 +58,7 @@ type ContainerFixture struct {
 	ServerURL   string
 	Browser     *rod.Browser
 	ReplayerURL string
+	Replayer    *Replayer
 }
 
 // WriteFile writes a file inside the container via the test HTTP endpoint.
@@ -222,6 +223,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		ServerURL:   serverURL,
 		Browser:     browser,
 		ReplayerURL: replayerURL,
+		Replayer:    replayer,
 	}
 }
 

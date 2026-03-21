@@ -853,3 +853,163 @@ func TestDrawerNewWorkstream(t *testing.T) {
 		}
 	}
 }
+
+func TestQueueDuringStreaming(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "queue_streaming.jsonl", testMode())
+
+	f.WriteFile(containerWorkdir+"/main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`)
+	f.WriteFile(containerWorkdir+"/util.go", `package main
+
+// Add returns the sum of two integers.
+func Add(a, b int) int {
+	return a + b
+}
+`)
+
+	page := f.Page()
+
+	// Turn 1: run normally (no pause). Establishes the session.
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	Screenshot(t, page, "queue_turn1_complete")
+
+	// Pause the replayer: all API calls from here will block.
+	f.Replayer.Pause()
+
+	// Turn 2: send a message — Claude CLI sends an API call which blocks.
+	page.MustElement(`textarea[name="text"]`).MustInput("What functions are defined in each file?")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for the running indicator (proves StartTurn ran and set Running=true).
+	WaitForElement(t, page, "#stop-btn button", 10*time.Second)
+	Screenshot(t, page, "queue_turn2_paused")
+
+	// Send a third message while Claude is streaming — should be queued.
+	page.MustElement(`textarea[name="text"]`).MustInput("Thanks for the help")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Queue bar should appear with the queued text.
+	WaitForElement(t, page, ".queue-content", 5*time.Second)
+	queueText := page.MustElement(`.queue-preview`).MustText()
+	if !strings.Contains(queueText, "Thanks for the help") {
+		Screenshot(t, page, "queue_wrong_text")
+		t.Fatalf("expected queue to contain 'Thanks for the help', got: %s", queueText)
+	}
+	Screenshot(t, page, "queue_bar_visible")
+
+	// Unpause: all API calls flow through.
+	f.Replayer.Unpause()
+
+	// Turn 2 completes, queue drains, turn 3 starts and completes.
+	// Wait for the queued message to appear in chat.
+	_, err := page.Timeout(120*time.Second).ElementR(".msg-user", "Thanks for the help")
+	if err != nil {
+		Screenshot(t, page, "queue_drain_fail")
+		t.Fatalf("queued message never appeared in chat: %v", err)
+	}
+
+	// Queue bar should be gone.
+	queueBarHTML := page.MustEval(`() => document.getElementById('queue-bar').innerHTML`).String()
+	if queueBarHTML != "" {
+		Screenshot(t, page, "queue_bar_not_cleared")
+		t.Fatalf("queue bar should be empty after drain, got: %s", queueBarHTML)
+	}
+
+	// Wait for all turns to complete.
+	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+	Screenshot(t, page, "queue_all_complete")
+}
+
+func TestQueueEdit(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "queue_edit.jsonl", testMode())
+
+	f.WriteFile(containerWorkdir+"/main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`)
+	f.WriteFile(containerWorkdir+"/util.go", `package main
+
+// Add returns the sum of two integers.
+func Add(a, b int) int {
+	return a + b
+}
+`)
+
+	page := f.Page()
+
+	// Turn 1: run normally.
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Pause replayer.
+	f.Replayer.Pause()
+
+	// Turn 2: API call blocks.
+	page.MustElement(`textarea[name="text"]`).MustInput("What functions are defined in each file?")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, "#stop-btn button", 10*time.Second)
+
+	// Queue a message.
+	page.MustElement(`textarea[name="text"]`).MustInput("placeholder text")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".queue-content", 5*time.Second)
+
+	// Click Edit — cancels queue on backend, swaps to textarea + Save + ✕.
+	page.MustElement(`.queue-btn`).MustClick()
+	WaitForElement(t, page, `.queue-text`, 5*time.Second)
+
+	// Edit the queued message.
+	queueTA := page.MustElement(`.queue-text`)
+	queueTA.MustSelectAllText().MustInput("What about error handling?")
+	Screenshot(t, page, "queue_edited")
+
+	// Unpause before clicking Send — so the API calls can flow.
+	f.Replayer.Unpause()
+
+	// Click Send — submits /send with the edited text.
+	page.MustElement(`.queue-send`).MustClick()
+
+	// The EDITED message (not the original) should appear in chat.
+	_, err := page.Timeout(120*time.Second).ElementR(".msg-user", "error handling")
+	if err != nil {
+		Screenshot(t, page, "queue_edit_drain_fail")
+		t.Fatalf("edited queued message never appeared in chat: %v", err)
+	}
+
+	// Original placeholder should NOT be in any user message.
+	msgs := page.MustElements(".msg-user")
+	for _, m := range msgs {
+		if strings.Contains(m.MustText(), "placeholder text") {
+			Screenshot(t, page, "queue_edit_original_sent")
+			t.Fatal("original 'placeholder text' was sent instead of edited text")
+		}
+	}
+
+	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+	Screenshot(t, page, "queue_edit_complete")
+}

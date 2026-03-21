@@ -504,9 +504,28 @@ func RenderQueueBar(sessionID, text string) string {
 		return OobSwap("queue-bar", "innerHTML", "")
 	}
 	return OobSwap("queue-bar", "innerHTML", fmt.Sprintf(
-		`<div class="queue-content"><span class="queue-label">queued:</span> <span class="queue-text">%s</span><form hx-post="/cancel-queue" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><button type="submit" class="queue-cancel">✕</button></form></div>`,
-		Esc(text), Esc(sessionID),
+		`<div class="queue-content">`+
+			`<span class="queue-label">queued:</span>`+
+			`<span class="queue-preview">%s</span>`+
+			`<button class="queue-btn" hx-post="/cancel-queue" hx-vals='{"session_id":"%s","edit":"true"}' hx-target="#queue-bar" hx-swap="innerHTML">Edit</button>`+
+			`<button class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
+			`</div>`,
+		Esc(text), Esc(sessionID), Esc(sessionID),
 	))
+}
+
+func RenderQueueEdit(sessionID, text string) string {
+	return fmt.Sprintf(
+		`<div class="queue-content queue-editing">`+
+			`<form hx-post="/send" hx-swap="none">`+
+			`<input type="hidden" name="session_id" value="%s">`+
+			`<textarea class="queue-text" name="text">%s</textarea>`+
+			`<div class="queue-actions">`+
+			`<button type="submit" class="queue-btn queue-send">Send</button>`+
+			`<button type="button" class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
+			`</div></form></div>`,
+		Esc(sessionID), Esc(text), Esc(sessionID),
+	)
 }
 
 func FmtK(n int) string {
