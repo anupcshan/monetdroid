@@ -1007,7 +1007,7 @@
     font-family: 'JetBrains Mono', monospace;
     padding: 6px 12px;
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto auto auto;
     gap: 0 10px;
     align-items: baseline;
   }
@@ -1051,7 +1051,7 @@
     cursor: pointer;
   }
   .ws-actions button:hover { color: var(--text); border-color: var(--text2); }
-  .ws-pull-output {
+  .ws-cmd-output {
     margin-top: 8px;
     font-size: 12px;
     font-family: 'JetBrains Mono', monospace;
@@ -1059,9 +1059,22 @@
     max-height: 200px;
     overflow-y: auto;
   }
-  .ws-pull-line { padding: 1px 0; }
-  .ws-pull-ok { color: var(--tool); }
-  .ws-pull-err { color: var(--accent); font-weight: 500; }
+  .ws-cmd-section { margin-top: 6px; }
+  .ws-cmd-section:first-child { margin-top: 0; }
+  .ws-cmd-header { color: var(--text); font-weight: 600; padding: 2px 0; }
+  .ws-cmd-line { padding: 1px 0; }
+  .ws-cmd-ok { color: var(--tool); }
+  .ws-cmd-err { color: var(--accent); font-weight: 500; }
+  .ws-rebase-btn {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .ws-rebase-btn:hover { color: var(--text); border-color: var(--text2); }
 
   /* --- Empty state --- */
   .empty-state {

@@ -46,6 +46,8 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/archive", hub.handleArchive)
 	mux.HandleFunc("/pull-main", hub.handlePullMain)
 	mux.HandleFunc("/pull-main-stream", hub.handlePullMainStream)
+	mux.HandleFunc("/rebase-workstream", hub.handleRebaseWorkstream)
+	mux.HandleFunc("/refresh-branches", hub.handleRefreshBranches)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
 }
@@ -839,7 +841,7 @@ func (h *Hub) handlePullMain(w http.ResponseWriter, r *http.Request) {
 	}
 	// Return an SSE-connected output area that streams the pull.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="ws-pull-output" class="ws-pull-output" hx-ext="sse" sse-connect="/pull-main-stream?cwd=%s" sse-swap="line" hx-swap="beforeend"></div>`,
+	fmt.Fprintf(w, `<div id="ws-cmd-output" class="ws-cmd-output" hx-ext="sse" sse-connect="/pull-main-stream?cwd=%s" sse-swap="line" hx-swap="beforeend"></div>`,
 		url.QueryEscape(cwd))
 }
 
@@ -865,18 +867,18 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 	// git pull writes progress to stderr.
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">Failed to start: `+Esc(err.Error())+`</div>`))
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-err">Failed to start: `+Esc(err.Error())+`</div>`))
 		flusher.Flush()
 		return
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">Failed to start: `+Esc(err.Error())+`</div>`))
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-err">Failed to start: `+Esc(err.Error())+`</div>`))
 		flusher.Flush()
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">Failed to start: `+Esc(err.Error())+`</div>`))
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-err">Failed to start: `+Esc(err.Error())+`</div>`))
 		flusher.Flush()
 		return
 	}
@@ -905,7 +907,7 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 			if line == "" {
 				continue
 			}
-			fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-line">`+Esc(line)+`</div>`))
+			fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-line">`+Esc(line)+`</div>`))
 			flusher.Flush()
 		}
 	}
@@ -917,20 +919,85 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 	cmdErr := cmd.Wait()
 
 	if cmdErr != nil {
-		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">pull failed: `+Esc(cmdErr.Error())+`</div>`))
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-err">pull failed: `+Esc(cmdErr.Error())+`</div>`))
 		flusher.Flush()
 		return
 	}
 
-	// Success: refresh the branch list via OOB swap, leave output visible.
-	fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-line ws-pull-ok">done</div>`))
+	// Success: show done. User clicks Refresh to update the branch list.
+	fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-line ws-cmd-ok">done</div>`))
 	flusher.Flush()
-	for _, panel := range AllWorkstreams() {
-		branchList := RenderBranchList(panel)
-		branchList = strings.Replace(branchList, `id="ws-branch-list"`, `id="ws-branch-list" hx-swap-oob="outerHTML"`, 1)
-		fmt.Fprint(w, FormatSSE("line", branchList))
-		flusher.Flush()
-		break // TODO: multi-repo
-	}
 }
 
+func (h *Hub) handleRebaseWorkstream(w http.ResponseWriter, r *http.Request) {
+	cwd := r.FormValue("cwd")
+	if cwd == "" {
+		http.Error(w, "cwd is required", http.StatusBadRequest)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	wsName := filepath.Base(cwd)
+	fmt.Fprintf(w, `<div class="ws-cmd-section"><div class="ws-cmd-header">Rebase %s</div>`, Esc(wsName))
+	flusher.Flush()
+
+	defaultBranch := GitDefaultBranch(cwd)
+	branches := branchStack(cwd, defaultBranch)
+	if len(branches) == 0 {
+		fmt.Fprint(w, `<div class="ws-cmd-err">no branches found</div></div>`)
+		flusher.Flush()
+		return
+	}
+
+	for _, br := range branches {
+		upstream := br.Upstream
+		if upstream == "" {
+			upstream = defaultBranch
+		}
+
+		// Checkout the branch.
+		fmt.Fprintf(w, `<div class="ws-cmd-line">git checkout %s</div>`, Esc(br.Name))
+		flusher.Flush()
+		cmd := exec.Command("git", "checkout", br.Name)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(w, `<div class="ws-cmd-err">%s</div></div>`, Esc(strings.TrimSpace(string(out))))
+			flusher.Flush()
+			return
+		}
+
+		// Rebase onto upstream.
+		fmt.Fprintf(w, `<div class="ws-cmd-line">git rebase %s</div>`, Esc(upstream))
+		flusher.Flush()
+		cmd = exec.Command("git", "rebase", upstream)
+		cmd.Dir = cwd
+		out, err := cmd.CombinedOutput()
+		outStr := strings.TrimSpace(string(out))
+		if outStr != "" {
+			fmt.Fprintf(w, `<div class="ws-cmd-line">%s</div>`, Esc(outStr))
+			flusher.Flush()
+		}
+		if err != nil {
+			fmt.Fprint(w, `<div class="ws-cmd-err">rebase failed — resolve conflicts and run git rebase --continue</div></div>`)
+			flusher.Flush()
+			return
+		}
+	}
+
+	fmt.Fprint(w, `<div class="ws-cmd-line ws-cmd-ok">done</div></div>`)
+	flusher.Flush()
+}
+
+func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	var html string
+	for _, panel := range AllWorkstreams() {
+		html += RenderBranchList(panel)
+	}
+	fmt.Fprint(w, html)
+}

@@ -738,8 +738,7 @@ func TestBashSpinner(t *testing.T) {
 func initGitRepo(t *testing.T, f *ContainerFixture, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
-		{"git", "config", "--global", "safe.directory", "*"},
-		{"git", "init", dir},
+		{"git", "init", "-b", "main", dir},
 		{"git", "-C", dir, "config", "user.email", "test@test.com"},
 		{"git", "-C", dir, "config", "user.name", "Test"},
 		{"git", "-C", dir, "commit", "--allow-empty", "-m", "init"},
@@ -1012,4 +1011,125 @@ func Add(a, b int) int {
 
 	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
 	Screenshot(t, page, "queue_edit_complete")
+}
+
+func TestRebaseWorkstream(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+
+	// Set up git repo with a main branch.
+	initGitRepo(t, f, containerWorkdir)
+
+	// Create a workstream: branch + worktree.
+	wsPath := "/root/.monetdroid/worktrees/work/test-rebase"
+	for _, args := range [][]string{
+		{"git", "-C", containerWorkdir, "branch", "test-rebase"},
+		{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-rebase"},
+		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-rebase"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Add a commit to main so the workstream is behind.
+	for _, args := range [][]string{
+		{"git", "-C", containerWorkdir, "commit", "--allow-empty", "-m", "main advance"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Navigate to landing page.
+	page := f.Page()
+	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	Screenshot(t, page, "rebase_before")
+
+	// Verify the branch shows ↓1.
+	WaitForText(t, page, ".ws-behind", "↓1", 5*time.Second)
+
+	// Verify rebase button is present and click it.
+	btn := WaitForElement(t, page, ".ws-rebase-btn", 5*time.Second)
+	btn.MustClick()
+
+	// Wait for "done" in the output.
+	WaitForText(t, page, ".ws-cmd-ok", "done", 10*time.Second)
+	Screenshot(t, page, "rebase_done")
+
+	// Click refresh to update the branch list.
+	page.MustElement(`button.btn-sm[hx-get*="refresh"]`).MustClick()
+	time.Sleep(1 * time.Second)
+	Screenshot(t, page, "rebase_refreshed")
+
+	// Branch should now be in sync (no ↓ indicator).
+	rows := page.MustElements(".ws-branch-row.ws-child")
+	for _, row := range rows {
+		text := row.MustText()
+		if strings.Contains(text, "↓") {
+			t.Fatalf("expected branch to be in sync after rebase, got: %s", text)
+		}
+	}
+}
+
+func TestPullMain(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+
+	// Set up git repo with a remote.
+	initGitRepo(t, f, containerWorkdir)
+
+	// Create a bare remote and push to it.
+	for _, args := range [][]string{
+		{"git", "init", "--bare", "-b", "main", "/tmp/remote.git"},
+		{"git", "-C", containerWorkdir, "remote", "add", "origin", "/tmp/remote.git"},
+		{"git", "-C", containerWorkdir, "push", "-u", "origin", "main"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Create a workstream so the panel shows up.
+	wsPath := "/root/.monetdroid/worktrees/work/test-pull"
+	for _, args := range [][]string{
+		{"git", "-C", containerWorkdir, "branch", "test-pull"},
+		{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-pull"},
+		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-pull"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Simulate upstream changes: commit directly to the bare remote.
+	for _, args := range [][]string{
+		{"git", "clone", "/tmp/remote.git", "/tmp/remote-clone"},
+		{"git", "-C", "/tmp/remote-clone", "config", "user.email", "test@test.com"},
+		{"git", "-C", "/tmp/remote-clone", "config", "user.name", "Test"},
+		{"git", "-C", "/tmp/remote-clone", "commit", "--allow-empty", "-m", "upstream change"},
+		{"git", "-C", "/tmp/remote-clone", "push"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Navigate to landing page.
+	page := f.Page()
+	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	Screenshot(t, page, "pull_before")
+
+	// Click "Pull main".
+	page.MustElement(`button.btn-sm[hx-get*="pull-main"]`).MustClick()
+
+	// Wait for the SSE output to show done.
+	WaitForText(t, page, ".ws-cmd-ok", "done", 15*time.Second)
+	Screenshot(t, page, "pull_done")
+
+	// Verify main advanced — the workstream should now show ↓1.
+	page.MustElement(`button.btn-sm[hx-get*="refresh"]`).MustClick()
+	time.Sleep(1 * time.Second)
+	WaitForText(t, page, ".ws-behind", "↓1", 5*time.Second)
+	Screenshot(t, page, "pull_branch_behind")
 }

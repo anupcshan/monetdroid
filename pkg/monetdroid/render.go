@@ -731,10 +731,11 @@ func RenderWorkstreamStatus(panel BranchPanel) string {
 	b.WriteString(RenderBranchList(panel))
 	// Action buttons.
 	b.WriteString(`<div class="ws-actions">`)
-	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s" hx-target="#ws-pull-output" hx-swap="outerHTML">Pull main</button>`,
+	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s" hx-target="#ws-cmd-output" hx-swap="outerHTML">Pull main</button>`,
 		url.QueryEscape(panel.RepoPath))
+	b.WriteString(`<button class="btn-sm" hx-get="/refresh-branches" hx-target="#ws-branch-list" hx-swap="outerHTML">Refresh</button>`)
 	b.WriteString(`</div>`)
-	b.WriteString(`<div id="ws-pull-output"></div>`)
+	b.WriteString(`<div id="ws-cmd-output" class="ws-cmd-output"></div>`)
 	b.WriteString(`</div>`) // close #ws-panel
 	return b.String()
 }
@@ -782,6 +783,10 @@ func RenderBranchList(panel BranchPanel) string {
 			}
 			if br.Dirty {
 				b.WriteString(`<span class="ws-dirty">*</span>`)
+			}
+			if br.BehindMain > 0 {
+				fmt.Fprintf(&b, `<button class="ws-rebase-btn" hx-post="/rebase-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-cmd-output" hx-swap="beforeend">rebase</button>`,
+					Esc(ws.Path))
 			}
 			b.WriteString(`</div>`)
 		}
