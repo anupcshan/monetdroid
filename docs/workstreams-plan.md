@@ -123,7 +123,7 @@ Create → Work → Archive (hide) → Prune (delete)
 14. **Surface worktree path in session header**: pragmatic escape hatch until terminal exists
 15. **Set upstream on branch creation**: `--set-upstream-to=main` (or parent branch for stacks)
 16. **Workstream status view**: branch topology, ahead/behind, PR status, uncommitted changes
-17. **Update main**: fetch origin main (standalone, no sync)
+17. **Pull main**: `git pull --ff-only` in main worktree (standalone, no sync)
 18. **Sync workstream**: rebase stack onto local main
 19. **Mass sync**: sync all workstreams, abort+skip on conflict, continue to next
 20. **Archive / unarchive**: hide/show workstreams in sidebar, no data deletion
@@ -145,23 +145,23 @@ Stack visualization:
 - Visual indicator of where sync broke, if applicable
 
 Actions available from the panel:
-- Update main (fetch)
+- Pull main
 - Sync workstream / mass sync
 - Archive / unarchive
 - Prune
 
 ## Sync
 
-### Update main
-- `git fetch origin main` — standalone action, done once
+### Pull main
+- `git pull --ff-only` in the main worktree — fetches from origin and fast-forwards local main
 - Separate from sync so it can be done independently
-- Subsequent syncs (including retries after fixing conflicts) use the already-fetched local main
+- Subsequent syncs (including retries after fixing conflicts) use the already-updated local main
 
 ### Single workstream sync
 1. Walk the upstream chain to find the stack order
 2. Rebase each branch onto its upstream, in topological order
 3. On conflict: **stop, leave the broken state**, show conflicting files — user resolves manually
-4. After resolving, user can re-run sync without fetching again
+4. After resolving, user can re-run sync without pulling again
 
 ### Mass sync
 1. For each workstream, attempt sync as above

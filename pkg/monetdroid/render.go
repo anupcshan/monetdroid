@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -721,13 +722,29 @@ func RenderTrackedSessions(items []TrackedSession) string {
 
 // RenderWorkstreamStatus renders the workstream status panel for the landing page.
 // Flat branch list with indentation for stacks, alternating background per workstream.
-func RenderWorkstreamStatus(workstreams []WorkstreamStatus) string {
+// repoPath is any worktree path in the repo (used for pull/sync actions).
+func RenderWorkstreamStatus(repoPath string, workstreams []WorkstreamStatus) string {
 	if len(workstreams) == 0 {
 		return ""
 	}
 	var b strings.Builder
+	b.WriteString(`<div id="ws-panel">`)
 	b.WriteString(`<div class="queue-header">Workstreams</div>`)
-	b.WriteString(`<div class="ws-branch-list">`)
+	b.WriteString(RenderBranchList(workstreams))
+	// Action buttons.
+	b.WriteString(`<div class="ws-actions">`)
+	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s" hx-target="#ws-pull-output" hx-swap="outerHTML">Pull main</button>`,
+		url.QueryEscape(repoPath))
+	b.WriteString(`</div>`)
+	b.WriteString(`<div id="ws-pull-output"></div>`)
+	b.WriteString(`</div>`) // close #ws-panel
+	return b.String()
+}
+
+// RenderBranchList renders just the branch list table.
+func RenderBranchList(workstreams []WorkstreamStatus) string {
+	var b strings.Builder
+	b.WriteString(`<div id="ws-branch-list" class="ws-branch-list">`)
 	for i, ws := range workstreams {
 		colorClass := "ws-color-a"
 		if i%2 == 1 {

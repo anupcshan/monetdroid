@@ -1,6 +1,7 @@
 package monetdroid
 
 import (
+	"bufio"
 	"crypto/rand"
 	_ "embed"
 	"encoding/base64"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,6 +44,8 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/label", hub.handleLabel)
 	mux.HandleFunc("/queue", hub.handleQueue)
 	mux.HandleFunc("/archive", hub.handleArchive)
+	mux.HandleFunc("/pull-main", hub.handlePullMain)
+	mux.HandleFunc("/pull-main-stream", hub.handlePullMainStream)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
 }
@@ -235,7 +239,11 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			// Workstream status panel.
 			for repoName, workstreams := range AllWorkstreams() {
 				_ = repoName // TODO: show repo name when multiple repos
-				landingHTML += RenderWorkstreamStatus(workstreams)
+				repoPath := ""
+				if len(workstreams) > 0 {
+					repoPath = MainWorktree(workstreams[0].Path)
+				}
+				landingHTML += RenderWorkstreamStatus(repoPath, workstreams)
 			}
 
 			// Tracked sessions.
@@ -825,5 +833,108 @@ func (h *Hub) handleArchive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(200)
+}
+
+func (h *Hub) handlePullMain(w http.ResponseWriter, r *http.Request) {
+	cwd := r.FormValue("cwd")
+	if cwd == "" {
+		http.Error(w, "cwd is required", http.StatusBadRequest)
+		return
+	}
+	// Return an SSE-connected output area that streams the pull.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<div id="ws-pull-output" class="ws-pull-output" hx-ext="sse" sse-connect="/pull-main-stream?cwd=%s" sse-swap="line" hx-swap="beforeend"></div>`,
+		url.QueryEscape(cwd))
+}
+
+func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		http.Error(w, "cwd is required", http.StatusBadRequest)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Run pull in the main worktree where main/master is checked out.
+	mainWt := MainWorktree(cwd)
+	cmd := exec.Command("git", "pull", "--ff-only", "--progress")
+	cmd.Dir = mainWt
+	// git pull writes progress to stderr.
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">Failed to start: `+Esc(err.Error())+`</div>`))
+		flusher.Flush()
+		return
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">Failed to start: `+Esc(err.Error())+`</div>`))
+		flusher.Flush()
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">Failed to start: `+Esc(err.Error())+`</div>`))
+		flusher.Flush()
+		return
+	}
+
+	// Stream combined output. Split on \r and \n since git progress uses \r.
+	done := make(chan struct{})
+	streamLines := func(r io.Reader) {
+		defer func() { done <- struct{}{} }()
+		scanner := bufio.NewScanner(r)
+		scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+			if atEOF && len(data) == 0 {
+				return 0, nil, nil
+			}
+			for i, b := range data {
+				if b == '\n' || b == '\r' {
+					return i + 1, data[:i], nil
+				}
+			}
+			if atEOF {
+				return len(data), data, nil
+			}
+			return 0, nil, nil
+		})
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+			fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-line">`+Esc(line)+`</div>`))
+			flusher.Flush()
+		}
+	}
+	go streamLines(stderr)
+	go streamLines(stdout)
+	<-done
+	<-done
+
+	cmdErr := cmd.Wait()
+
+	if cmdErr != nil {
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-err">pull failed: `+Esc(cmdErr.Error())+`</div>`))
+		flusher.Flush()
+		return
+	}
+
+	// Success: refresh the branch list via OOB swap, leave output visible.
+	fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-line ws-pull-ok">done</div>`))
+	flusher.Flush()
+	for _, workstreams := range AllWorkstreams() {
+		branchList := RenderBranchList(workstreams)
+		branchList = strings.Replace(branchList, `id="ws-branch-list"`, `id="ws-branch-list" hx-swap-oob="outerHTML"`, 1)
+		fmt.Fprint(w, FormatSSE("line", branchList))
+		flusher.Flush()
+		break // TODO: multi-repo
+	}
 }
 

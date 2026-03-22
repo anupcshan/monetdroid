@@ -1018,6 +1018,28 @@
   .ws-sync { color: var(--text2); }
   .ws-lines { white-space: nowrap; text-align: right; min-width: 10ch; }
   .ws-dirty { color: var(--accent); font-weight: 500; min-width: 5ch; text-align: right; }
+  .ws-actions { margin-top: 8px; display: flex; gap: 8px; }
+  .ws-actions button {
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .ws-actions button:hover { color: var(--text); border-color: var(--text2); }
+  .ws-pull-output {
+    margin-top: 8px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text2);
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .ws-pull-line { padding: 1px 0; }
+  .ws-pull-ok { color: var(--tool); }
+  .ws-pull-err { color: var(--accent); font-weight: 500; }
 
   /* --- Empty state --- */
   .empty-state {
