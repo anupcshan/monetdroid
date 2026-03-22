@@ -1133,3 +1133,82 @@ func TestPullMain(t *testing.T) {
 	WaitForText(t, page, ".ws-behind", "↓1", 5*time.Second)
 	Screenshot(t, page, "pull_branch_behind")
 }
+
+func TestMassSync(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+
+	initGitRepo(t, f, containerWorkdir)
+
+	// Create two workstreams.
+	wsOK := "/root/.monetdroid/worktrees/work/ws-ok"
+	wsConflict := "/root/.monetdroid/worktrees/work/ws-conflict"
+	for _, args := range [][]string{
+		{"git", "-C", containerWorkdir, "branch", "ws-ok"},
+		{"git", "-C", containerWorkdir, "worktree", "add", wsOK, "ws-ok"},
+		{"git", "-C", wsOK, "branch", "--set-upstream-to", "main", "ws-ok"},
+		{"git", "-C", containerWorkdir, "branch", "ws-conflict"},
+		{"git", "-C", containerWorkdir, "worktree", "add", wsConflict, "ws-conflict"},
+		{"git", "-C", wsConflict, "branch", "--set-upstream-to", "main", "ws-conflict"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Create a file on ws-conflict that will conflict with main.
+	for _, args := range [][]string{
+		{"sh", "-c", "echo 'conflict line' > " + wsConflict + "/file.txt"},
+		{"git", "-C", wsConflict, "add", "file.txt"},
+		{"git", "-C", wsConflict, "commit", "-m", "conflicting change"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Advance main with a change to the same file.
+	for _, args := range [][]string{
+		{"sh", "-c", "echo 'main line' > " + containerWorkdir + "/file.txt"},
+		{"git", "-C", containerWorkdir, "add", "file.txt"},
+		{"git", "-C", containerWorkdir, "commit", "-m", "main update"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Navigate to landing page.
+	page := f.Page()
+	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	Screenshot(t, page, "mass_sync_before")
+
+	// Both workstreams should show ↓1.
+	behind := page.MustElements(".ws-behind")
+	if len(behind) < 2 {
+		t.Fatalf("expected at least 2 behind indicators, got %d", len(behind))
+	}
+
+	// Click "Sync all".
+	syncBtn := WaitForElement(t, page, `button.btn-sm[hx-post*="mass-sync"]`, 5*time.Second)
+	syncBtn.MustClick()
+
+	// Wait for both sections to complete — one "done", one "aborted".
+	WaitForText(t, page, ".ws-cmd-ok", "done", 10*time.Second)
+	WaitForText(t, page, ".ws-cmd-err", "aborted", 10*time.Second)
+	Screenshot(t, page, "mass_sync_done")
+
+	// Verify the conflicting worktree is not mid-rebase.
+	out, err := f.DockerExec("git", "-C", wsConflict, "status")
+	if err != nil {
+		t.Fatalf("git status: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "rebase in progress") {
+		t.Fatalf("expected rebase to be aborted, but rebase is still in progress:\n%s", out)
+	}
+
+	// Click refresh and verify the successful workstream is now in sync.
+	page.MustElement(`button.btn-sm[hx-get*="refresh"]`).MustClick()
+	time.Sleep(1 * time.Second)
+	Screenshot(t, page, "mass_sync_refreshed")
+}

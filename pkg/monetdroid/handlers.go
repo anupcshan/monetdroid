@@ -47,6 +47,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/pull-main", hub.handlePullMain)
 	mux.HandleFunc("/pull-main-stream", hub.handlePullMainStream)
 	mux.HandleFunc("/rebase-workstream", hub.handleRebaseWorkstream)
+	mux.HandleFunc("/mass-sync", hub.handleMassSync)
 	mux.HandleFunc("/refresh-branches", hub.handleRefreshBranches)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
@@ -942,6 +943,14 @@ func (h *Hub) handleRebaseWorkstream(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
+	rebaseWorkstream(w, flusher, cwd, false)
+}
+
+// rebaseWorkstream rebases branches in a workstream onto their upstreams.
+// If abortOnConflict is true, runs git rebase --abort and returns (for mass sync).
+// If false, leaves the broken state for the user to resolve (for single sync).
+// Returns true if all rebases succeeded.
+func rebaseWorkstream(w http.ResponseWriter, flusher http.Flusher, cwd string, abortOnConflict bool) bool {
 	wsName := filepath.Base(cwd)
 	fmt.Fprintf(w, `<div class="ws-cmd-section"><div class="ws-cmd-header">Rebase %s</div>`, Esc(wsName))
 	flusher.Flush()
@@ -951,7 +960,7 @@ func (h *Hub) handleRebaseWorkstream(w http.ResponseWriter, r *http.Request) {
 	if len(branches) == 0 {
 		fmt.Fprint(w, `<div class="ws-cmd-err">no branches found</div></div>`)
 		flusher.Flush()
-		return
+		return false
 	}
 
 	for _, br := range branches {
@@ -968,7 +977,7 @@ func (h *Hub) handleRebaseWorkstream(w http.ResponseWriter, r *http.Request) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fmt.Fprintf(w, `<div class="ws-cmd-err">%s</div></div>`, Esc(strings.TrimSpace(string(out))))
 			flusher.Flush()
-			return
+			return false
 		}
 
 		// Rebase onto upstream.
@@ -983,14 +992,52 @@ func (h *Hub) handleRebaseWorkstream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 		if err != nil {
-			fmt.Fprint(w, `<div class="ws-cmd-err">rebase failed — resolve conflicts and run git rebase --continue</div></div>`)
+			if abortOnConflict {
+				exec.Command("git", "-C", cwd, "rebase", "--abort").Run()
+				fmt.Fprint(w, `<div class="ws-cmd-err">conflict — aborted, sync manually</div></div>`)
+			} else {
+				fmt.Fprint(w, `<div class="ws-cmd-err">rebase failed — resolve conflicts and run git rebase --continue</div></div>`)
+			}
 			flusher.Flush()
-			return
+			return false
 		}
 	}
 
 	fmt.Fprint(w, `<div class="ws-cmd-line ws-cmd-ok">done</div></div>`)
 	flusher.Flush()
+	return true
+}
+
+func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	synced := 0
+	for _, panel := range AllWorkstreams() {
+		for _, ws := range panel.Workstreams {
+			// Only rebase workstreams that are behind main.
+			hasBehind := false
+			for _, br := range ws.Branches {
+				if br.BehindMain > 0 {
+					hasBehind = true
+					break
+				}
+			}
+			if !hasBehind {
+				continue
+			}
+			rebaseWorkstream(w, flusher, ws.Path, true)
+			synced++
+		}
+	}
+	if synced == 0 {
+		fmt.Fprint(w, `<div class="ws-cmd-section"><div class="ws-cmd-line ws-cmd-ok">all workstreams up to date</div></div>`)
+		flusher.Flush()
+	}
 }
 
 func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {

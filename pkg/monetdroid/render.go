@@ -733,6 +733,7 @@ func RenderWorkstreamStatus(panel BranchPanel) string {
 	b.WriteString(`<div class="ws-actions">`)
 	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s" hx-target="#ws-cmd-output" hx-swap="outerHTML">Pull main</button>`,
 		url.QueryEscape(panel.RepoPath))
+	b.WriteString(`<button class="btn-sm" hx-post="/mass-sync" hx-target="#ws-cmd-output" hx-swap="beforeend">Sync all</button>`)
 	b.WriteString(`<button class="btn-sm" hx-get="/refresh-branches" hx-target="#ws-branch-list" hx-swap="outerHTML">Refresh</button>`)
 	b.WriteString(`</div>`)
 	b.WriteString(`<div id="ws-cmd-output" class="ws-cmd-output"></div>`)
