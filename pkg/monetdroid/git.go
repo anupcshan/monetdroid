@@ -106,6 +106,7 @@ func CreateWorkstream(cwd, name string) (string, error) {
 // BranchStatus holds git status information for a single branch.
 type BranchStatus struct {
 	Name         string // branch name
+	Depth        int    // depth in the stack tree (0 = direct child of main)
 	Upstream     string // upstream branch (e.g. "main" or "auth")
 	AheadMain    int    // commits ahead of default branch
 	BehindMain   int    // commits behind default branch
@@ -114,8 +115,6 @@ type BranchStatus struct {
 	RemoteGone   bool   // remote tracking branch was deleted
 	HasRemote    bool   // has a remote tracking branch at all
 	Dirty        bool   // uncommitted changes in worktree
-	LinesAdded   int    // lines added vs default branch
-	LinesRemoved int    // lines removed vs default branch
 }
 
 // WorkstreamStatus holds status for a Monetdroid-managed workstream.
@@ -125,8 +124,16 @@ type WorkstreamStatus struct {
 	Branches []BranchStatus // branch stack in topological order (root first)
 }
 
+// BranchPanel holds everything needed to render the branch list for a repo.
+type BranchPanel struct {
+	DefaultBranch string             // e.g. "main" or "master"
+	MainDirty     bool               // uncommitted changes in main worktree
+	RepoPath      string             // main worktree path (for actions)
+	Workstreams   []WorkstreamStatus // workstreams with branch status
+}
+
 // AllWorkstreams returns workstream status grouped by repo, scanning ~/.monetdroid/worktrees/.
-func AllWorkstreams() map[string][]WorkstreamStatus {
+func AllWorkstreams() map[string]BranchPanel {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
@@ -136,15 +143,27 @@ func AllWorkstreams() map[string][]WorkstreamStatus {
 	if err != nil {
 		return nil
 	}
-	result := make(map[string][]WorkstreamStatus)
+	result := make(map[string]BranchPanel)
 	for _, repo := range repos {
 		if !repo.IsDir() {
 			continue
 		}
 		repoDir := filepath.Join(baseDir, repo.Name())
 		ws := listWorkstreamsInDir(repoDir)
-		if len(ws) > 0 {
-			result[repo.Name()] = ws
+		if len(ws) == 0 {
+			continue
+		}
+		repoPath := MainWorktree(ws[0].Path)
+		defaultBranch := GitDefaultBranch(repoPath)
+		mainDirty := false
+		if files, err := GitStatusFiles(repoPath); err == nil && len(files) > 0 {
+			mainDirty = true
+		}
+		result[repo.Name()] = BranchPanel{
+			DefaultBranch: defaultBranch,
+			MainDirty:     mainDirty,
+			RepoPath:      repoPath,
+			Workstreams:   ws,
 		}
 	}
 	return result
@@ -213,45 +232,12 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 
 	bs := branchStatus(wtPath, currentBranch, defaultBranch)
 
-	// Line delta vs default branch (committed + uncommitted tracked files).
-	cmd = exec.Command("git", "diff", defaultBranch, "-w", "--numstat")
-	cmd.Dir = wtPath
-	if out, err := cmd.Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) < 3 {
-				continue
-			}
-			if a, err := strconv.Atoi(fields[0]); err == nil {
-				bs.LinesAdded += a
-			}
-			if r, err := strconv.Atoi(fields[1]); err == nil {
-				bs.LinesRemoved += r
-			}
-		}
-	}
-
-	// Check for dirty worktree and count untracked file lines.
+	// Check for dirty worktree.
 	cmd = exec.Command("git", "status", "--porcelain")
 	cmd.Dir = wtPath
 	if out, err := cmd.Output(); err == nil {
-		statusOut := strings.TrimSpace(string(out))
-		if len(statusOut) > 0 {
+		if len(strings.TrimSpace(string(out))) > 0 {
 			bs.Dirty = true
-		}
-		for _, line := range strings.Split(statusOut, "\n") {
-			if len(line) < 4 || line[0] != '?' {
-				continue
-			}
-			// Count lines in untracked file.
-			fpath := filepath.Join(wtPath, line[3:])
-			if data, err := os.ReadFile(fpath); err == nil {
-				n := strings.Count(string(data), "\n")
-				if len(data) > 0 && data[len(data)-1] != '\n' {
-					n++ // no trailing newline
-				}
-				bs.LinesAdded += n
-			}
 		}
 	}
 

@@ -237,13 +237,9 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			var landingHTML string
 
 			// Workstream status panel.
-			for repoName, workstreams := range AllWorkstreams() {
+			for repoName, panel := range AllWorkstreams() {
 				_ = repoName // TODO: show repo name when multiple repos
-				repoPath := ""
-				if len(workstreams) > 0 {
-					repoPath = MainWorktree(workstreams[0].Path)
-				}
-				landingHTML += RenderWorkstreamStatus(repoPath, workstreams)
+				landingHTML += RenderWorkstreamStatus(panel)
 			}
 
 			// Tracked sessions.
@@ -929,8 +925,8 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 	// Success: refresh the branch list via OOB swap, leave output visible.
 	fmt.Fprint(w, FormatSSE("line", `<div class="ws-pull-line ws-pull-ok">done</div>`))
 	flusher.Flush()
-	for _, workstreams := range AllWorkstreams() {
-		branchList := RenderBranchList(workstreams)
+	for _, panel := range AllWorkstreams() {
+		branchList := RenderBranchList(panel)
 		branchList = strings.Replace(branchList, `id="ws-branch-list"`, `id="ws-branch-list" hx-swap-oob="outerHTML"`, 1)
 		fmt.Fprint(w, FormatSSE("line", branchList))
 		flusher.Flush()

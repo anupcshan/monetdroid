@@ -721,38 +721,53 @@ func RenderTrackedSessions(items []TrackedSession) string {
 }
 
 // RenderWorkstreamStatus renders the workstream status panel for the landing page.
-// Flat branch list with indentation for stacks, alternating background per workstream.
-// repoPath is any worktree path in the repo (used for pull/sync actions).
-func RenderWorkstreamStatus(repoPath string, workstreams []WorkstreamStatus) string {
-	if len(workstreams) == 0 {
+func RenderWorkstreamStatus(panel BranchPanel) string {
+	if len(panel.Workstreams) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(`<div id="ws-panel">`)
 	b.WriteString(`<div class="queue-header">Workstreams</div>`)
-	b.WriteString(RenderBranchList(workstreams))
+	b.WriteString(RenderBranchList(panel))
 	// Action buttons.
 	b.WriteString(`<div class="ws-actions">`)
 	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s" hx-target="#ws-pull-output" hx-swap="outerHTML">Pull main</button>`,
-		url.QueryEscape(repoPath))
+		url.QueryEscape(panel.RepoPath))
 	b.WriteString(`</div>`)
 	b.WriteString(`<div id="ws-pull-output"></div>`)
 	b.WriteString(`</div>`) // close #ws-panel
 	return b.String()
 }
 
-// RenderBranchList renders just the branch list table.
-func RenderBranchList(workstreams []WorkstreamStatus) string {
+// RenderBranchList renders the branch list with tree drawing.
+func RenderBranchList(panel BranchPanel) string {
 	var b strings.Builder
 	b.WriteString(`<div id="ws-branch-list" class="ws-branch-list">`)
-	for i, ws := range workstreams {
+	// Main branch row.
+	b.WriteString(`<div class="ws-branch-row ws-color-main">`)
+	fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(panel.DefaultBranch))
+	b.WriteString(`<span class="ws-commits ws-sync">=</span>`)
+	if panel.MainDirty {
+		b.WriteString(`<span class="ws-dirty">*</span>`)
+	}
+	b.WriteString(`</div>`)
+	// Workstream branches.
+	for i, ws := range panel.Workstreams {
+		isLastWs := i == len(panel.Workstreams)-1
 		colorClass := "ws-color-a"
 		if i%2 == 1 {
 			colorClass = "ws-color-b"
 		}
-		for depth, br := range ws.Branches {
-			fmt.Fprintf(&b, `<div class="ws-branch-row %s" style="padding-left:%dpx">`,
-				colorClass, 12+depth*16)
+		for _, br := range ws.Branches {
+			lastClass := ""
+			if isLastWs {
+				lastClass = " ws-last"
+			}
+			depthStyle := ""
+			if br.Depth > 0 {
+				depthStyle = fmt.Sprintf(` style="margin-left:%dpx"`, br.Depth*20)
+			}
+			fmt.Fprintf(&b, `<div class="ws-branch-row ws-child%s %s"%s>`, lastClass, colorClass, depthStyle)
 			fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(br.Name))
 			// Commit count.
 			switch {
@@ -765,23 +780,8 @@ func RenderBranchList(workstreams []WorkstreamStatus) string {
 			default:
 				b.WriteString(`<span class="ws-commits ws-sync">=</span>`)
 			}
-			// Line delta.
-			if br.LinesAdded > 0 || br.LinesRemoved > 0 {
-				b.WriteString(`<span class="ws-lines">`)
-				if br.LinesAdded > 0 {
-					fmt.Fprintf(&b, `<span class="diff-add">+%d</span>`, br.LinesAdded)
-				}
-				if br.LinesRemoved > 0 {
-					fmt.Fprintf(&b, ` <span class="diff-rm">-%d</span>`, br.LinesRemoved)
-				}
-				b.WriteString(`</span>`)
-			} else {
-				b.WriteString(`<span class="ws-lines"></span>`)
-			}
 			if br.Dirty {
-				b.WriteString(`<span class="ws-dirty">dirty</span>`)
-			} else {
-				b.WriteString(`<span class="ws-dirty"></span>`)
+				b.WriteString(`<span class="ws-dirty">*</span>`)
 			}
 			b.WriteString(`</div>`)
 		}
