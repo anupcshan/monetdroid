@@ -83,6 +83,7 @@ func WorktreeDir(repoRoot string) string {
 }
 
 // CreateWorkstream creates a new branch off the default branch and a worktree for it.
+// The branch's upstream is set to the default branch for stack topology inference.
 // Returns the worktree path.
 func CreateWorkstream(cwd, name string) (string, error) {
 	repoRoot := GitToplevel(cwd)
@@ -91,26 +92,231 @@ func CreateWorkstream(cwd, name string) (string, error) {
 	}
 
 	defaultBranch := GitDefaultBranch(repoRoot)
+	wtPath := filepath.Join(WorktreeDir(repoRoot), name)
 
-	// Create branch off the default branch.
-	cmd := exec.Command("git", "branch", name, defaultBranch)
+	cmd := exec.Command("git", "worktree", "add", "-b", name, "--track", wtPath, defaultBranch)
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git branch: %s", strings.TrimSpace(string(out)))
-	}
-
-	// Create worktree.
-	wtDir := WorktreeDir(repoRoot)
-	wtPath := filepath.Join(wtDir, name)
-	cmd = exec.Command("git", "worktree", "add", wtPath, name)
-	cmd.Dir = repoRoot
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Clean up the branch if worktree creation fails.
-		exec.Command("git", "-C", repoRoot, "branch", "-d", name).Run()
 		return "", fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 	}
 
 	return wtPath, nil
+}
+
+// BranchStatus holds git status information for a single branch.
+type BranchStatus struct {
+	Name         string // branch name
+	Upstream     string // upstream branch (e.g. "main" or "auth")
+	AheadMain    int    // commits ahead of default branch
+	BehindMain   int    // commits behind default branch
+	AheadRemote  int    // commits ahead of remote tracking branch
+	BehindRemote int    // commits behind remote tracking branch
+	RemoteGone   bool   // remote tracking branch was deleted
+	HasRemote    bool   // has a remote tracking branch at all
+	Dirty        bool   // uncommitted changes in worktree
+	LinesAdded   int    // lines added vs default branch
+	LinesRemoved int    // lines removed vs default branch
+}
+
+// WorkstreamStatus holds status for a Monetdroid-managed workstream.
+type WorkstreamStatus struct {
+	Name     string         // worktree directory name (= workstream name)
+	Path     string         // absolute path to worktree
+	Branches []BranchStatus // branch stack in topological order (root first)
+}
+
+// AllWorkstreams returns workstream status grouped by repo, scanning ~/.monetdroid/worktrees/.
+func AllWorkstreams() map[string][]WorkstreamStatus {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	baseDir := filepath.Join(home, ".monetdroid", "worktrees")
+	repos, err := os.ReadDir(baseDir)
+	if err != nil {
+		return nil
+	}
+	result := make(map[string][]WorkstreamStatus)
+	for _, repo := range repos {
+		if !repo.IsDir() {
+			continue
+		}
+		repoDir := filepath.Join(baseDir, repo.Name())
+		ws := listWorkstreamsInDir(repoDir)
+		if len(ws) > 0 {
+			result[repo.Name()] = ws
+		}
+	}
+	return result
+}
+
+// listWorkstreamsInDir returns status for all workstreams under a worktree directory.
+func listWorkstreamsInDir(wtDir string) []WorkstreamStatus {
+	entries, err := os.ReadDir(wtDir)
+	if err != nil {
+		return nil
+	}
+
+	// Find default branch from the first valid worktree.
+	var defaultBranch string
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), "pool-") {
+			continue
+		}
+		wtPath := filepath.Join(wtDir, e.Name())
+		if db := GitDefaultBranch(wtPath); db != "" {
+			defaultBranch = db
+			break
+		}
+	}
+	if defaultBranch == "" {
+		return nil
+	}
+
+	var result []WorkstreamStatus
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), "pool-") {
+			continue
+		}
+		wtPath := filepath.Join(wtDir, e.Name())
+		// Verify it's actually a git worktree.
+		cmd := exec.Command("git", "rev-parse", "--git-dir")
+		cmd.Dir = wtPath
+		if cmd.Run() != nil {
+			continue
+		}
+		branches := branchStack(wtPath, defaultBranch)
+		ws := WorkstreamStatus{
+			Name:     e.Name(),
+			Path:     wtPath,
+			Branches: branches,
+		}
+		result = append(result, ws)
+	}
+	return result
+}
+
+// branchStack returns the branch stack for a worktree, walking the upstream chain.
+// Returns branches in topological order (root/closest-to-main first).
+func branchStack(wtPath, defaultBranch string) []BranchStatus {
+	// Get current branch.
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = wtPath
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	currentBranch := strings.TrimSpace(string(out))
+	if currentBranch == "HEAD" {
+		return nil // detached HEAD
+	}
+
+	bs := branchStatus(wtPath, currentBranch, defaultBranch)
+
+	// Line delta vs default branch (committed + uncommitted tracked files).
+	cmd = exec.Command("git", "diff", defaultBranch, "-w", "--numstat")
+	cmd.Dir = wtPath
+	if out, err := cmd.Output(); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 3 {
+				continue
+			}
+			if a, err := strconv.Atoi(fields[0]); err == nil {
+				bs.LinesAdded += a
+			}
+			if r, err := strconv.Atoi(fields[1]); err == nil {
+				bs.LinesRemoved += r
+			}
+		}
+	}
+
+	// Check for dirty worktree and count untracked file lines.
+	cmd = exec.Command("git", "status", "--porcelain")
+	cmd.Dir = wtPath
+	if out, err := cmd.Output(); err == nil {
+		statusOut := strings.TrimSpace(string(out))
+		if len(statusOut) > 0 {
+			bs.Dirty = true
+		}
+		for _, line := range strings.Split(statusOut, "\n") {
+			if len(line) < 4 || line[0] != '?' {
+				continue
+			}
+			// Count lines in untracked file.
+			fpath := filepath.Join(wtPath, line[3:])
+			if data, err := os.ReadFile(fpath); err == nil {
+				n := strings.Count(string(data), "\n")
+				if len(data) > 0 && data[len(data)-1] != '\n' {
+					n++ // no trailing newline
+				}
+				bs.LinesAdded += n
+			}
+		}
+	}
+
+	return []BranchStatus{bs}
+}
+
+// branchStatus gathers status for a single branch.
+func branchStatus(cwd, branch, defaultBranch string) BranchStatus {
+	bs := BranchStatus{Name: branch}
+
+	// Get upstream.
+	cmd := exec.Command("git", "config", fmt.Sprintf("branch.%s.merge", branch))
+	cmd.Dir = cwd
+	if out, err := cmd.Output(); err == nil {
+		ref := strings.TrimSpace(string(out))
+		// refs/heads/main → main
+		bs.Upstream = strings.TrimPrefix(ref, "refs/heads/")
+	}
+
+	// Ahead/behind default branch.
+	cmd = exec.Command("git", "rev-list", "--left-right", "--count",
+		fmt.Sprintf("%s...%s", defaultBranch, branch))
+	cmd.Dir = cwd
+	if out, err := cmd.Output(); err == nil {
+		parts := strings.Fields(strings.TrimSpace(string(out)))
+		if len(parts) == 2 {
+			bs.BehindMain, _ = strconv.Atoi(parts[0])
+			bs.AheadMain, _ = strconv.Atoi(parts[1])
+		}
+	}
+
+	// Remote tracking info.
+	cmd = exec.Command("git", "config", fmt.Sprintf("branch.%s.remote", branch))
+	cmd.Dir = cwd
+	remoteOut, remoteErr := cmd.Output()
+	remote := strings.TrimSpace(string(remoteOut))
+	if remoteErr != nil || remote == "" || remote == "." {
+		// No remote or local-only upstream.
+		return bs
+	}
+
+	// Check if remote tracking branch still exists.
+	remoteBranch := remote + "/" + branch
+	cmd = exec.Command("git", "rev-parse", "--verify", "refs/remotes/"+remoteBranch)
+	cmd.Dir = cwd
+	if cmd.Run() != nil {
+		bs.HasRemote = true
+		bs.RemoteGone = true
+		return bs
+	}
+
+	bs.HasRemote = true
+	// Ahead/behind remote.
+	cmd = exec.Command("git", "rev-list", "--left-right", "--count",
+		fmt.Sprintf("%s...%s", remoteBranch, branch))
+	cmd.Dir = cwd
+	if out, err := cmd.Output(); err == nil {
+		parts := strings.Fields(strings.TrimSpace(string(out)))
+		if len(parts) == 2 {
+			bs.BehindRemote, _ = strconv.Atoi(parts[0])
+			bs.AheadRemote, _ = strconv.Atoi(parts[1])
+		}
+	}
+
+	return bs
 }
 
 type DiffStat struct {

@@ -994,6 +994,31 @@
     text-decoration: none;
   }
 
+  /* --- Workstream status --- */
+  .ws-branch-list {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .ws-branch-row {
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 8px 12px;
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 10px;
+    align-items: baseline;
+  }
+  .ws-color-a { background: var(--surface); }
+  .ws-color-b { background: var(--bg); }
+  .ws-branch-name { color: var(--text); font-weight: 500; }
+  .ws-commits { text-align: right; min-width: 2ch; }
+  .ws-ahead { color: var(--blue); }
+  .ws-behind { color: var(--accent); }
+  .ws-sync { color: var(--text2); }
+  .ws-lines { white-space: nowrap; text-align: right; min-width: 10ch; }
+  .ws-dirty { color: var(--accent); font-weight: 500; min-width: 5ch; text-align: right; }
+
   /* --- Empty state --- */
   .empty-state {
     display: flex;

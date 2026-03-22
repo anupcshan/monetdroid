@@ -229,10 +229,22 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
 		} else {
-			// No active session — show tracked sessions on the landing page
+			// No active session — show landing page
+			var landingHTML string
+
+			// Workstream status panel.
+			for repoName, workstreams := range AllWorkstreams() {
+				_ = repoName // TODO: show repo name when multiple repos
+				landingHTML += RenderWorkstreamStatus(workstreams)
+			}
+
+			// Tracked sessions.
 			if sessHTML := RenderTrackedSessions(h.Tracker.List()); sessHTML != "" {
-				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML",
-					`<div class="queue-header">Sessions</div>`+sessHTML)))
+				landingHTML += `<div class="queue-header">Sessions</div>` + sessHTML
+			}
+
+			if landingHTML != "" {
+				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML", landingHTML)))
 				flusher.Flush()
 			}
 		}

@@ -719,6 +719,60 @@ func RenderTrackedSessions(items []TrackedSession) string {
 	return b.String()
 }
 
+// RenderWorkstreamStatus renders the workstream status panel for the landing page.
+// Flat branch list with indentation for stacks, alternating background per workstream.
+func RenderWorkstreamStatus(workstreams []WorkstreamStatus) string {
+	if len(workstreams) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="queue-header">Workstreams</div>`)
+	b.WriteString(`<div class="ws-branch-list">`)
+	for i, ws := range workstreams {
+		colorClass := "ws-color-a"
+		if i%2 == 1 {
+			colorClass = "ws-color-b"
+		}
+		for depth, br := range ws.Branches {
+			fmt.Fprintf(&b, `<div class="ws-branch-row %s" style="padding-left:%dpx">`,
+				colorClass, 12+depth*16)
+			fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(br.Name))
+			// Commit count.
+			switch {
+			case br.AheadMain > 0 && br.BehindMain > 0:
+				fmt.Fprintf(&b, `<span class="ws-commits"><span class="ws-ahead">↑%d</span> <span class="ws-behind">↓%d</span></span>`, br.AheadMain, br.BehindMain)
+			case br.AheadMain > 0:
+				fmt.Fprintf(&b, `<span class="ws-commits ws-ahead">↑%d</span>`, br.AheadMain)
+			case br.BehindMain > 0:
+				fmt.Fprintf(&b, `<span class="ws-commits ws-behind">↓%d</span>`, br.BehindMain)
+			default:
+				b.WriteString(`<span class="ws-commits ws-sync">=</span>`)
+			}
+			// Line delta.
+			if br.LinesAdded > 0 || br.LinesRemoved > 0 {
+				b.WriteString(`<span class="ws-lines">`)
+				if br.LinesAdded > 0 {
+					fmt.Fprintf(&b, `<span class="diff-add">+%d</span>`, br.LinesAdded)
+				}
+				if br.LinesRemoved > 0 {
+					fmt.Fprintf(&b, ` <span class="diff-rm">-%d</span>`, br.LinesRemoved)
+				}
+				b.WriteString(`</span>`)
+			} else {
+				b.WriteString(`<span class="ws-lines"></span>`)
+			}
+			if br.Dirty {
+				b.WriteString(`<span class="ws-dirty">dirty</span>`)
+			} else {
+				b.WriteString(`<span class="ws-dirty"></span>`)
+			}
+			b.WriteString(`</div>`)
+		}
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
 // stripSpinner removes the spinner span from a rendered tool_use HTML string.
 func stripSpinner(html, toolUseID string) string {
 	// The spinner is: <span class="tool-spinner" id="spinner-...">...</span>
