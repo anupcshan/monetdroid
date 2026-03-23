@@ -76,8 +76,8 @@ func (st *SessionTracker) Track(item TrackedSession) {
 	st.save()
 }
 
-// Archive removes the tracked session for the given ClaudeID.
-func (st *SessionTracker) Archive(claudeID string) {
+// Close removes the tracked session for the given ClaudeID.
+func (st *SessionTracker) Close(claudeID string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	for i, item := range st.items {

@@ -1212,3 +1212,57 @@ func TestMassSync(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	Screenshot(t, page, "mass_sync_refreshed")
 }
+
+func TestArchiveWorkstream(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+
+	// Set up git repo with a workstream.
+	initGitRepo(t, f, containerWorkdir)
+	wsPath := "/root/.monetdroid/worktrees/work/test-archive"
+	for _, args := range [][]string{
+		{"git", "-C", containerWorkdir, "branch", "test-archive"},
+		{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-archive"},
+		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-archive"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Navigate to landing page.
+	page := f.Page()
+	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+
+	// Verify the workstream is in the active branch list.
+	WaitForText(t, page, ".ws-child .ws-branch-name", "test-archive", 5*time.Second)
+	Screenshot(t, page, "archive_before")
+
+	// Click archive button.
+	page.MustElement(`.ws-archive-btn`).MustClick()
+
+	// Verify it appears in the archived section.
+	WaitForText(t, page, ".ws-archived-list .ws-branch-name", "test-archive", 5*time.Second)
+	Screenshot(t, page, "archive_after")
+
+	// Verify the workstream is no longer in the active list.
+	activeRows := page.MustElements(".ws-child .ws-branch-name")
+	for _, row := range activeRows {
+		if row.MustText() == "test-archive" {
+			t.Fatal("workstream should not be in active list after archiving")
+		}
+	}
+
+	// Click unarchive.
+	page.MustElement(`.ws-archived-list .ws-archive-btn`).MustClick()
+
+	// Verify the workstream is back in the active list.
+	WaitForText(t, page, ".ws-child .ws-branch-name", "test-archive", 5*time.Second)
+	Screenshot(t, page, "unarchive_after")
+
+	// Verify the archived section is gone (no archived header visible).
+	archivedHeaders := page.MustElements(".ws-archived-header")
+	if len(archivedHeaders) > 0 {
+		t.Fatal("archived section should be gone after unarchiving all")
+	}
+}

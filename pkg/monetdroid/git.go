@@ -1,6 +1,7 @@
 package monetdroid
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -121,6 +122,7 @@ type BranchStatus struct {
 type WorkstreamStatus struct {
 	Name     string         // worktree directory name (= workstream name)
 	Path     string         // absolute path to worktree
+	Archived bool           // hidden from active list
 	Branches []BranchStatus // branch stack in topological order (root first)
 }
 
@@ -130,6 +132,72 @@ type BranchPanel struct {
 	MainDirty     bool               // uncommitted changes in main worktree
 	RepoPath      string             // main worktree path (for actions)
 	Workstreams   []WorkstreamStatus // workstreams with branch status
+}
+
+// workstreamArchivePath returns the path to the workstream archive JSON file.
+func workstreamArchivePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".monetdroid", "archived_workstreams.json")
+}
+
+// loadArchivedWorkstreams returns the set of archived workstream paths.
+func loadArchivedWorkstreams() map[string]bool {
+	p := workstreamArchivePath()
+	if p == "" {
+		return nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	if json.Unmarshal(data, &paths) != nil {
+		return nil
+	}
+	m := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		m[path] = true
+	}
+	return m
+}
+
+// ArchiveWorkstream marks a workstream as archived.
+func ArchiveWorkstream(wsPath string) error {
+	archived := loadArchivedWorkstreams()
+	if archived == nil {
+		archived = make(map[string]bool)
+	}
+	archived[wsPath] = true
+	return saveArchivedWorkstreams(archived)
+}
+
+// UnarchiveWorkstream removes the archived mark from a workstream.
+func UnarchiveWorkstream(wsPath string) error {
+	archived := loadArchivedWorkstreams()
+	if archived == nil {
+		return nil
+	}
+	delete(archived, wsPath)
+	return saveArchivedWorkstreams(archived)
+}
+
+func saveArchivedWorkstreams(m map[string]bool) error {
+	p := workstreamArchivePath()
+	if p == "" {
+		return fmt.Errorf("cannot determine archive path")
+	}
+	var paths []string
+	for path := range m {
+		paths = append(paths, path)
+	}
+	data, err := json.Marshal(paths)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, 0644)
 }
 
 // AllWorkstreams returns workstream status grouped by repo, scanning ~/.monetdroid/worktrees/.
@@ -143,6 +211,7 @@ func AllWorkstreams() map[string]BranchPanel {
 	if err != nil {
 		return nil
 	}
+	archived := loadArchivedWorkstreams()
 	result := make(map[string]BranchPanel)
 	for _, repo := range repos {
 		if !repo.IsDir() {
@@ -152,6 +221,11 @@ func AllWorkstreams() map[string]BranchPanel {
 		ws := listWorkstreamsInDir(repoDir)
 		if len(ws) == 0 {
 			continue
+		}
+		for i := range ws {
+			if archived[ws[i].Path] {
+				ws[i].Archived = true
+			}
 		}
 		repoPath := MainWorktree(ws[0].Path)
 		defaultBranch := GitDefaultBranch(repoPath)

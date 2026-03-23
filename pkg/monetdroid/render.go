@@ -710,9 +710,9 @@ func RenderTrackedSessions(items []TrackedSession) string {
 			fmt.Fprintf(&b, `<div class="qi-result">%s</div>`, Esc(result))
 		}
 		fmt.Fprintf(&b, `<div class="qi-actions">`+
-			`<form hx-post="/archive" hx-swap="none" hx-on::after-request="this.closest('.queue-item').remove()" style="display:inline">`+
+			`<form hx-post="/close-session" hx-swap="none" hx-on::after-request="this.closest('.queue-item').remove()" style="display:inline">`+
 			`<input type="hidden" name="claude_id" value="%s">`+
-			`<button type="submit" class="qi-archive">Archive</button></form> `+
+			`<button type="submit" class="qi-close">Close</button></form> `+
 			`<a href="/?session=%s" class="qi-open">Open</a>`+
 			`</div>`, Esc(item.ClaudeID), Esc(item.ClaudeID))
 		b.WriteString(`</div>`)
@@ -728,7 +728,6 @@ func RenderWorkstreamStatus(panel BranchPanel) string {
 	var b strings.Builder
 	b.WriteString(`<div id="ws-panel">`)
 	b.WriteString(`<div class="queue-header">Workstreams</div>`)
-	b.WriteString(RenderBranchList(panel))
 	// Action buttons.
 	b.WriteString(`<div class="ws-actions">`)
 	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s" hx-target="#ws-cmd-output" hx-swap="outerHTML">Pull main</button>`,
@@ -736,6 +735,7 @@ func RenderWorkstreamStatus(panel BranchPanel) string {
 	b.WriteString(`<button class="btn-sm" hx-post="/mass-sync" hx-target="#ws-cmd-output" hx-swap="beforeend">Sync all</button>`)
 	b.WriteString(`<button class="btn-sm" hx-get="/refresh-branches" hx-target="#ws-branch-list" hx-swap="outerHTML">Refresh</button>`)
 	b.WriteString(`</div>`)
+	b.WriteString(RenderBranchList(panel))
 	b.WriteString(`<div id="ws-cmd-output" class="ws-cmd-output"></div>`)
 	b.WriteString(`</div>`) // close #ws-panel
 	return b.String()
@@ -743,8 +743,19 @@ func RenderWorkstreamStatus(panel BranchPanel) string {
 
 // RenderBranchList renders the branch list with tree drawing.
 func RenderBranchList(panel BranchPanel) string {
+	// Split active and archived.
+	var active, archived []WorkstreamStatus
+	for _, ws := range panel.Workstreams {
+		if ws.Archived {
+			archived = append(archived, ws)
+		} else {
+			active = append(active, ws)
+		}
+	}
+
 	var b strings.Builder
-	b.WriteString(`<div id="ws-branch-list" class="ws-branch-list">`)
+	b.WriteString(`<div id="ws-branch-list">`)
+	b.WriteString(`<div class="ws-branch-list">`)
 	// Main branch row.
 	b.WriteString(`<div class="ws-branch-row ws-color-main">`)
 	fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(panel.DefaultBranch))
@@ -753,9 +764,9 @@ func RenderBranchList(panel BranchPanel) string {
 		b.WriteString(`<span class="ws-dirty">*</span>`)
 	}
 	b.WriteString(`</div>`)
-	// Workstream branches.
-	for i, ws := range panel.Workstreams {
-		isLastWs := i == len(panel.Workstreams)-1
+	// Active workstream branches.
+	for i, ws := range active {
+		isLastWs := i == len(active)-1
 		colorClass := "ws-color-a"
 		if i%2 == 1 {
 			colorClass = "ws-color-b"
@@ -771,29 +782,50 @@ func RenderBranchList(panel BranchPanel) string {
 			}
 			fmt.Fprintf(&b, `<div class="ws-branch-row ws-child%s %s"%s>`, lastClass, colorClass, depthStyle)
 			fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(br.Name))
-			// Commit count.
-			switch {
-			case br.AheadMain > 0 && br.BehindMain > 0:
-				fmt.Fprintf(&b, `<span class="ws-commits"><span class="ws-ahead">↑%d</span> <span class="ws-behind">↓%d</span></span>`, br.AheadMain, br.BehindMain)
-			case br.AheadMain > 0:
-				fmt.Fprintf(&b, `<span class="ws-commits ws-ahead">↑%d</span>`, br.AheadMain)
-			case br.BehindMain > 0:
-				fmt.Fprintf(&b, `<span class="ws-commits ws-behind">↓%d</span>`, br.BehindMain)
-			default:
-				b.WriteString(`<span class="ws-commits ws-sync">=</span>`)
-			}
-			if br.Dirty {
-				b.WriteString(`<span class="ws-dirty">*</span>`)
-			}
+			renderBranchStatus(&b, br)
 			if br.BehindMain > 0 {
 				fmt.Fprintf(&b, `<button class="ws-rebase-btn" hx-post="/rebase-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-cmd-output" hx-swap="beforeend">rebase</button>`,
+					Esc(ws.Path))
+			}
+			if br.Depth == 0 {
+				fmt.Fprintf(&b, `<button class="ws-archive-btn" hx-post="/archive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-branch-list" hx-swap="outerHTML">archive</button>`,
 					Esc(ws.Path))
 			}
 			b.WriteString(`</div>`)
 		}
 	}
-	b.WriteString(`</div>`)
+	b.WriteString(`</div>`) // close .ws-branch-list
+	// Archived workstreams.
+	if len(archived) > 0 {
+		b.WriteString(`<div class="ws-archived-header">Archived</div>`)
+		b.WriteString(`<div class="ws-branch-list ws-archived-list">`)
+		for _, ws := range archived {
+			b.WriteString(`<div class="ws-branch-row ws-color-archived">`)
+			fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(ws.Name))
+			fmt.Fprintf(&b, `<button class="ws-archive-btn" hx-post="/unarchive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-branch-list" hx-swap="outerHTML">unarchive</button>`,
+				Esc(ws.Path))
+			b.WriteString(`</div>`)
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div>`) // close #ws-branch-list
 	return b.String()
+}
+
+func renderBranchStatus(b *strings.Builder, br BranchStatus) {
+	switch {
+	case br.AheadMain > 0 && br.BehindMain > 0:
+		fmt.Fprintf(b, `<span class="ws-commits"><span class="ws-ahead">↑%d</span> <span class="ws-behind">↓%d</span></span>`, br.AheadMain, br.BehindMain)
+	case br.AheadMain > 0:
+		fmt.Fprintf(b, `<span class="ws-commits ws-ahead">↑%d</span>`, br.AheadMain)
+	case br.BehindMain > 0:
+		fmt.Fprintf(b, `<span class="ws-commits ws-behind">↓%d</span>`, br.BehindMain)
+	default:
+		b.WriteString(`<span class="ws-commits ws-sync">=</span>`)
+	}
+	if br.Dirty {
+		b.WriteString(`<span class="ws-dirty">*</span>`)
+	}
 }
 
 // stripSpinner removes the spinner span from a rendered tool_use HTML string.

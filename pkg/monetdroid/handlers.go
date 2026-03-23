@@ -43,12 +43,14 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/label-edit", hub.handleLabelEdit)
 	mux.HandleFunc("/label", hub.handleLabel)
 	mux.HandleFunc("/queue", hub.handleQueue)
-	mux.HandleFunc("/archive", hub.handleArchive)
+	mux.HandleFunc("/close-session", hub.handleCloseSession)
 	mux.HandleFunc("/pull-main", hub.handlePullMain)
 	mux.HandleFunc("/pull-main-stream", hub.handlePullMainStream)
 	mux.HandleFunc("/rebase-workstream", hub.handleRebaseWorkstream)
 	mux.HandleFunc("/mass-sync", hub.handleMassSync)
 	mux.HandleFunc("/refresh-branches", hub.handleRefreshBranches)
+	mux.HandleFunc("/archive-workstream", hub.handleArchiveWorkstream)
+	mux.HandleFunc("/unarchive-workstream", hub.handleUnarchiveWorkstream)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
 }
@@ -658,7 +660,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 			branchHTML := renderBranchChips(ts.Branches)
 			fmt.Fprintf(&buf,
 				`<div class="drawer-item-row"><a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name"><span class="di-name-text">%s</span>%s</div><div class="di-path">%s</div><div class="di-meta">%s%s</div></a>`+
-					`<form hx-post="/archive" hx-swap="delete" hx-target="closest .drawer-item-row"><input type="hidden" name="claude_id" value="%s"><button type="submit" class="drawer-close-btn" title="Archive session" onclick="event.stopPropagation()">✕</button></form></div>`,
+					`<form hx-post="/close-session" hx-swap="delete" hx-target="closest .drawer-item-row"><input type="hidden" name="claude_id" value="%s"><button type="submit" class="drawer-close-btn" title="Close session" onclick="event.stopPropagation()">✕</button></form></div>`,
 				Esc(ts.ClaudeID), Esc(summary), branchHTML, Esc(sp), statusHTML, metaExtra, Esc(ts.ClaudeID),
 			)
 		}
@@ -823,10 +825,10 @@ func (h *Hub) handleQueue(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(RenderTrackedSessions(h.Tracker.List())))
 }
 
-func (h *Hub) handleArchive(w http.ResponseWriter, r *http.Request) {
+func (h *Hub) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 	claudeID := r.FormValue("claude_id")
 	if claudeID != "" {
-		h.Tracker.Archive(claudeID)
+		h.Tracker.Close(claudeID)
 		if s := h.Sessions.Remove(claudeID); s != nil {
 			s.Close()
 		}
@@ -1047,4 +1049,31 @@ func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
 		html += RenderBranchList(panel)
 	}
 	fmt.Fprint(w, html)
+}
+
+func (h *Hub) handleArchiveWorkstream(w http.ResponseWriter, r *http.Request) {
+	cwd := r.FormValue("cwd")
+	if cwd == "" {
+		http.Error(w, "cwd is required", http.StatusBadRequest)
+		return
+	}
+	if err := ArchiveWorkstream(cwd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Refresh the branch list.
+	h.handleRefreshBranches(w, r)
+}
+
+func (h *Hub) handleUnarchiveWorkstream(w http.ResponseWriter, r *http.Request) {
+	cwd := r.FormValue("cwd")
+	if cwd == "" {
+		http.Error(w, "cwd is required", http.StatusBadRequest)
+		return
+	}
+	if err := UnarchiveWorkstream(cwd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.handleRefreshBranches(w, r)
 }
