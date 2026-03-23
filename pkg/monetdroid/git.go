@@ -394,18 +394,112 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 		return nil // detached HEAD
 	}
 
-	bs := branchStatus(wtPath, currentBranch, defaultBranch)
+	// Build local upstream map: branch → upstream for branches with remote=".".
+	upstreamOf := localUpstreamMap(wtPath)
 
-	// Check for dirty worktree.
+	// Walk from current branch up to defaultBranch to find the root of the stack.
+	root := currentBranch
+	visited := map[string]bool{root: true}
+	for {
+		up := upstreamOf[root]
+		if up == "" || up == defaultBranch {
+			break
+		}
+		if visited[up] {
+			break // cycle guard
+		}
+		visited[up] = true
+		root = up
+	}
+
+	// Build children map (inverted upstream).
+	childrenOf := map[string][]string{}
+	for br, up := range upstreamOf {
+		childrenOf[up] = append(childrenOf[up], br)
+	}
+	// Sort children for stable ordering.
+	for _, kids := range childrenOf {
+		sort.Strings(kids)
+	}
+
+	// DFS from root to collect all branches with depths.
+	// DFS ensures children appear directly under their parent in the output,
+	// which is required for the tree display to render correctly.
+	type entry struct {
+		name  string
+		depth int
+	}
+	var ordered []entry
+	seen := map[string]bool{}
+	var walk func(name string, depth int)
+	walk = func(name string, depth int) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		ordered = append(ordered, entry{name, depth})
+		for _, child := range childrenOf[name] {
+			walk(child, depth+1)
+		}
+	}
+	walk(root, 0)
+
+	// Check for dirty worktree (applies only to current branch).
+	dirty := false
 	cmd = exec.Command("git", "status", "--porcelain")
 	cmd.Dir = wtPath
 	if out, err := cmd.Output(); err == nil {
-		if len(strings.TrimSpace(string(out))) > 0 {
-			bs.Dirty = true
-		}
+		dirty = len(strings.TrimSpace(string(out))) > 0
 	}
 
-	return []BranchStatus{bs}
+	// Build result with status for each branch.
+	result := make([]BranchStatus, 0, len(ordered))
+	for _, e := range ordered {
+		bs := branchStatus(wtPath, e.name, defaultBranch)
+		bs.Depth = e.depth
+		if e.name == currentBranch {
+			bs.Dirty = dirty
+		}
+		result = append(result, bs)
+	}
+	return result
+}
+
+// localUpstreamMap returns a map of branch → upstream for all local branches
+// that have a local upstream (remote = ".").
+func localUpstreamMap(cwd string) map[string]string {
+	cmd := exec.Command("git", "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	result := map[string]string{}
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if name == "" {
+			continue
+		}
+		// Check if remote is "." (local upstream).
+		cmd := exec.Command("git", "config", fmt.Sprintf("branch.%s.remote", name))
+		cmd.Dir = cwd
+		rOut, err := cmd.Output()
+		if err != nil || strings.TrimSpace(string(rOut)) != "." {
+			continue
+		}
+		// Get the merge ref.
+		cmd = exec.Command("git", "config", fmt.Sprintf("branch.%s.merge", name))
+		cmd.Dir = cwd
+		mOut, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		upstream := strings.TrimPrefix(strings.TrimSpace(string(mOut)), "refs/heads/")
+		if upstream != "" {
+			result[name] = upstream
+		}
+	}
+	return result
 }
 
 // branchStatus gathers status for a single branch.

@@ -1339,3 +1339,126 @@ func TestPruneWorkstream(t *testing.T) {
 		}
 	}
 }
+
+func TestBranchTree(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+
+	initGitRepo(t, f, containerWorkdir)
+
+	// Create the workstream worktree on "feat" branch.
+	wsPath := "/root/.monetdroid/worktrees/work/feat"
+	for _, args := range [][]string{
+		{"git", "-C", containerWorkdir, "branch", "feat"},
+		{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "feat"},
+		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "feat"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Add a commit on feat so it's ahead of main.
+	for _, args := range [][]string{
+		{"git", "-C", wsPath, "commit", "--allow-empty", "-m", "feat work"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Create child branches with local upstreams forming a forked tree:
+	//   feat (depth 0)
+	//     feat-ui (depth 1)
+	//       feat-ui-tests (depth 2)
+	//     feat-api (depth 1)
+	//       feat-api-tests (depth 2)
+	type childBranch struct {
+		name     string
+		upstream string
+		commits  int // extra commits on top of parent
+	}
+	children := []childBranch{
+		{"feat-ui", "feat", 1},
+		{"feat-ui-tests", "feat-ui", 1},
+		{"feat-api", "feat", 2},
+		{"feat-api-tests", "feat-api", 1},
+	}
+	for _, ch := range children {
+		for _, args := range [][]string{
+			{"git", "-C", wsPath, "branch", ch.name, ch.upstream},
+			{"git", "-C", wsPath, "config", fmt.Sprintf("branch.%s.remote", ch.name), "."},
+			{"git", "-C", wsPath, "config", fmt.Sprintf("branch.%s.merge", ch.name), "refs/heads/" + ch.upstream},
+		} {
+			if out, err := f.DockerExec(args...); err != nil {
+				t.Fatalf("%v: %v\n%s", args, err, out)
+			}
+		}
+		// Add commits to the child branch.
+		for i := 0; i < ch.commits; i++ {
+			for _, args := range [][]string{
+				{"git", "-C", wsPath, "checkout", ch.name},
+				{"git", "-C", wsPath, "commit", "--allow-empty", "-m", fmt.Sprintf("%s commit %d", ch.name, i+1)},
+			} {
+				if out, err := f.DockerExec(args...); err != nil {
+					t.Fatalf("%v: %v\n%s", args, err, out)
+				}
+			}
+		}
+	}
+	// Switch back to feat (the worktree's primary branch).
+	if out, err := f.DockerExec("git", "-C", wsPath, "checkout", "feat"); err != nil {
+		t.Fatalf("checkout feat: %v\n%s", err, out)
+	}
+
+	// Navigate to landing page.
+	page := f.Page()
+	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	Screenshot(t, page, "tree_before")
+
+	// Verify all 5 branch rows appear (feat + 4 children).
+	rows := page.MustElements(".ws-branch-row.ws-child")
+	if len(rows) != 5 {
+		var names []string
+		for _, r := range rows {
+			names = append(names, r.MustText())
+		}
+		Screenshot(t, page, "tree_wrong_count")
+		t.Fatalf("expected 5 branch rows, got %d: %v", len(rows), names)
+	}
+
+	// Verify branch names and depths via margin-left styles.
+	type expect struct {
+		name  string
+		depth int
+	}
+	expected := []expect{
+		{"feat", 0},
+		{"feat-api", 1},
+		{"feat-api-tests", 2},
+		{"feat-ui", 1},
+		{"feat-ui-tests", 2},
+	}
+	for i, exp := range expected {
+		name := rows[i].MustElement(".ws-branch-name").MustText()
+		if name != exp.name {
+			Screenshot(t, page, "tree_wrong_name")
+			t.Fatalf("row %d: expected name %q, got %q", i, exp.name, name)
+		}
+		style := rows[i].MustEval(`function() { return this.getAttribute('style') || '' }`).String()
+		if exp.depth > 0 {
+			wantStyle := fmt.Sprintf("margin-left:%dpx", exp.depth*20)
+			if !strings.Contains(style, wantStyle) {
+				Screenshot(t, page, "tree_wrong_depth")
+				t.Fatalf("row %d (%s): expected style containing %q, got %q", i, exp.name, wantStyle, style)
+			}
+		} else if strings.Contains(style, "margin-left") {
+			Screenshot(t, page, "tree_wrong_depth")
+			t.Fatalf("row %d (%s): expected no margin-left, got style %q", i, exp.name, style)
+		}
+	}
+
+	// Verify ahead indicators — feat-api has 2 extra commits (3 total ahead),
+	// feat-ui has 1 extra commit (2 total ahead).
+	Screenshot(t, page, "tree_done")
+}
