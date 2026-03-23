@@ -1266,3 +1266,76 @@ func TestArchiveWorkstream(t *testing.T) {
 		t.Fatal("archived section should be gone after unarchiving all")
 	}
 }
+
+func TestPruneWorkstream(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+
+	// Set up git repo with a workstream.
+	initGitRepo(t, f, containerWorkdir)
+	wsPath := "/root/.monetdroid/worktrees/work/test-prune"
+	for _, args := range [][]string{
+		{"git", "-C", containerWorkdir, "branch", "test-prune"},
+		{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-prune"},
+		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-prune"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Navigate to landing page, verify workstream visible.
+	page := f.Page()
+	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	WaitForText(t, page, ".ws-child .ws-branch-name", "test-prune", 5*time.Second)
+
+	// Archive the workstream.
+	page.MustElement(`.ws-archive-btn`).MustClick()
+	WaitForText(t, page, ".ws-archived-list .ws-branch-name", "test-prune", 5*time.Second)
+	Screenshot(t, page, "prune_archived")
+
+	// Click Prune button — should show confirmation.
+	btn := WaitForElement(t, page, `button.btn-sm[hx-get="/prune"]`, 5*time.Second)
+	btn.MustClick()
+	WaitForElement(t, page, ".ws-prune-confirm", 5*time.Second)
+	Screenshot(t, page, "prune_confirm")
+
+	// Verify the confirmation shows test-prune as safe to delete (0 ahead).
+	WaitForText(t, page, ".ws-prune-safe", "delete", 5*time.Second)
+
+	// Click Confirm prune.
+	page.MustElement(`.ws-prune-btn`).MustClick()
+
+	// Wait for prune output.
+	WaitForText(t, page, ".ws-cmd-ok", "done", 10*time.Second)
+	Screenshot(t, page, "prune_done")
+
+	// Verify the worktree directory is gone.
+	out, err := f.DockerExec("test", "-d", wsPath)
+	if err == nil {
+		t.Fatalf("worktree directory should be deleted, but still exists: %s", out)
+	}
+
+	// Verify the branch is deleted.
+	out, err = f.DockerExec("git", "-C", containerWorkdir, "branch", "--list", "test-prune")
+	if err != nil {
+		t.Fatalf("git branch --list: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "test-prune") {
+		t.Fatalf("branch test-prune should be deleted, but still exists: %s", out)
+	}
+
+	// Verify the workstream is no longer in the branch list.
+	activeRows := page.MustElements(".ws-child .ws-branch-name")
+	for _, row := range activeRows {
+		if row.MustText() == "test-prune" {
+			t.Fatal("workstream should not be in branch list after pruning")
+		}
+	}
+	archivedRows := page.MustElements(".ws-archived-list .ws-branch-name")
+	for _, row := range archivedRows {
+		if row.MustText() == "test-prune" {
+			t.Fatal("workstream should not be in archived list after pruning")
+		}
+	}
+}

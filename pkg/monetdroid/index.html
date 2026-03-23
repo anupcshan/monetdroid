@@ -1041,7 +1041,7 @@
   .ws-sync { color: var(--text2); }
   .ws-dirty { color: var(--accent); font-weight: 500; }
   .ws-actions { margin-top: 8px; display: flex; gap: 8px; }
-  .ws-actions button {
+  .btn-sm {
     font-size: 12px;
     padding: 4px 12px;
     border-radius: 6px;
@@ -1050,7 +1050,7 @@
     border: 1px solid var(--border);
     cursor: pointer;
   }
-  .ws-actions button:hover { color: var(--text); border-color: var(--text2); }
+  .btn-sm:hover { color: var(--text); border-color: var(--text2); }
   .ws-cmd-output {
     margin-top: 8px;
     font-size: 12px;
@@ -1095,6 +1095,25 @@
   }
   .ws-archived-list { opacity: 0.6; }
   .ws-color-archived { background: var(--bg); }
+  .ws-prune-confirm {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .ws-prune-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+  .ws-prune-ws { margin-bottom: 8px; }
+  .ws-prune-ws-name { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .ws-prune-detail { font-size: 12px; color: var(--text2); padding-left: 12px; margin-bottom: 2px; }
+  .ws-prune-branch {
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 0 2px 12px;
+  }
+  .ws-prune-safe { color: var(--text2); }
+  .ws-prune-warn { color: var(--accent); }
+  .ws-prune-actions { margin-top: 10px; }
+  .ws-prune-btn { background: var(--accent) !important; color: var(--bg) !important; border-color: var(--accent) !important; }
 
   /* --- Empty state --- */
   .empty-state {

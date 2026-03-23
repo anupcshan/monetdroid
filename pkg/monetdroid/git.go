@@ -134,6 +134,96 @@ type BranchPanel struct {
 	Workstreams   []WorkstreamStatus // workstreams with branch status
 }
 
+// PruneBranch describes a branch's prune safety status.
+type PruneBranch struct {
+	Name    string
+	Safe    bool   // safe to delete (merged or remote gone)
+	Reason  string // human-readable reason
+}
+
+// PruneWorkstream describes a workstream ready for pruning.
+type PruneWorkstream struct {
+	Name     string
+	Path     string
+	Branches []PruneBranch
+}
+
+// PrunePlan describes what would be pruned across all archived workstreams.
+type PrunePlan struct {
+	Workstreams []PruneWorkstream
+}
+
+// BuildPrunePlan scans archived workstreams and classifies branches.
+func BuildPrunePlan() PrunePlan {
+	var plan PrunePlan
+	for _, panel := range AllWorkstreams() {
+		for _, ws := range panel.Workstreams {
+			if !ws.Archived {
+				continue
+			}
+			pw := PruneWorkstream{Name: ws.Name, Path: ws.Path}
+			for _, br := range ws.Branches {
+				pb := PruneBranch{Name: br.Name}
+				switch {
+				case br.RemoteGone:
+					pb.Safe = true
+					pb.Reason = "remote branch deleted"
+				case br.AheadMain == 0:
+					pb.Safe = true
+					pb.Reason = "merged into " + panel.DefaultBranch
+				case br.HasRemote:
+					pb.Safe = false
+					pb.Reason = fmt.Sprintf("%d unpushed commits, remote exists", br.AheadMain)
+				default:
+					pb.Safe = false
+					pb.Reason = fmt.Sprintf("%d unpushed commits, no remote", br.AheadMain)
+				}
+				pw.Branches = append(pw.Branches, pb)
+			}
+			plan.Workstreams = append(plan.Workstreams, pw)
+		}
+	}
+	return plan
+}
+
+// ExecutePrune deletes worktrees and safe branches for the given workstreams.
+func ExecutePrune(paths []string) []string {
+	var log []string
+	for _, wsPath := range paths {
+		repoRoot := MainWorktree(wsPath)
+		defaultBranch := GitDefaultBranch(repoRoot)
+		branches := branchStack(wsPath, defaultBranch)
+
+		cmd := exec.Command("git", "worktree", "remove", wsPath)
+		cmd.Dir = repoRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log = append(log, fmt.Sprintf("error removing worktree %s: %s", filepath.Base(wsPath), strings.TrimSpace(string(out))))
+			continue
+		}
+		log = append(log, fmt.Sprintf("removed worktree %s", filepath.Base(wsPath)))
+
+		// Delete safe branches.
+		for _, br := range branches {
+			safe := br.RemoteGone || br.AheadMain == 0
+			if !safe {
+				log = append(log, fmt.Sprintf("kept branch %s (%d commits ahead)", br.Name, br.AheadMain))
+				continue
+			}
+			cmd = exec.Command("git", "branch", "-d", br.Name)
+			cmd.Dir = repoRoot
+			if out, err := cmd.CombinedOutput(); err != nil {
+				log = append(log, fmt.Sprintf("error deleting branch %s: %s", br.Name, strings.TrimSpace(string(out))))
+			} else {
+				log = append(log, fmt.Sprintf("deleted branch %s", br.Name))
+			}
+		}
+
+		// Clean up archived entry.
+		UnarchiveWorkstream(wsPath)
+	}
+	return log
+}
+
 // workstreamArchivePath returns the path to the workstream archive JSON file.
 func workstreamArchivePath() string {
 	home, err := os.UserHomeDir()

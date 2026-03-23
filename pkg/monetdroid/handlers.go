@@ -51,6 +51,8 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/refresh-branches", hub.handleRefreshBranches)
 	mux.HandleFunc("/archive-workstream", hub.handleArchiveWorkstream)
 	mux.HandleFunc("/unarchive-workstream", hub.handleUnarchiveWorkstream)
+	mux.HandleFunc("/prune", hub.handlePrune)
+	mux.HandleFunc("/prune-confirm", hub.handlePruneConfirm)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	return mux
 }
@@ -1051,6 +1053,13 @@ func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, html)
 }
 
+func (h *Hub) renderPanel(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	for _, panel := range AllWorkstreams() {
+		fmt.Fprint(w, RenderWorkstreamStatus(panel))
+	}
+}
+
 func (h *Hub) handleArchiveWorkstream(w http.ResponseWriter, r *http.Request) {
 	cwd := r.FormValue("cwd")
 	if cwd == "" {
@@ -1061,8 +1070,7 @@ func (h *Hub) handleArchiveWorkstream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Refresh the branch list.
-	h.handleRefreshBranches(w, r)
+	h.renderPanel(w)
 }
 
 func (h *Hub) handleUnarchiveWorkstream(w http.ResponseWriter, r *http.Request) {
@@ -1075,5 +1083,50 @@ func (h *Hub) handleUnarchiveWorkstream(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.handleRefreshBranches(w, r)
+	h.renderPanel(w)
+}
+
+func (h *Hub) handlePrune(w http.ResponseWriter, r *http.Request) {
+	plan := BuildPrunePlan()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, RenderPruneConfirmation(plan))
+}
+
+func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	paths := r.Form["path"]
+	if len(paths) == 0 {
+		http.Error(w, "no paths", http.StatusBadRequest)
+		return
+	}
+	pruneLog := ExecutePrune(paths)
+
+	// Build prune log HTML.
+	var logHTML strings.Builder
+	logHTML.WriteString(`<div class="ws-cmd-section"><div class="ws-cmd-header">Prune</div>`)
+	for _, line := range pruneLog {
+		if strings.HasPrefix(line, "error") {
+			fmt.Fprintf(&logHTML, `<div class="ws-cmd-line ws-cmd-err">%s</div>`, Esc(line))
+		} else {
+			fmt.Fprintf(&logHTML, `<div class="ws-cmd-line">%s</div>`, Esc(line))
+		}
+	}
+	logHTML.WriteString(`<div class="ws-cmd-line ws-cmd-ok">done</div></div>`)
+
+	// Re-render the full panel with prune log in the output area.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	rendered := false
+	for _, panel := range AllWorkstreams() {
+		html := RenderWorkstreamStatus(panel)
+		if html != "" {
+			html = strings.Replace(html, `<div id="ws-cmd-output" class="ws-cmd-output"></div>`,
+				`<div id="ws-cmd-output" class="ws-cmd-output">`+logHTML.String()+`</div>`, 1)
+			fmt.Fprint(w, html)
+			rendered = true
+		}
+	}
+	if !rendered {
+		// All workstreams pruned — render a minimal panel with just the log.
+		fmt.Fprintf(w, `<div id="ws-panel"><div class="queue-header">Workstreams</div><div id="ws-cmd-output" class="ws-cmd-output">%s</div></div>`, logHTML.String())
+	}
 }
