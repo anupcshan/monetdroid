@@ -297,7 +297,7 @@ func RenderMsg(msg ServerMsg) string {
 			dlgID := fmt.Sprintf("img-dlg-%d", imgDlgSeq.Add(1))
 			src := fmt.Sprintf("data:%s;base64,%s", Esc(img.MediaType), img.Data)
 			fmt.Fprintf(&content, `<img src="%s" class="msg-img-thumb" onclick="document.getElementById('%s').showModal()">`, src, dlgID)
-			fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s"></dialog>`, dlgID, src)
+			fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s" onclick="event.stopPropagation()"></dialog>`, dlgID, src)
 		}
 		content.WriteString(strings.ReplaceAll(Esc(msg.Text), "\n", "<br>"))
 		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, content.String())
@@ -337,7 +337,7 @@ func RenderMsg(msg ServerMsg) string {
 				dlgID := fmt.Sprintf("img-dlg-%d", imgDlgSeq.Add(1))
 				src := fmt.Sprintf("data:%s;base64,%s", Esc(img.MediaType), img.Data)
 				fmt.Fprintf(&content, `<img src="%s" class="msg-img-thumb" onclick="document.getElementById('%s').showModal()">`, src, dlgID)
-				fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s"></dialog>`, dlgID, src)
+				fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s" onclick="event.stopPropagation()"></dialog>`, dlgID, src)
 			}
 			return fmt.Sprintf(`<div class="msg msg-tool">%s</div>`, content.String())
 		}
