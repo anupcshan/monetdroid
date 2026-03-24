@@ -791,28 +791,7 @@ func RenderBranchList(panel BranchPanel) string {
 		if i%2 == 1 {
 			colorClass = "ws-color-b"
 		}
-		for _, br := range ws.Branches {
-			lastClass := ""
-			if isLastWs {
-				lastClass = " ws-last"
-			}
-			depthStyle := ""
-			if br.Depth > 0 {
-				depthStyle = fmt.Sprintf(` style="margin-left:%dpx"`, br.Depth*20)
-			}
-			fmt.Fprintf(&b, `<div class="ws-branch-row ws-child%s %s"%s>`, lastClass, colorClass, depthStyle)
-			fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(br.Name))
-			renderBranchStatus(&b, br)
-			if br.BehindMain > 0 {
-				fmt.Fprintf(&b, `<button class="ws-rebase-btn" hx-post="/rebase-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-cmd-output" hx-swap="beforeend">rebase</button>`,
-					Esc(ws.Path))
-			}
-			if br.Depth == 0 {
-				fmt.Fprintf(&b, `<button class="ws-archive-btn" hx-post="/archive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-panel" hx-swap="outerHTML">archive</button>`,
-					Esc(ws.Path))
-			}
-			b.WriteString(`</div>`)
-		}
+		renderBranchTree(&b, ws.Branches, colorClass, isLastWs, ws.Path)
 	}
 	b.WriteString(`</div>`) // close .ws-branch-list
 	// Archived workstreams.
@@ -846,6 +825,77 @@ func renderBranchStatus(b *strings.Builder, br BranchStatus) {
 	if br.Dirty {
 		b.WriteString(`<span class="ws-dirty">*</span>`)
 	}
+}
+
+// renderBranchTree renders a workstream's branches as a nested tree.
+func renderBranchTree(b *strings.Builder, branches []BranchStatus, colorClass string, isLastWs bool, wsPath string) {
+	prevDepth := -1
+	for i, br := range branches {
+		depth := br.Depth
+
+		// Close previous sibling's node and any deeper children containers.
+		if i > 0 && depth <= prevDepth {
+			for d := prevDepth; d >= depth; d-- {
+				b.WriteString(`</div>`) // close ws-child
+				if d > depth {
+					b.WriteString(`</div>`) // close ws-tree-children
+				}
+			}
+		}
+
+		// Open children container when depth increases.
+		if i > 0 && depth > prevDepth {
+			b.WriteString(`<div class="ws-tree-children">`)
+		}
+
+		// Determine ws-last class.
+		lastClass := ""
+		if depth == 0 {
+			if isLastWs {
+				lastClass = " ws-last"
+			}
+		} else if isLastSibling(branches, i) {
+			lastClass = " ws-last"
+		}
+
+		// Open tree node.
+		fmt.Fprintf(b, `<div class="ws-child%s %s">`, lastClass, colorClass)
+		// Branch row.
+		b.WriteString(`<div class="ws-branch-row">`)
+		fmt.Fprintf(b, `<span class="ws-branch-name">%s</span>`, Esc(br.Name))
+		renderBranchStatus(b, br)
+		if br.BehindMain > 0 {
+			fmt.Fprintf(b, `<button class="ws-rebase-btn" hx-post="/rebase-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-cmd-output" hx-swap="beforeend">rebase</button>`,
+				Esc(wsPath))
+		}
+		if depth == 0 {
+			fmt.Fprintf(b, `<button class="ws-archive-btn" hx-post="/archive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-panel" hx-swap="outerHTML">archive</button>`,
+				Esc(wsPath))
+		}
+		b.WriteString(`</div>`) // close ws-branch-row
+
+		prevDepth = depth
+	}
+
+	// Close remaining open nodes and children containers.
+	for d := prevDepth; d >= 0; d-- {
+		b.WriteString(`</div>`) // close ws-child
+		if d > 0 {
+			b.WriteString(`</div>`) // close ws-tree-children
+		}
+	}
+}
+
+// isLastSibling returns true if branches[i] is the last branch at its depth level
+// before the depth decreases or the list ends.
+func isLastSibling(branches []BranchStatus, i int) bool {
+	depth := branches[i].Depth
+	for j := i + 1; j < len(branches); j++ {
+		if branches[j].Depth <= depth {
+			return branches[j].Depth < depth
+		}
+	}
+	return true
 }
 
 // RenderPruneConfirmation renders the prune confirmation panel.

@@ -460,6 +460,21 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 		if e.name == currentBranch {
 			bs.Dirty = dirty
 		}
+		// For child branches, show ahead/behind relative to parent, not main.
+		if e.depth > 0 {
+			if upstream := upstreamOf[e.name]; upstream != "" {
+				cmd := exec.Command("git", "rev-list", "--left-right", "--count",
+					fmt.Sprintf("%s...%s", upstream, e.name))
+				cmd.Dir = wtPath
+				if out, err := cmd.Output(); err == nil {
+					parts := strings.Fields(strings.TrimSpace(string(out)))
+					if len(parts) == 2 {
+						bs.BehindMain, _ = strconv.Atoi(parts[0])
+						bs.AheadMain, _ = strconv.Atoi(parts[1])
+					}
+				}
+			}
+		}
 		result = append(result, bs)
 	}
 	return result

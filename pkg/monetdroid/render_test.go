@@ -1,7 +1,6 @@
 package monetdroid
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -14,8 +13,8 @@ func TestRenderBranchList_SingleBranchInSync(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 2)
-	assertRow(t, rows[0], "ws-color-main", "main", "=", 0)
-	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "feature", "=", 0)
+	assertRow(t, rows[0], "ws-color-main", "main", "=")
+	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "feature", "=")
 }
 
 func TestRenderBranchList_AheadAndDirty(t *testing.T) {
@@ -26,7 +25,7 @@ func TestRenderBranchList_AheadAndDirty(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 2)
-	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "wip", "↑3 *", 0)
+	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "wip", "↑3 *")
 }
 
 func TestRenderBranchList_BehindMain(t *testing.T) {
@@ -37,7 +36,7 @@ func TestRenderBranchList_BehindMain(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 2)
-	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "stale", "↓5", 0)
+	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "stale", "↓5")
 }
 
 func TestRenderBranchList_Diverged(t *testing.T) {
@@ -48,7 +47,7 @@ func TestRenderBranchList_Diverged(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 2)
-	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "diverged", "↑2 ↓3", 0)
+	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "diverged", "↑2 ↓3")
 }
 
 func TestRenderBranchList_MainDirty(t *testing.T) {
@@ -60,7 +59,7 @@ func TestRenderBranchList_MainDirty(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 2)
-	assertRow(t, rows[0], "ws-color-main", "master", "= *", 0)
+	assertRow(t, rows[0], "ws-color-main", "master", "= *")
 }
 
 func TestRenderBranchList_MultipleBranches(t *testing.T) {
@@ -73,10 +72,10 @@ func TestRenderBranchList_MultipleBranches(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 4)
-	assertRow(t, rows[0], "ws-color-main", "main", "=", 0)
-	assertRow(t, rows[1], "ws-child ws-color-a", "alpha", "=", 0)
-	assertRow(t, rows[2], "ws-child ws-color-b", "beta", "↑1", 0)
-	assertRow(t, rows[3], "ws-child ws-last ws-color-a", "gamma", "=", 0)
+	assertRow(t, rows[0], "ws-color-main", "main", "=")
+	assertRow(t, rows[1], "ws-child ws-color-a", "alpha", "=")
+	assertRow(t, rows[2], "ws-child ws-color-b", "beta", "↑1")
+	assertRow(t, rows[3], "ws-child ws-last ws-color-a", "gamma", "=")
 }
 
 func TestRenderBranchList_StackedBranches(t *testing.T) {
@@ -92,14 +91,14 @@ func TestRenderBranchList_StackedBranches(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 5)
-	assertRow(t, rows[0], "ws-color-main", "main", "=", 0)
-	assertRow(t, rows[1], "ws-child ws-color-a", "auth", "↑3", 0)
-	assertRow(t, rows[2], "ws-child ws-color-a", "auth-ui", "↑5", 1)
-	assertRow(t, rows[3], "ws-child ws-color-a", "auth-tests", "↑6", 2)
-	assertRow(t, rows[4], "ws-child ws-last ws-color-b", "perf", "=", 0)
+	assertRow(t, rows[0], "ws-color-main", "main", "=")
+	assertRow(t, rows[1], "ws-child ws-color-a", "auth", "↑3")
+	assertRow(t, rows[2], "ws-child ws-last ws-color-a", "auth-ui", "↑5")
+	assertRow(t, rows[3], "ws-child ws-last ws-color-a", "auth-tests", "↑6")
+	assertRow(t, rows[4], "ws-child ws-last ws-color-b", "perf", "=")
 }
 
-// Depth pattern: 1, 2, 2, 3, 1 — fork at depth 1, one child goes deeper.
+// Depth pattern: 0, 1, 1, 2 — fork at depth 1, one child goes deeper.
 func TestRenderBranchList_ForkedStack(t *testing.T) {
 	panel := BranchPanel{
 		DefaultBranch: "main",
@@ -114,15 +113,15 @@ func TestRenderBranchList_ForkedStack(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 6)
-	assertRow(t, rows[0], "ws-color-main", "main", "=", 0)
-	assertRow(t, rows[1], "ws-child ws-color-a", "auth", "↑3", 0)
-	assertRow(t, rows[2], "ws-child ws-color-a", "auth-ui", "↑5", 1)
-	assertRow(t, rows[3], "ws-child ws-color-a", "auth-api", "↑4", 1)
-	assertRow(t, rows[4], "ws-child ws-color-a", "auth-api-test", "↑7", 2)
-	assertRow(t, rows[5], "ws-child ws-last ws-color-b", "perf", "=", 0)
+	assertRow(t, rows[0], "ws-color-main", "main", "=")
+	assertRow(t, rows[1], "ws-child ws-color-a", "auth", "↑3")
+	assertRow(t, rows[2], "ws-child ws-color-a", "auth-ui", "↑5")
+	assertRow(t, rows[3], "ws-child ws-last ws-color-a", "auth-api", "↑4")
+	assertRow(t, rows[4], "ws-child ws-last ws-color-a", "auth-api-test", "↑7")
+	assertRow(t, rows[5], "ws-child ws-last ws-color-b", "perf", "=")
 }
 
-// Depth pattern: 1, 2, 3, 1 — linear 3-deep stack + separate workstream.
+// Depth pattern: 0, 1, 2 + separate workstream — linear 3-deep stack.
 func TestRenderBranchList_DeepLinearStack(t *testing.T) {
 	panel := BranchPanel{
 		DefaultBranch: "main",
@@ -136,14 +135,14 @@ func TestRenderBranchList_DeepLinearStack(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 5)
-	assertRow(t, rows[0], "ws-color-main", "main", "=", 0)
-	assertRow(t, rows[1], "ws-child ws-color-a", "feat", "=", 0)
-	assertRow(t, rows[2], "ws-child ws-color-a", "feat-v2", "↑2", 1)
-	assertRow(t, rows[3], "ws-child ws-color-a", "feat-v3", "↑5", 2)
-	assertRow(t, rows[4], "ws-child ws-last ws-color-b", "bugfix", "↑1", 0)
+	assertRow(t, rows[0], "ws-color-main", "main", "=")
+	assertRow(t, rows[1], "ws-child ws-color-a", "feat", "=")
+	assertRow(t, rows[2], "ws-child ws-last ws-color-a", "feat-v2", "↑2")
+	assertRow(t, rows[3], "ws-child ws-last ws-color-a", "feat-v3", "↑5")
+	assertRow(t, rows[4], "ws-child ws-last ws-color-b", "bugfix", "↑1")
 }
 
-// Depth pattern: 1, 2, 3 — single workstream, linear 3-deep stack.
+// Depth pattern: 0, 1, 2 — single workstream, linear 3-deep stack.
 func TestRenderBranchList_SingleDeepStack(t *testing.T) {
 	panel := BranchPanel{
 		DefaultBranch: "main",
@@ -156,10 +155,10 @@ func TestRenderBranchList_SingleDeepStack(t *testing.T) {
 		},
 	}
 	rows := branchRows(t, RenderBranchList(panel), 4)
-	assertRow(t, rows[0], "ws-color-main", "main", "=", 0)
-	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "feat", "↑1", 0)
-	assertRow(t, rows[2], "ws-child ws-last ws-color-a", "feat-v2", "↑3", 1)
-	assertRow(t, rows[3], "ws-child ws-last ws-color-a", "feat-v3", "↑6", 2)
+	assertRow(t, rows[0], "ws-color-main", "main", "=")
+	assertRow(t, rows[1], "ws-child ws-last ws-color-a", "feat", "↑1")
+	assertRow(t, rows[2], "ws-child ws-last ws-color-a", "feat-v2", "↑3")
+	assertRow(t, rows[3], "ws-child ws-last ws-color-a", "feat-v3", "↑6")
 }
 
 // helpers
@@ -178,7 +177,7 @@ func branchRows(t *testing.T, html string, want int) []string {
 	return rows
 }
 
-func assertRow(t *testing.T, row, classes, name, status string, depth int) {
+func assertRow(t *testing.T, row, classes, name, status string) {
 	t.Helper()
 	for _, c := range strings.Fields(classes) {
 		if !strings.Contains(row, c) {
@@ -192,13 +191,5 @@ func assertRow(t *testing.T, row, classes, name, status string, depth int) {
 		if !strings.Contains(row, part) {
 			t.Errorf("row missing status %q:\n%s", part, row)
 		}
-	}
-	if depth > 0 {
-		expected := fmt.Sprintf("margin-left:%dpx", depth*20)
-		if !strings.Contains(row, expected) {
-			t.Errorf("row missing depth indent %q:\n%s", expected, row)
-		}
-	} else if strings.Contains(row, "margin-left:") {
-		t.Errorf("row should have no depth indent but has one:\n%s", row)
 	}
 }

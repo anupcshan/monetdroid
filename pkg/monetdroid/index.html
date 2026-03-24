@@ -1016,24 +1016,21 @@
   .ws-color-b { background: var(--bg); }
   .ws-child {
     position: relative;
-    padding-left: calc(2 * var(--tree-spacing));
     border-left: var(--tree-line) solid var(--text2);
     margin-left: 12px;
+    padding-left: var(--tree-spacing);
   }
   .ws-child::before {
     content: '';
     position: absolute;
-    top: 50%;
+    top: 0;
     left: calc(-1 * var(--tree-line));
-    width: var(--tree-spacing);
-    border-bottom: var(--tree-line) solid var(--text2);
+    width: calc(var(--tree-spacing) + var(--tree-line));
+    height: 14px;
+    border: solid var(--text2);
+    border-width: 0 0 var(--tree-line) var(--tree-line);
   }
   .ws-last { border-color: transparent; }
-  .ws-last::before {
-    border-left: var(--tree-line) solid var(--text2);
-    top: 0;
-    height: 50%;
-  }
   .ws-branch-name { color: var(--text); font-weight: 500; }
   .ws-commits { text-align: right; min-width: 2ch; }
   .ws-ahead { color: var(--blue); }

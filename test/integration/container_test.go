@@ -1118,9 +1118,9 @@ func TestRebaseWorkstream(t *testing.T) {
 	Screenshot(t, page, "rebase_refreshed")
 
 	// Branch should now be in sync (no ↓ indicator).
-	rows := page.MustElements(".ws-branch-row.ws-child")
-	for _, row := range rows {
-		text := row.MustText()
+	nodes := page.MustElements(".ws-child")
+	for _, node := range nodes {
+		text := node.MustElement(".ws-branch-row").MustText()
 		if strings.Contains(text, "↓") {
 			t.Fatalf("expected branch to be in sync after rebase, got: %s", text)
 		}
@@ -1471,49 +1471,47 @@ func TestBranchTree(t *testing.T) {
 	WaitForElement(t, page, "#ws-panel", 5*time.Second)
 	Screenshot(t, page, "tree_before")
 
-	// Verify all 5 branch rows appear (feat + 4 children).
-	rows := page.MustElements(".ws-branch-row.ws-child")
-	if len(rows) != 5 {
+	// Verify all 5 tree nodes appear (feat + 4 children).
+	nodes := page.MustElements(".ws-child")
+	if len(nodes) != 5 {
 		var names []string
-		for _, r := range rows {
-			names = append(names, r.MustText())
+		for _, n := range nodes {
+			names = append(names, n.MustElement(".ws-branch-name").MustText())
 		}
 		Screenshot(t, page, "tree_wrong_count")
-		t.Fatalf("expected 5 branch rows, got %d: %v", len(rows), names)
+		t.Fatalf("expected 5 tree nodes, got %d: %v", len(nodes), names)
 	}
 
-	// Verify branch names and depths via margin-left styles.
-	type expect struct {
+	// Verify branch names and parent-relative ahead indicators.
+	expected := []struct {
 		name  string
-		depth int
-	}
-	expected := []expect{
-		{"feat", 0},
-		{"feat-api", 1},
-		{"feat-api-tests", 2},
-		{"feat-ui", 1},
-		{"feat-ui-tests", 2},
+		ahead string
+	}{
+		{"feat", "↑1"},
+		{"feat-api", "↑2"},
+		{"feat-api-tests", "↑1"},
+		{"feat-ui", "↑1"},
+		{"feat-ui-tests", "↑1"},
 	}
 	for i, exp := range expected {
-		name := rows[i].MustElement(".ws-branch-name").MustText()
+		name := nodes[i].MustElement(".ws-branch-name").MustText()
 		if name != exp.name {
 			Screenshot(t, page, "tree_wrong_name")
 			t.Fatalf("row %d: expected name %q, got %q", i, exp.name, name)
 		}
-		style := rows[i].MustEval(`function() { return this.getAttribute('style') || '' }`).String()
-		if exp.depth > 0 {
-			wantStyle := fmt.Sprintf("margin-left:%dpx", exp.depth*20)
-			if !strings.Contains(style, wantStyle) {
-				Screenshot(t, page, "tree_wrong_depth")
-				t.Fatalf("row %d (%s): expected style containing %q, got %q", i, exp.name, wantStyle, style)
-			}
-		} else if strings.Contains(style, "margin-left") {
-			Screenshot(t, page, "tree_wrong_depth")
-			t.Fatalf("row %d (%s): expected no margin-left, got style %q", i, exp.name, style)
+		commits := nodes[i].MustElement(".ws-commits").MustText()
+		if !strings.Contains(commits, exp.ahead) {
+			Screenshot(t, page, "tree_wrong_ahead")
+			t.Fatalf("row %d (%s): expected ahead %q, got %q", i, exp.name, exp.ahead, commits)
 		}
 	}
 
-	// Verify ahead indicators — feat-api has 2 extra commits (3 total ahead),
-	// feat-ui has 1 extra commit (2 total ahead).
+	// Verify nesting: feat-api and feat-ui should be inside a children
+	// container under feat (their parent nodes are nested, not flat).
+	nestedChildren := page.MustElements(".ws-child .ws-tree-children .ws-child")
+	if len(nestedChildren) < 4 {
+		Screenshot(t, page, "tree_not_nested")
+		t.Fatalf("expected at least 4 nested child nodes, got %d", len(nestedChildren))
+	}
 	Screenshot(t, page, "tree_done")
 }
