@@ -483,34 +483,52 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 // localUpstreamMap returns a map of branch → upstream for all local branches
 // that have a local upstream (remote = ".").
 func localUpstreamMap(cwd string) map[string]string {
-	cmd := exec.Command("git", "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	// Find all branches with a local upstream (remote=".") in one git call.
+	cmd := exec.Command("git", "config", "--get-regexp", `branch\..*\.remote`, `^\.$`)
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
 
+	// Extract branch names from "branch.<name>.remote ." lines.
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// e.g. "branch.feature-x.remote ."
+		key, _, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		name := strings.TrimPrefix(key, "branch.")
+		name = strings.TrimSuffix(name, ".remote")
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	// Build regex to fetch merge refs for just these branches.
+	pattern := `branch\.(` + strings.Join(names, "|") + `)\.merge`
+	cmd = exec.Command("git", "config", "--get-regexp", pattern)
+	cmd.Dir = cwd
+	out, err = cmd.Output()
+	if err != nil {
+		return nil
+	}
+
 	result := map[string]string{}
-	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if name == "" {
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// e.g. "branch.feature-x.merge refs/heads/main"
+		key, val, ok := strings.Cut(line, " ")
+		if !ok {
 			continue
 		}
-		// Check if remote is "." (local upstream).
-		cmd := exec.Command("git", "config", fmt.Sprintf("branch.%s.remote", name))
-		cmd.Dir = cwd
-		rOut, err := cmd.Output()
-		if err != nil || strings.TrimSpace(string(rOut)) != "." {
-			continue
-		}
-		// Get the merge ref.
-		cmd = exec.Command("git", "config", fmt.Sprintf("branch.%s.merge", name))
-		cmd.Dir = cwd
-		mOut, err := cmd.Output()
-		if err != nil {
-			continue
-		}
-		upstream := strings.TrimPrefix(strings.TrimSpace(string(mOut)), "refs/heads/")
-		if upstream != "" {
+		name := strings.TrimPrefix(key, "branch.")
+		name = strings.TrimSuffix(name, ".merge")
+		upstream := strings.TrimPrefix(strings.TrimSpace(val), "refs/heads/")
+		if name != "" && upstream != "" {
 			result[name] = upstream
 		}
 	}
