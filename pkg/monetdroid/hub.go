@@ -519,7 +519,9 @@ func (h *Hub) SeedEventLog(s *Session) {
 		}
 		if msg.Type == "tool_result" && suppressedIDs[msg.ToolUseID] {
 			delete(suppressedIDs, msg.ToolUseID)
-			continue
+			if len(msg.Images) == 0 {
+				continue
+			}
 		}
 		rendered := RenderMsg(msg)
 		// Strip spinners for tool_use events that already have results

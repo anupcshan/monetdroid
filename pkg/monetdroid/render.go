@@ -331,6 +331,16 @@ func RenderMsg(msg ServerMsg) string {
 		detail := FormatToolInput(msg.Tool, msg.Input)
 		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail">%s</div></details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, Esc(detail))
 	case "tool_result":
+		if len(msg.Images) > 0 {
+			var content strings.Builder
+			for _, img := range msg.Images {
+				dlgID := fmt.Sprintf("img-dlg-%d", imgDlgSeq.Add(1))
+				src := fmt.Sprintf("data:%s;base64,%s", Esc(img.MediaType), img.Data)
+				fmt.Fprintf(&content, `<img src="%s" class="msg-img-thumb" onclick="document.getElementById('%s').showModal()">`, src, dlgID)
+				fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s"></dialog>`, dlgID, src)
+			}
+			return fmt.Sprintf(`<div class="msg msg-tool">%s</div>`, content.String())
+		}
 		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-result-chip"><summary class="tool-result-summary">result</summary><div class="tool-result-full">%s</div></details></div>`, Esc(msg.Output))
 	case "error":
 		return fmt.Sprintf(`<div class="msg"><div class="msg-error">✗ %s</div></div>`, Esc(msg.Error))

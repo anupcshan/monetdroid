@@ -734,6 +734,61 @@ func TestBashSpinner(t *testing.T) {
 	Screenshot(t, page, "bash_spinner_reload")
 }
 
+func TestReadImage(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "read_image.jsonl", testMode())
+
+	// Create a minimal 1x1 red PNG (base64) inside the container.
+	// This is a valid 67-byte PNG.
+	pngB64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+	if out, err := f.DockerExec("sh", "-c", "echo '"+pngB64+"' | base64 -d > "+containerWorkdir+"/test.png"); err != nil {
+		t.Fatalf("create test.png: %v\n%s", err, out)
+	}
+
+	page := f.Page()
+
+	// Create session
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	// Ask Claude to read the image
+	page.MustElement(`textarea[name="text"]`).MustInput("Read the file test.png and describe what you see")
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForText(t, page, ".msg-user", "Read the file test.png", 30*time.Second)
+
+	// Wait for the Read tool chip to appear
+	WaitForElement(t, page, ".tool-chip", 120*time.Second)
+	Screenshot(t, page, "read_image_tool_chip")
+
+	// Wait for the image thumbnail to appear in the messages area.
+	// The image comes as a tool_result with an <img> tag using a data: URL.
+	WaitForElement(t, page, ".msg-tool .msg-img-thumb", 30*time.Second)
+	Screenshot(t, page, "read_image_visible")
+
+	// Verify the image src is a data:image/png URL
+	src := page.MustEval(`() => document.querySelector('.msg-tool .msg-img-thumb').src`).String()
+	if !strings.HasPrefix(src, "data:image/png;base64,") {
+		t.Fatalf("expected data:image/png;base64,... src, got: %.80s...", src)
+	}
+
+	// Wait for assistant response (Claude describes the image)
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	Screenshot(t, page, "read_image_complete")
+
+	// --- Reload and verify image survives replay ---
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	page.MustNavigate(currentURL).MustWaitStable()
+	WaitForElement(t, page, ".msg-tool .msg-img-thumb", 10*time.Second)
+	Screenshot(t, page, "read_image_after_reload")
+
+	reloadSrc := page.MustEval(`() => document.querySelector('.msg-tool .msg-img-thumb').src`).String()
+	if !strings.HasPrefix(reloadSrc, "data:image/png;base64,") {
+		t.Fatalf("after reload, expected data:image/png;base64,... src, got: %.80s...", reloadSrc)
+	}
+}
+
 // initGitRepo initializes a git repo inside the container at the given path.
 func initGitRepo(t *testing.T, f *ContainerFixture, dir string) {
 	t.Helper()

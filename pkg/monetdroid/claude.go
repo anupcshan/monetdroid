@@ -67,6 +67,11 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 		for _, b := range event.Message.Content.Blocks {
 			if b.Type == "tool_result" {
 				suppressed := s.RemoveSuppressed(b.ToolUseID)
+				// Always show images even for suppressed tools (e.g. Read on screenshots).
+				if len(b.Content.Images) > 0 {
+					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Images: b.Content.Images})
+					continue
+				}
 				if suppressed {
 					continue
 				}

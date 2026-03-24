@@ -106,6 +106,7 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 			sm.Tool = m.Tool
 			sm.ToolUseID = m.ToolUseID
 			sm.Output = m.Output
+			sm.Images = m.Images
 		case "compact_boundary":
 			sm.Type = "compact_boundary"
 		default:

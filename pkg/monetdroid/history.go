@@ -85,14 +85,42 @@ type contentBlock struct {
 	Source    *imageSource    `json:"source,omitempty"`
 }
 
-// blockContent handles the polymorphic tool_result content: plain string or complex object.
+// blockContent handles the polymorphic tool_result content: plain string or
+// array of content blocks (which may include text and image blocks).
 type blockContent struct {
-	Text string // set when content is a plain string
-	Raw  string // JSON string fallback for non-string content
+	Text   string      // set when content is a plain string or concatenated text blocks
+	Images []ImageData // set when content array includes image blocks
+	Raw    string      // JSON string fallback for non-string, non-array content
 }
 
 func (c *blockContent) UnmarshalJSON(data []byte) error {
 	if json.Unmarshal(data, &c.Text) == nil {
+		return nil
+	}
+	// Try array of content blocks (tool_result with images).
+	var blocks []struct {
+		Type   string       `json:"type"`
+		Text   string       `json:"text,omitempty"`
+		Source *imageSource `json:"source,omitempty"`
+	}
+	if json.Unmarshal(data, &blocks) == nil && len(blocks) > 0 {
+		var texts []string
+		for _, b := range blocks {
+			switch b.Type {
+			case "text":
+				if b.Text != "" {
+					texts = append(texts, b.Text)
+				}
+			case "image":
+				if b.Source != nil && b.Source.MediaType != "" && b.Source.Data != "" {
+					c.Images = append(c.Images, ImageData{
+						MediaType: b.Source.MediaType,
+						Data:      b.Source.Data,
+					})
+				}
+			}
+		}
+		c.Text = strings.Join(texts, "\n")
 		return nil
 	}
 	c.Raw = string(data)
@@ -373,10 +401,14 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 						userImages = append(userImages, ImageData{MediaType: b.Source.MediaType, Data: b.Source.Data})
 					}
 				case "tool_result":
-					output := b.Content.String()
 					toolName := toolNames[b.ToolUseID]
-					if !isBoringResult(output) {
-						msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000)})
+					if len(b.Content.Images) > 0 {
+						msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Images: b.Content.Images})
+					} else {
+						output := b.Content.String()
+						if !isBoringResult(output) {
+							msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000)})
+						}
 					}
 				}
 			}
