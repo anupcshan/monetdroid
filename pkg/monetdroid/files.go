@@ -42,16 +42,6 @@ func (h *Hub) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	// Single file diff view
-	if diffPath := r.URL.Query().Get("diff"); diffPath != "" {
-		mode := r.URL.Query().Get("mode")
-		if mode == "" {
-			mode = "unstaged"
-		}
-		w.Write([]byte(renderFilesPage(sessionID, cwd, "changes", renderFileDiff(sessionID, cwd, diffPath, mode))))
-		return
-	}
-
 	tab := r.URL.Query().Get("tab")
 	if tab == "" {
 		tab = "changes"
@@ -94,7 +84,7 @@ func (h *Hub) handleFilesStage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(renderFileList(sessionID, cwd)))
+	w.Write([]byte(renderChangesContent(sessionID, cwd)))
 }
 
 func (h *Hub) handleFilesUnstage(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +103,7 @@ func (h *Hub) handleFilesUnstage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(renderFileList(sessionID, cwd)))
+	w.Write([]byte(renderChangesContent(sessionID, cwd)))
 }
 
 // --- Page rendering ---
@@ -169,13 +159,8 @@ func renderFilesPage(sessionID, cwd, activeTab, content string) string {
   /* Diff view */
   .diff-nav { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
   .diff-nav-back { color: var(--blue); font-size: 12px; }
-  .diff-nav-action { display: inline; }
-  .diff-nav-pager { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 12px; }
-  .diff-nav-arrow { color: var(--blue); padding: 2px 6px; text-decoration: none; font-size: 16px; line-height: 1; }
-  .diff-nav-arrow:hover { color: var(--text); }
-  .diff-nav-arrow.disabled { color: var(--border); pointer-events: none; }
-  .diff-nav-pos { color: var(--text2); font-family: 'JetBrains Mono', monospace; font-size: 11px; min-width: 32px; text-align: center; }
-  .diff-file-header { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); padding: 12px 16px 8px; border-bottom: 1px solid var(--border); }
+  .diff-file-header { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); padding: 12px 16px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .diff-file-header .stage-btn { font-size: 10px; padding: 2px 8px; }
   .diff-body { padding: 0 16px 24px; }
   .diff-body pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
 
@@ -266,10 +251,6 @@ func renderFilesPage(sessionID, cwd, activeTab, content string) string {
 // --- Changes tab ---
 
 func renderChangesContent(sessionID, cwd string) string {
-	return renderFileList(sessionID, cwd)
-}
-
-func renderFileList(sessionID, cwd string) string {
 	files, err := GitStatusFiles(cwd)
 	if err != nil || len(files) == 0 {
 		return `<div class="files-empty">No uncommitted changes</div>`
@@ -288,6 +269,10 @@ func renderFileList(sessionID, cwd string) string {
 			}
 		}
 	}
+
+	// Get all diffs in bulk (1 call each instead of per-file).
+	stagedDiffs := splitDiffByFileMap(gitDiffAll(cwd, "staged"))
+	unstagedDiffs := splitDiffByFileMap(gitDiffAll(cwd, "unstaged"))
 
 	hasStaged := len(staged) > 0
 	hasUnstaged := len(modified) > 0 || len(untracked) > 0
@@ -308,40 +293,25 @@ func renderFileList(sessionID, cwd string) string {
 
 	b.WriteString(`<div id="file-list">`)
 
-	baseURL := "/files?session=" + Esc(sessionID)
-
 	if len(staged) > 0 {
 		fmt.Fprintf(&b, `<div class="file-group-header">Staged (%d)</div>`, len(staged))
 		for _, f := range staged {
-			badge := string(f.Index)
-			fmt.Fprintf(&b, `<div class="file-row">`)
-			fmt.Fprintf(&b, `<span class="file-status file-status-%s">%s</span>`, Esc(badge), Esc(badge))
-			fmt.Fprintf(&b, `<span class="file-name"><a href="%s&diff=%s&mode=staged">%s</a></span>`, baseURL, Esc(f.Path), Esc(f.Path))
-			fmt.Fprintf(&b, `<span class="file-action"><button class="stage-btn" hx-post="/files/unstage" hx-vals='{"session":"%s","path":"%s"}' hx-target="#file-list" hx-swap="innerHTML">Unstage</button></span>`, Esc(sessionID), Esc(f.Path))
-			b.WriteString(`</div>`)
+			renderInlineDiff(&b, sessionID, f.Path, string(f.Index), stagedDiffs[f.Path], "staged")
 		}
 	}
 
 	if len(modified) > 0 {
 		fmt.Fprintf(&b, `<div class="file-group-header">Modified (%d)</div>`, len(modified))
 		for _, f := range modified {
-			badge := string(f.Worktree)
-			fmt.Fprintf(&b, `<div class="file-row">`)
-			fmt.Fprintf(&b, `<span class="file-status file-status-%s">%s</span>`, Esc(badge), Esc(badge))
-			fmt.Fprintf(&b, `<span class="file-name"><a href="%s&diff=%s&mode=unstaged">%s</a></span>`, baseURL, Esc(f.Path), Esc(f.Path))
-			fmt.Fprintf(&b, `<span class="file-action"><button class="stage-btn" hx-post="/files/stage" hx-vals='{"session":"%s","path":"%s"}' hx-target="#file-list" hx-swap="innerHTML">Stage</button></span>`, Esc(sessionID), Esc(f.Path))
-			b.WriteString(`</div>`)
+			renderInlineDiff(&b, sessionID, f.Path, string(f.Worktree), unstagedDiffs[f.Path], "unstaged")
 		}
 	}
 
 	if len(untracked) > 0 {
 		fmt.Fprintf(&b, `<div class="file-group-header">Untracked (%d)</div>`, len(untracked))
 		for _, f := range untracked {
-			fmt.Fprintf(&b, `<div class="file-row">`)
-			fmt.Fprintf(&b, `<span class="file-status file-status-U">?</span>`)
-			fmt.Fprintf(&b, `<span class="file-name"><a href="%s&diff=%s&mode=untracked">%s</a></span>`, baseURL, Esc(f.Path), Esc(f.Path))
-			fmt.Fprintf(&b, `<span class="file-action"><button class="stage-btn" hx-post="/files/stage" hx-vals='{"session":"%s","path":"%s"}' hx-target="#file-list" hx-swap="innerHTML">Stage</button></span>`, Esc(sessionID), Esc(f.Path))
-			b.WriteString(`</div>`)
+			diff, _ := GitDiffFileContent(cwd, f.Path, "untracked")
+			renderInlineDiff(&b, sessionID, f.Path, "?", diff, "untracked")
 		}
 	}
 
@@ -349,112 +319,26 @@ func renderFileList(sessionID, cwd string) string {
 	return b.String()
 }
 
-// --- Diff view ---
-
-// diffNavEntry is a file in the changes list, used for prev/next navigation.
-type diffNavEntry struct {
-	Path string
-	Mode string // "staged", "unstaged", "untracked"
-}
-
-// buildDiffNav returns a flat list of all changed files in the order they appear in the changes view.
-func buildDiffNav(cwd string) []diffNavEntry {
-	files, err := GitStatusFiles(cwd)
-	if err != nil {
-		return nil
+func renderInlineDiff(b *strings.Builder, sessionID, path, badge, diff, mode string) {
+	action := "Stage"
+	endpoint := "/files/stage"
+	if mode == "staged" {
+		action = "Unstage"
+		endpoint = "/files/unstage"
 	}
-	var nav []diffNavEntry
-	for _, f := range files {
-		if f.IsStaged() {
-			nav = append(nav, diffNavEntry{Path: f.Path, Mode: "staged"})
-		}
-	}
-	for _, f := range files {
-		if f.IsModified() {
-			nav = append(nav, diffNavEntry{Path: f.Path, Mode: "unstaged"})
-		}
-	}
-	for _, f := range files {
-		if f.IsUntracked() {
-			nav = append(nav, diffNavEntry{Path: f.Path, Mode: "untracked"})
-		}
-	}
-	return nav
-}
-
-func renderFileDiff(sessionID, cwd, path, mode string) string {
-	var b strings.Builder
-
-	baseHref := "/files?"
+	fmt.Fprintf(b, `<div class="diff-section" id="%s">`, Esc(path))
+	fmt.Fprintf(b, `<div class="diff-file-header"><span class="file-status file-status-%s">%s</span> %s`, Esc(badge), Esc(badge), Esc(path))
 	if sessionID != "" {
-		baseHref += "session=" + Esc(sessionID)
-	} else {
-		baseHref += "cwd=" + Esc(cwd)
+		fmt.Fprintf(b, ` <button class="stage-btn" hx-post="%s" hx-vals='{"session":"%s","path":"%s"}' hx-target="#file-list" hx-swap="innerHTML">%s</button>`,
+			endpoint, Esc(sessionID), Esc(path), action)
 	}
-
-	// Build navigation list
-	nav := buildDiffNav(cwd)
-	curIdx := -1
-	for i, e := range nav {
-		if e.Path == path && e.Mode == mode {
-			curIdx = i
-			break
-		}
-	}
-
-	// Navigation bar: ← changes   [Unstage/Stage]   < 4/9 >
-	b.WriteString(`<div class="diff-nav">`)
-	fmt.Fprintf(&b, `<a href="%s" class="diff-nav-back">← changes</a>`, baseHref)
-
-	// Stage/unstage button
-	if sessionID != "" {
-		switch mode {
-		case "staged":
-			fmt.Fprintf(&b, `<form class="diff-nav-action" hx-post="/files/unstage" hx-vals='{"session":"%s","path":"%s"}' hx-swap="none" hx-on::after-request="window.location.href='%s'"><button class="stage-btn" type="submit">Unstage</button></form>`,
-				Esc(sessionID), Esc(path), baseHref)
-		case "unstaged", "untracked":
-			fmt.Fprintf(&b, `<form class="diff-nav-action" hx-post="/files/stage" hx-vals='{"session":"%s","path":"%s"}' hx-swap="none" hx-on::after-request="window.location.href='%s'"><button class="stage-btn" type="submit">Stage</button></form>`,
-				Esc(sessionID), Esc(path), baseHref)
-		}
-	}
-
-	// Prev/next navigation
-	if len(nav) > 1 && curIdx >= 0 {
-		b.WriteString(`<span class="diff-nav-pager">`)
-		if curIdx > 0 {
-			prev := nav[curIdx-1]
-			fmt.Fprintf(&b, `<a href="%s&diff=%s&mode=%s" class="diff-nav-arrow">‹</a>`, baseHref, Esc(prev.Path), Esc(prev.Mode))
-		} else {
-			b.WriteString(`<span class="diff-nav-arrow disabled">‹</span>`)
-		}
-		fmt.Fprintf(&b, `<span class="diff-nav-pos">%d/%d</span>`, curIdx+1, len(nav))
-		if curIdx < len(nav)-1 {
-			next := nav[curIdx+1]
-			fmt.Fprintf(&b, `<a href="%s&diff=%s&mode=%s" class="diff-nav-arrow">›</a>`, baseHref, Esc(next.Path), Esc(next.Mode))
-		} else {
-			b.WriteString(`<span class="diff-nav-arrow disabled">›</span>`)
-		}
-		b.WriteString(`</span>`)
-	}
-
 	b.WriteString(`</div>`)
-
-	modeLabel := mode
-	if modeLabel == "" {
-		modeLabel = "unstaged"
+	if diff != "" {
+		b.WriteString(`<div class="diff-body">`)
+		b.WriteString(highlightDiff(diff))
+		b.WriteString(`</div>`)
 	}
-	fmt.Fprintf(&b, `<div class="diff-file-header">%s <span style="color:var(--text2)">(%s)</span></div>`, Esc(path), Esc(modeLabel))
-
-	diffContent, err := GitDiffFileContent(cwd, path, mode)
-	if err != nil || diffContent == "" {
-		b.WriteString(`<div class="files-empty">No changes</div>`)
-		return b.String()
-	}
-
-	b.WriteString(`<div class="diff-body">`)
-	b.WriteString(highlightDiff(diffContent))
 	b.WriteString(`</div>`)
-	return b.String()
 }
 
 // --- Browse tab ---

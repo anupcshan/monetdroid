@@ -682,6 +682,53 @@ func GitStatusFiles(cwd string) ([]StatusFile, error) {
 	return files, nil
 }
 
+// gitDiffAll returns the combined diff for all staged or unstaged changes.
+func gitDiffAll(cwd, mode string) string {
+	var cmd *exec.Cmd
+	switch mode {
+	case "staged":
+		cmd = exec.Command("git", "diff", "--cached", "-w")
+	default:
+		cmd = exec.Command("git", "diff", "-w")
+	}
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// splitDiffByFileMap splits a combined diff into a map of path → diff chunk.
+func splitDiffByFileMap(fullDiff string) map[string]string {
+	result := map[string]string{}
+	var current strings.Builder
+	var currentFile string
+	for _, line := range strings.Split(fullDiff, "\n") {
+		if strings.HasPrefix(line, "diff --git ") {
+			if currentFile != "" {
+				result[currentFile] = current.String()
+			}
+			current.Reset()
+			// Extract path from "diff --git a/foo b/foo"
+			fields := strings.Fields(line)
+			if len(fields) >= 4 {
+				currentFile = strings.TrimPrefix(fields[3], "b/")
+			} else {
+				currentFile = ""
+			}
+		}
+		if current.Len() > 0 {
+			current.WriteByte('\n')
+		}
+		current.WriteString(line)
+	}
+	if currentFile != "" {
+		result[currentFile] = current.String()
+	}
+	return result
+}
+
 // GitDiffFileContent returns the diff for a single file.
 // mode is "staged" (--cached), "unstaged" (working tree), or "untracked" (--no-index).
 func GitDiffFileContent(cwd, path, mode string) (string, error) {
