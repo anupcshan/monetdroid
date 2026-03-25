@@ -354,8 +354,13 @@
   .todo-pending .todo-icon { color: var(--text2); }
 
   /* --- Messages --- */
-  .messages {
+  .messages-wrap {
     flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  .messages {
+    height: 100%;
     overflow-y: auto;
     padding: 12px 16px;
     -webkit-overflow-scrolling: touch;
@@ -363,6 +368,8 @@
   .msg {
     margin-bottom: 16px;
     max-width: 100%;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 60px;
   }
   .msg-user {
     display: flex;
@@ -621,6 +628,8 @@
     color: var(--accent);
     font-size: 12px;
     font-weight: 600;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 30px;
   }
   .compact-boundary::before, .compact-boundary::after {
     content: '';
@@ -658,6 +667,8 @@
     border-radius: var(--radius);
     padding: 14px;
     margin-bottom: 16px;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 120px;
   }
   .perm-prompt .perm-header {
     font-size: 13px;
@@ -1112,6 +1123,27 @@
   .ws-prune-actions { margin-top: 10px; }
   .ws-prune-btn { background: var(--accent) !important; color: var(--bg) !important; border-color: var(--accent) !important; }
 
+  /* --- Scroll-to-bottom button --- */
+  .scroll-btn {
+    display: none;
+    position: absolute;
+    bottom: 12px;
+    right: 20px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 16px;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    z-index: 10;
+  }
+  .scroll-btn:hover { background: var(--surface2); border-color: var(--text2); }
+
   /* --- Empty state --- */
   .empty-state {
     display: flex;
@@ -1136,24 +1168,12 @@
     hx-swap="none" means the element itself isn't updated — only OOB elements
     in the response are swapped into their targets.
 
-    Auto-scroll logic (hx-on:htmx:sse-message):
-      Fires after every SSE message. Uses requestAnimationFrame so the DOM has
-      settled before we measure scroll position.
-
-      Two cases:
-        1. Session replay (innerHTML swap on #messages): the browser resets
-           scrollTop to 0. We detect this and scroll to the bottom so the user
-           sees the end of the conversation.
-        2. Streaming (beforeend swap appending new messages): scrollTop is
-           preserved. We only auto-scroll if the user is already near the
-           bottom (within 200px), so reading earlier messages isn't interrupted.
+    Auto-scroll: debounced via _sp flag so at most 1 reflow per frame.
+    Only scrolls if _ab (at-bottom) is true, tracked by scroll event on #messages.
+    _ab starts true so initial load scrolls to bottom.
   -->
   <div sse-swap="htmx" hx-swap="none" style="display:none"
-       hx-on:htmx:sse-message="requestAnimationFrame(()=>{
-         var m=document.getElementById('messages');
-         if(m.scrollTop===0||m.scrollHeight-m.scrollTop-m.clientHeight<200)
-           m.scrollTop=m.scrollHeight
-       })"></div>
+       hx-on:htmx:sse-message="if(window._ab!==false&&!window._sp){window._sp=true;requestAnimationFrame(function(){window._sp=false;var m=document.getElementById('messages');m.scrollTop=m.scrollHeight})}"></div>
 
   <div class="header">
     <button class="header-btn" popovertarget="drawer" hx-get="/drawer" hx-target="#drawer-content" hx-swap="innerHTML">☰</button>
@@ -1174,12 +1194,16 @@
     <div class="todos-body" id="todos-body"></div>
   </details>
 
-  <div class="messages" id="messages">
-    <div class="empty-state">
-      <div class="empty-icon">⌘</div>
-      <p>Start a new session to begin working with Claude Code on your project</p>
-      <button class="btn-create" popovertarget="new-session-popover" style="padding:10px 24px">New Session</button>
+  <div class="messages-wrap">
+    <div class="messages" id="messages"
+         hx-on:scroll="var ab=this.scrollHeight-this.scrollTop-this.clientHeight<200;window._ab=ab;document.getElementById('scroll-btn').style.display=ab?'none':'flex'">
+      <div class="empty-state">
+        <div class="empty-icon">⌘</div>
+        <p>Start a new session to begin working with Claude Code on your project</p>
+        <button class="btn-create" popovertarget="new-session-popover" style="padding:10px 24px">New Session</button>
+      </div>
     </div>
+    <button id="scroll-btn" class="scroll-btn" onclick="var m=document.getElementById('messages');m.scrollTop=m.scrollHeight;this.style.display='none';window._ab=true">↓</button>
   </div>
 
   <div class="queue-bar" id="queue-bar"></div>
