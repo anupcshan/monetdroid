@@ -167,7 +167,7 @@ func FormatPermDetail(tool string, input *ToolInput) string {
 }
 
 var chromaFormatter = chromahtml.New()
-var chromaStyle = styles.Get("vim")
+var chromaStyle = styles.Get("onedark")
 
 func runDiff(filePath, oldStr, newStr string, context int) string {
 	oldFile, err := os.CreateTemp("", "diff-old-*")
