@@ -95,11 +95,15 @@ func (t *GitTrace) CombinedOutput(cwd string, args ...string) ([]byte, error) {
 
 // OutputExitOK runs a git command where exit code 1 is normal (e.g. git grep, git diff --no-index).
 func (t *GitTrace) OutputExitOK(cwd string, args ...string) ([]byte, int, error) {
+	return t.RunCmdExitOK(cwd, exec.Command("git", args...), args)
+}
+
+// RunCmdExitOK runs an arbitrary command where exit code 1 is normal.
+func (t *GitTrace) RunCmdExitOK(cwd string, cmd *exec.Cmd, label []string) ([]byte, int, error) {
 	start := time.Now()
-	cmd := exec.Command("git", args...)
 	cmd.Dir = cwd
 	out, err := cmd.Output()
-	t.record(cwd, time.Since(start), args)
+	t.record(cwd, time.Since(start), label)
 	if err != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
 		return out, 1, nil
 	}
@@ -960,15 +964,34 @@ func GitListDir(t *GitTrace, cwd, dir string) ([]FileEntry, error) {
 	return entries, nil
 }
 
+// hasRg is true if ripgrep is available on the system.
+var hasRg = func() bool {
+	_, err := exec.LookPath("rg")
+	return err == nil
+}()
+
 // GitGrep searches for a regex pattern across the repository.
+// Prefers ripgrep (rg) when available for better performance.
 func GitGrep(t *GitTrace, cwd, pattern string) ([]SearchMatch, error) {
-	out, _, err := t.OutputExitOK(cwd, "grep", "-n", "-I", "-E", "--untracked", pattern)
+	var cmd *exec.Cmd
+	var label []string
+	if hasRg {
+		args := []string{"--no-heading", "--color=never", "-n", pattern}
+		label = append([]string{"rg"}, args...)
+		cmd = exec.Command("rg", args...)
+	} else {
+		args := []string{"grep", "-n", "-I", "-E", "--untracked", pattern}
+		label = append([]string{"git"}, args...)
+		cmd = exec.Command("git", args...)
+	}
+	out, _, err := t.RunCmdExitOK(cwd, cmd, label)
 	if err != nil {
 		return nil, err
 	}
 	if out == nil {
 		return nil, nil
 	}
+
 	var results []SearchMatch
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
