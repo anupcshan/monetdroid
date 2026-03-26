@@ -338,7 +338,11 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		summary := ToolChipSummary(msg.Tool, msg.Input)
 		detail := FormatToolInput(msg.Tool, msg.Input)
-		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail">%s</div></details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, Esc(detail))
+		bgSlot := ""
+		if msg.Tool == "Bash" {
+			bgSlot = fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
+		}
+		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail">%s</div>%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, Esc(detail), bgSlot)
 	case "tool_result":
 		if len(msg.Images) > 0 {
 			var content strings.Builder

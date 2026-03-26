@@ -684,6 +684,9 @@ func TestBashSpinner(t *testing.T) {
 	}
 	Screenshot(t, page, "bash_spinner_still_running")
 
+	// Open the tool chip details to trigger lazy-load of bg output
+	page.MustElement(`.tool-chip summary`).MustClick()
+
 	// Wait for streaming to start — at least 2 lines visible
 	WaitForText(t, page, ".tool-bg-output", "step 2", 30*time.Second)
 
@@ -699,6 +702,9 @@ func TestBashSpinner(t *testing.T) {
 	currentURL := page.MustEval(`() => window.location.href`).String()
 	page.MustNavigate(currentURL).MustWaitStable()
 	WaitForElement(t, page, ".tool-bg-output", 10*time.Second)
+	// Re-open tool chip details after reload to trigger lazy-load
+	page.MustElement(`.tool-chip summary`).MustClick()
+	time.Sleep(1 * time.Second) // wait for SSE stream to deliver content
 	reloadBgText := page.MustEval(`() => document.querySelector('.tool-bg-output').textContent`).String()
 	if !strings.Contains(reloadBgText, "step 2") {
 		Screenshot(t, page, "bash_bg_reload_missing_output")
@@ -708,6 +714,13 @@ func TestBashSpinner(t *testing.T) {
 
 	// Wait for all output to arrive
 	WaitForText(t, page, ".tool-bg-output", "step 10", 30*time.Second)
+
+	// Verify no duplicate output (each step should appear exactly once)
+	finalBgText := page.MustEval(`() => document.querySelector('.tool-bg-output').textContent`).String()
+	if cnt := strings.Count(finalBgText, "step 1\n"); cnt != 1 {
+		Screenshot(t, page, "bash_bg_duplicated")
+		t.Fatalf("expected 'step 1\\n' exactly once in bg output, got %d:\n%s", cnt, finalBgText)
+	}
 	Screenshot(t, page, "bash_bg_output")
 
 	// Spinner should be removed by task_notification — get a fresh reference

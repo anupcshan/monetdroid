@@ -3,11 +3,9 @@ package monetdroid
 import (
 	"fmt"
 	"io"
-	"log"
+	"net/url"
 	"os"
 	"regexp"
-	"strings"
-	"time"
 )
 
 var bgTaskPattern = regexp.MustCompile(`Output is being written to: (.+\.output)`)
@@ -22,67 +20,49 @@ func ParseBgTaskPath(output string) string {
 	return m[1]
 }
 
-// TailBgTask tails a background task output file and calls onChunk with
-// new content as it appears. Calls onTick with the elapsed duration on
-// every poll iteration. Stops when stop is closed (via task_notification).
-func TailBgTask(path string, stop <-chan struct{}, onChunk func(string), onTick func(time.Duration)) {
-	var offset int64
-	started := time.Now()
-	const pollInterval = 500 * time.Millisecond
-
-	for {
-		select {
-		case <-stop:
-			if err := readChunk(path, &offset, onChunk); err != nil {
-				log.Printf("[bgtask] final read %s: %v", path, err)
-			}
-			return
-		default:
-		}
-
-		onTick(time.Since(started))
-		if err := readChunk(path, &offset, onChunk); err != nil {
-			log.Printf("[bgtask] read %s: %v", path, err)
-		}
-		time.Sleep(pollInterval)
-	}
-}
-
-func readChunk(path string, offset *int64, onChunk func(string)) error {
+// ReadBgChunk reads new content from a bg task output file starting at offset.
+// Returns the content, new offset, and any error.
+func ReadBgChunk(path string, offset int64) (string, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return "", offset, err
 	}
 	defer f.Close()
-
 	info, err := f.Stat()
 	if err != nil {
-		return err
+		return "", offset, err
 	}
-	if info.Size() <= *offset {
-		return nil
+	if info.Size() <= offset {
+		return "", offset, nil
 	}
-
-	if _, err := f.Seek(*offset, io.SeekStart); err != nil {
-		return err
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return "", offset, err
 	}
-	buf := make([]byte, info.Size()-*offset)
+	buf := make([]byte, info.Size()-offset)
 	n, err := f.Read(buf)
 	if n > 0 {
-		*offset += int64(n)
-		onChunk(string(buf[:n]))
+		return string(buf[:n]), offset + int64(n), err
 	}
-	return err
+	return "", offset, err
 }
 
-// RenderBgOutput formats a chunk of background task output as an OOB swap
-// that appends to the tool chip's output area.
-func RenderBgOutput(toolUseID, chunk string) string {
-	// Escape and format
-	escaped := Esc(strings.TrimRight(chunk, "\n"))
-	if escaped == "" {
-		return ""
-	}
-	divID := "bg-" + toolUseID
-	return OobSwap(divID, "beforeend", fmt.Sprintf("<span>%s\n</span>", escaped))
+// RenderBgSlot returns a lazy-load trigger for a background task output.
+// The actual SSE connection is only made when the element becomes visible
+// (i.e., when the user opens the tool chip's <details>).
+func RenderBgSlot(sessionID, toolUseID string) string {
+	return fmt.Sprintf(
+		`<div class="tool-bg-output" id="bg-%s" `+
+			`hx-get="/bg-output/connect?session=%s&tool_id=%s" `+
+			`hx-trigger="revealed" hx-swap="innerHTML"></div>`,
+		Esc(toolUseID), url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
+}
+
+// RenderBgSSEDiv returns the SSE-connected div that streams bg task output.
+// Returned by /bg-output/connect when the lazy-load trigger fires.
+func RenderBgSSEDiv(sessionID, toolUseID string) string {
+	return fmt.Sprintf(
+		`<div hx-ext="sse" `+
+			`sse-connect="/bg-output/stream?session=%s&tool_id=%s" `+
+			`sse-swap="chunk" hx-swap="beforeend"></div>`,
+		url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
 }

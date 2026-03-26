@@ -23,6 +23,7 @@ type Session struct {
 	Todos             []Todo
 	SuppressedToolIDs map[string]string        // tool_use id → tool name, for suppressing results
 	BgTaskStops       map[string]chan struct{} // tool_use id → stop channel for bg tailers
+	BgTaskPaths       map[string]string        // tool_use id → output file path
 	DiffStat          DiffStat
 	EventLog          EventLog
 	PermChans         map[string]chan PermResponse
@@ -63,6 +64,14 @@ func (s *Session) GetCwd() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Cwd
+}
+
+func (s *Session) GetLog() []ServerMsg {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ServerMsg, len(s.Log))
+	copy(out, s.Log)
+	return out
 }
 
 func (s *Session) GetLabelAndCwd() (string, string) {
@@ -216,9 +225,33 @@ func (s *Session) RegisterBgStop(id string, ch chan struct{}) {
 	s.mu.Unlock()
 }
 
+func (s *Session) RegisterBgPath(id, path string) {
+	s.mu.Lock()
+	if s.BgTaskPaths == nil {
+		s.BgTaskPaths = make(map[string]string)
+	}
+	s.BgTaskPaths[id] = path
+	s.mu.Unlock()
+}
+
+func (s *Session) GetBgPath(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.BgTaskPaths[id]
+}
+
 func (s *Session) CloseBgStop(id string) {
 	s.mu.Lock()
 	if ch, ok := s.BgTaskStops[id]; ok {
+		close(ch)
+		delete(s.BgTaskStops, id)
+	}
+	s.mu.Unlock()
+}
+
+func (s *Session) CloseAllBgStops() {
+	s.mu.Lock()
+	for id, ch := range s.BgTaskStops {
 		close(ch)
 		delete(s.BgTaskStops, id)
 	}

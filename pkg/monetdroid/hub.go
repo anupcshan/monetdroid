@@ -313,30 +313,34 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 	// Remove spinner when tool_result arrives
 	if msg.Type == "tool_result" && msg.ToolUseID != "" {
-		// Detect background Bash tasks and start tailing their output
+		// Detect background Bash tasks — insert lazy-load SSE slot for output
 		if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
-			bgDivID := "bg-" + msg.ToolUseID
-			// Insert an output area inside the tool chip; suppress the result chip.
-			// Keep the spinner — it will be removed when task_done arrives.
-			parts = append(parts, OobSwap("tool-"+msg.ToolUseID, "beforeend",
-				fmt.Sprintf(`<div class="tool-bg-output" id="%s"></div>`, bgDivID)))
-			msgHTML = ""
+			// Register the output path and stop channel for the stream endpoint.
 			toolUseID := msg.ToolUseID
 			stopCh := make(chan struct{})
 			if s != nil {
 				s.RegisterBgStop(toolUseID, stopCh)
+				s.RegisterBgPath(toolUseID, bgPath)
 			}
+			// Populate the bg-slot with a lazy-load trigger.
+			// The SSE connection is only made when the user opens the details.
+			// Keep the spinner — it will be removed when task_done arrives.
+			parts = append(parts, OobSwap("bg-slot-"+msg.ToolUseID, "innerHTML",
+				RenderBgSlot(sessionID, msg.ToolUseID)))
+			msgHTML = ""
+			// Elapsed timer — ticks every second until task completes.
 			go func() {
-				TailBgTask(bgPath, stopCh, func(chunk string) {
-					event := RenderBgOutput(toolUseID, chunk)
-					if event != "" {
-						h.BroadcastToSession(sessionID, FormatSSE("htmx", event))
+				started := time.Now()
+				for {
+					select {
+					case <-stopCh:
+						return
+					case <-time.After(1 * time.Second):
+						secs := int(time.Since(started).Seconds())
+						h.BroadcastToSession(sessionID, FormatSSE("htmx",
+							OobSwap("elapsed-"+toolUseID, "innerHTML", fmt.Sprintf("%ds", secs))))
 					}
-				}, func(elapsed time.Duration) {
-					secs := int(elapsed.Seconds())
-					h.BroadcastToSession(sessionID, FormatSSE("htmx",
-						OobSwap("elapsed-"+toolUseID, "innerHTML", fmt.Sprintf("%ds", secs))))
-				})
+				}
 			}()
 		} else {
 			parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
@@ -438,6 +442,10 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc *ClaudeProcess) {
 		s.SetRunning(false)
 		h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 
+		if proc.IsDead() {
+			s.CloseAllBgStops()
+		}
+
 		interrupted, next := s.DrainQueue()
 		if interrupted || next == "" {
 			break
@@ -538,11 +546,17 @@ func (h *Hub) SeedEventLog(s *Session) {
 		}
 	}
 
-	// Collect tool_use IDs that have results (so we can strip spinners)
+	// Collect tool_use IDs that have results (so we can strip spinners),
+	// and identify background task tool_results for lazy-load slots.
 	completedTools := make(map[string]bool)
+	bgTaskResults := make(map[string]string) // tool_use id → output file path
 	for _, msg := range snap.Log {
 		if msg.Type == "tool_result" && msg.ToolUseID != "" {
 			completedTools[msg.ToolUseID] = true
+			if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
+				bgTaskResults[msg.ToolUseID] = bgPath
+				s.RegisterBgPath(msg.ToolUseID, bgPath)
+			}
 		}
 	}
 
@@ -566,10 +580,20 @@ func (h *Hub) SeedEventLog(s *Session) {
 				continue
 			}
 		}
+		// Suppress bg task tool_results — their output is loaded lazily
+		if msg.Type == "tool_result" && bgTaskResults[msg.ToolUseID] != "" {
+			continue
+		}
 		rendered := RenderMsg(msg)
 		// Strip spinners for tool_use events that already have results
 		if msg.Type == "tool_use" && completedTools[msg.ToolUseID] {
 			rendered = stripSpinner(rendered, msg.ToolUseID)
+		}
+		// Populate the bg-slot with a lazy-load trigger for bg task tool chips
+		if msg.Type == "tool_use" && bgTaskResults[msg.ToolUseID] != "" {
+			emptySlot := fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
+			populatedSlot := fmt.Sprintf(`<div id="bg-slot-%s">%s</div>`, Esc(msg.ToolUseID), RenderBgSlot(s.ID, msg.ToolUseID))
+			rendered = strings.Replace(rendered, emptySlot, populatedSlot, 1)
 		}
 		msgsHTML.WriteString(rendered)
 	}

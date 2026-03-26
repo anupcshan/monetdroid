@@ -57,6 +57,8 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/prune", hub.handlePrune)
 	mux.HandleFunc("/prune-confirm", hub.handlePruneConfirm)
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
+	mux.HandleFunc("/bg-output/connect", hub.handleBgOutputConnect)
+	mux.HandleFunc("/bg-output/stream", hub.handleBgOutputStream)
 	return mux
 }
 
@@ -1164,5 +1166,104 @@ func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
 	if !rendered {
 		// All workstreams pruned — render a minimal panel with just the log.
 		fmt.Fprintf(w, `<div id="ws-panel"><div class="queue-header">Workstreams</div><div id="ws-cmd-output" class="ws-cmd-output">%s</div></div>`, logHTML.String())
+	}
+}
+
+// handleBgOutputConnect returns the SSE-connected div for a bg task.
+// Called lazily when the tool chip's <details> is opened and the
+// bg-slot becomes visible (hx-trigger="revealed").
+func (h *Hub) handleBgOutputConnect(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session")
+	toolID := r.URL.Query().Get("tool_id")
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprint(w, RenderBgSSEDiv(sessionID, toolID))
+}
+
+// handleBgOutputStream serves background task output as an SSE stream.
+// It reads the output file, sends existing content, then tails for new
+// content if the task is still running. Closes when the task completes
+// or the client disconnects.
+func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	sessionID := r.URL.Query().Get("session")
+	toolID := r.URL.Query().Get("tool_id")
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	bgPath := s.GetBgPath(toolID)
+	if bgPath == "" {
+		// Try to find from log (history-loaded sessions)
+		for _, msg := range s.GetLog() {
+			if msg.Type == "tool_result" && msg.ToolUseID == toolID {
+				bgPath = ParseBgTaskPath(msg.Output)
+				break
+			}
+		}
+	}
+	if bgPath == "" {
+		http.Error(w, "bg task not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	// Get the stop channel if the task is still running.
+	s.mu.Lock()
+	stopCh := s.BgTaskStops[toolID]
+	s.mu.Unlock()
+
+	ctx := r.Context()
+	var offset int64
+	const pollInterval = 500 * time.Millisecond
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		chunk, newOffset, err := ReadBgChunk(bgPath, offset)
+		if err == nil && len(chunk) > 0 {
+			offset = newOffset
+			escaped := Esc(strings.TrimRight(chunk, "\n"))
+			if escaped != "" {
+				fmt.Fprint(w, FormatSSE("chunk", fmt.Sprintf("<span>%s\n</span>", escaped)))
+				flusher.Flush()
+			}
+		}
+
+		// If task is done (no stop channel, or stop channel closed), send
+		// one last read and exit.
+		if stopCh == nil {
+			return
+		}
+		select {
+		case <-stopCh:
+			// Task just completed — do a final read
+			chunk, _, err := ReadBgChunk(bgPath, offset)
+			if err == nil && len(chunk) > 0 {
+				escaped := Esc(strings.TrimRight(chunk, "\n"))
+				if escaped != "" {
+					fmt.Fprint(w, FormatSSE("chunk", fmt.Sprintf("<span>%s\n</span>", escaped)))
+					flusher.Flush()
+				}
+			}
+			return
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
 	}
 }
