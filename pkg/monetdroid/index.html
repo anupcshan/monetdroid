@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Monet Droid</title>
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
-<script src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"></script>
+<script src="/assets/htmx-2.0.4.min.js"></script>
+<script src="/assets/htmx-ext-sse-2.2.3.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap');
-
   :root {
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Segoe UI Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     --bg: #0c0c0e;
     --surface: #16161a;
     --surface2: #1e1e24;
@@ -34,7 +34,7 @@
     height: 100%;
     background: var(--bg);
     color: var(--text);
-    font-family: 'DM Sans', sans-serif;
+    font-family: var(--sans);
     overflow: hidden;
     -webkit-tap-highlight-color: transparent;
   }
@@ -64,7 +64,7 @@
     text-align: center;
     font-size: 11px;
     color: var(--text2);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     padding: 2px 0 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -74,7 +74,7 @@
   .session-label {
     font-size: 12px;
     color: var(--text2);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -89,7 +89,7 @@
     border-radius: 6px;
     padding: 4px 8px;
     color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 12px;
     text-align: center;
     outline: none;
@@ -157,7 +157,7 @@
   }
   .drawer-close-btn:hover { color: var(--text); background: var(--surface2); }
   .drawer-item .di-name {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 13px;
     font-weight: 500;
     margin-bottom: 2px;
@@ -175,7 +175,7 @@
   .drawer-item .di-path {
     font-size: 11px;
     color: var(--text2);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -203,7 +203,7 @@
   .history-group { margin-bottom: 4px; }
   .history-group-header {
     padding: 8px 12px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 12px;
     color: var(--accent);
     cursor: pointer;
@@ -260,7 +260,7 @@
   .history-item .hi-time {
     font-size: 10px;
     color: var(--text2);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     margin-top: 2px;
   }
   .hi-branches {
@@ -272,7 +272,7 @@
   .branch-chip {
     display: inline-block;
     font-size: 9px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     padding: 1px 5px;
     border-radius: 3px;
     background: var(--surface2);
@@ -281,7 +281,7 @@
 
   /* --- Mode bar --- */
   .mode-bar {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 11px;
     padding: 6px 16px;
     display: flex;
@@ -299,14 +299,14 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 2px 8px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 10px;
     cursor: pointer;
   }
 
   /* --- Cost bar --- */
   .cost-bar {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 11px;
     color: var(--text2);
     padding: 4px 16px;
@@ -325,7 +325,7 @@
   .todos-panel {
     border-bottom: 1px solid var(--border);
     background: var(--surface);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 12px;
   }
   .todos-panel:not([open]) .todos-summary:empty ~ .todos-body { display: none; }
@@ -423,14 +423,14 @@
     padding: 10px;
     margin: 8px 0;
     overflow-x: auto;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 12px;
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-all;
   }
   .msg-assistant .msg-bubble code {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 12px;
     background: var(--bg);
     padding: 2px 5px;
@@ -512,7 +512,7 @@
     border: 1px solid var(--tool);
     border-radius: 8px;
     padding: 8px 12px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 12px;
     max-width: 100%;
   }
@@ -571,7 +571,7 @@
   .tool-bg-output {
     color: var(--text2);
     font-size: 11px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 400px;
@@ -590,7 +590,7 @@
     border: 1px solid var(--blue);
     border-radius: 8px;
     padding: 8px 12px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 11px;
     color: var(--text2);
   }
@@ -616,7 +616,7 @@
     padding: 10px 14px;
     font-size: 13px;
     color: var(--error);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
   }
 
   /* --- Compact boundary --- */
@@ -677,7 +677,7 @@
     margin-bottom: 8px;
   }
   .perm-prompt .perm-tool {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 13px;
     font-weight: 600;
     color: var(--tool);
@@ -689,7 +689,7 @@
     margin-bottom: 8px;
   }
   .perm-prompt .perm-detail {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 11px;
     color: var(--text2);
     background: var(--bg);
@@ -708,7 +708,7 @@
   .perm-actions button {
     padding: 8px;
     border-radius: 6px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: var(--sans);
     font-weight: 600;
     font-size: 13px;
     cursor: pointer;
@@ -739,7 +739,7 @@
     padding: 8px 16px;
     background: var(--surface);
     border-top: 1px solid var(--border);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 11px;
   }
   .queue-content form { display: contents; }
@@ -776,7 +776,7 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 4px 8px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 11px;
     resize: none;
     min-height: 1.4em;
@@ -806,7 +806,7 @@
     border-radius: 10px;
     padding: 10px 14px;
     color: var(--text);
-    font-family: 'DM Sans', sans-serif;
+    font-family: var(--sans);
     font-size: 15px;
     line-height: 1.4;
     resize: none;
@@ -903,7 +903,7 @@
     border-radius: 8px;
     padding: 10px 14px;
     color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     font-size: 14px;
     outline: none;
     margin-bottom: 16px;
@@ -917,7 +917,7 @@
     flex: 1;
     padding: 12px;
     border-radius: 8px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: var(--sans);
     font-weight: 600;
     font-size: 14px;
     cursor: pointer;
@@ -969,7 +969,7 @@
   .qi-cwd {
     font-size: 11px;
     color: var(--text2);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     margin-bottom: 6px;
   }
   .qi-result {
@@ -990,7 +990,7 @@
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 12px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: var(--sans);
     cursor: pointer;
   }
   .qi-close:hover { border-color: var(--text2); }
@@ -1001,7 +1001,7 @@
     padding: 6px 12px;
     font-size: 12px;
     font-weight: 600;
-    font-family: 'DM Sans', sans-serif;
+    font-family: var(--sans);
     text-decoration: none;
   }
 
@@ -1015,7 +1015,7 @@
   }
   .ws-branch-row {
     font-size: 13px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     padding: 6px 12px;
     display: grid;
     grid-template-columns: 1fr auto auto auto;
@@ -1062,7 +1062,7 @@
   .ws-cmd-output {
     margin-top: 8px;
     font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     color: var(--text2);
     max-height: 200px;
     overflow-y: auto;
@@ -1115,7 +1115,7 @@
   .ws-prune-detail { font-size: 12px; color: var(--text2); padding-left: 12px; margin-bottom: 2px; }
   .ws-prune-branch {
     font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--mono);
     padding: 2px 0 2px 12px;
   }
   .ws-prune-safe { color: var(--text2); }

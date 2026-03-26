@@ -124,7 +124,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 	// In replay mode, cassette must exist
 	if mode == "replay" {
 		if _, err := os.Stat(cassettePath); err != nil {
-			t.Skipf("cassette %s not found — record it first with -record flag", cassetteName)
+			t.Fatalf("cassette %s not found — record it first with -record flag", cassetteName)
 		}
 	}
 

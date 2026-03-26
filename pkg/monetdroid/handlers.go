@@ -3,7 +3,7 @@ package monetdroid
 import (
 	"bufio"
 	"crypto/rand"
-	_ "embed"
+	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -22,9 +22,13 @@ import (
 //go:embed index.html
 var indexHTML string
 
+//go:embed assets
+var assetsFS embed.FS
+
 func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.handleIndex)
+	mux.Handle("/assets/", http.FileServer(http.FS(assetsFS)))
 	mux.HandleFunc("/events", hub.handleEvents)
 	mux.HandleFunc("/new", hub.handleNewSession)
 	mux.HandleFunc("/new-workstream", hub.handleNewWorkstream)
