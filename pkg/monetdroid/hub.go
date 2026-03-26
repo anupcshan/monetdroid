@@ -129,7 +129,11 @@ func NewHub() *Hub {
 }
 
 func NewHubWithDataDir(dataDir string) *Hub {
-	go ScanHistory() // warm the session info cache
+	go func() {
+		t := NewGitTrace("warm-cache")
+		defer t.Log()
+		ScanHistory(t)
+	}()
 	return &Hub{
 		clients:       make(map[string]*SSEClient),
 		notifyClients: make(map[string]*NotifyClient),
@@ -264,7 +268,9 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		// Refresh git diff stat
 		if s != nil {
 			cwd := s.GetCwd()
-			if ds, err := GitDiffStat(cwd); err == nil {
+			t := NewGitTrace("diff-stat")
+			defer t.Log()
+			if ds, err := GitDiffStat(t, cwd); err == nil {
 				s.SetDiffStat(ds)
 			}
 			parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
@@ -424,7 +430,9 @@ func (h *Hub) SeedEventLog(s *Session) {
 
 	// Refresh git diff stat
 	if snap.Cwd != "" {
-		if ds, err := GitDiffStat(snap.Cwd); err == nil {
+		t := NewGitTrace("seed-diff-stat")
+		defer t.Log()
+		if ds, err := GitDiffStat(t, snap.Cwd); err == nil {
 			s.SetDiffStat(ds)
 		}
 	}

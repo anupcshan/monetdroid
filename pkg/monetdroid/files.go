@@ -47,22 +47,25 @@ func (h *Hub) handleFiles(w http.ResponseWriter, r *http.Request) {
 		tab = "changes"
 	}
 
+	t := NewGitTrace("files-" + tab)
+	defer t.Log()
+
 	var content string
 	switch tab {
 	case "browse":
 		browsePath := r.URL.Query().Get("path")
-		content = renderBrowseContent(sessionID, cwd, browsePath)
+		content = renderBrowseContent(t, sessionID, cwd, browsePath)
 	case "search":
 		query := r.URL.Query().Get("q")
-		content = renderSearchContent(sessionID, cwd, query)
+		content = renderSearchContent(t, sessionID, cwd, query)
 	case "commits":
 		if hash := r.URL.Query().Get("commit"); hash != "" {
-			content = renderCommitDetail(sessionID, cwd, hash)
+			content = renderCommitDetail(t, sessionID, cwd, hash)
 		} else {
-			content = renderCommitsContent(sessionID, cwd)
+			content = renderCommitsContent(t, sessionID, cwd)
 		}
 	default:
-		content = renderChangesContent(sessionID, cwd)
+		content = renderChangesContent(t, sessionID, cwd)
 	}
 
 	w.Write([]byte(renderFilesPage(sessionID, cwd, tab, content)))
@@ -77,14 +80,16 @@ func (h *Hub) handleFilesStage(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd := s.GetCwd()
 
+	t := NewGitTrace("stage")
+	defer t.Log()
 	if r.FormValue("all") == "true" {
-		GitStage(cwd, nil)
+		GitStage(t, cwd, nil)
 	} else if path := r.FormValue("path"); path != "" {
-		GitStage(cwd, []string{path})
+		GitStage(t, cwd, []string{path})
 	}
 
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(renderChangesContent(sessionID, cwd)))
+	w.Write([]byte(renderChangesContent(t, sessionID, cwd)))
 }
 
 func (h *Hub) handleFilesUnstage(w http.ResponseWriter, r *http.Request) {
@@ -96,14 +101,16 @@ func (h *Hub) handleFilesUnstage(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd := s.GetCwd()
 
+	t := NewGitTrace("unstage")
+	defer t.Log()
 	if r.FormValue("all") == "true" {
-		GitUnstage(cwd, nil)
+		GitUnstage(t, cwd, nil)
 	} else if path := r.FormValue("path"); path != "" {
-		GitUnstage(cwd, []string{path})
+		GitUnstage(t, cwd, []string{path})
 	}
 
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(renderChangesContent(sessionID, cwd)))
+	w.Write([]byte(renderChangesContent(t, sessionID, cwd)))
 }
 
 // --- Page rendering ---
@@ -250,8 +257,8 @@ func renderFilesPage(sessionID, cwd, activeTab, content string) string {
 
 // --- Changes tab ---
 
-func renderChangesContent(sessionID, cwd string) string {
-	files, err := GitStatusFiles(cwd)
+func renderChangesContent(t *GitTrace, sessionID, cwd string) string {
+	files, err := GitStatusFiles(t, cwd)
 	if err != nil || len(files) == 0 {
 		return `<div class="files-empty">No uncommitted changes</div>`
 	}
@@ -271,8 +278,8 @@ func renderChangesContent(sessionID, cwd string) string {
 	}
 
 	// Get all diffs in bulk (1 call each instead of per-file).
-	stagedDiffs := splitDiffByFileMap(gitDiffAll(cwd, "staged"))
-	unstagedDiffs := splitDiffByFileMap(gitDiffAll(cwd, "unstaged"))
+	stagedDiffs := splitDiffByFileMap(gitDiffAll(t, cwd, "staged"))
+	unstagedDiffs := splitDiffByFileMap(gitDiffAll(t, cwd, "unstaged"))
 
 	hasStaged := len(staged) > 0
 	hasUnstaged := len(modified) > 0 || len(untracked) > 0
@@ -310,7 +317,7 @@ func renderChangesContent(sessionID, cwd string) string {
 	if len(untracked) > 0 {
 		fmt.Fprintf(&b, `<div class="file-group-header">Untracked (%d)</div>`, len(untracked))
 		for _, f := range untracked {
-			diff, _ := GitDiffFileContent(cwd, f.Path, "untracked")
+			diff, _ := GitDiffFileContent(t, cwd, f.Path, "untracked")
 			renderInlineDiff(&b, sessionID, f.Path, "?", diff, "untracked")
 		}
 	}
@@ -343,7 +350,7 @@ func renderInlineDiff(b *strings.Builder, sessionID, path, badge, diff, mode str
 
 // --- Browse tab ---
 
-func renderBrowseContent(sessionID, cwd, browsePath string) string {
+func renderBrowseContent(t *GitTrace, sessionID, cwd, browsePath string) string {
 	var b strings.Builder
 
 	baseURL := "/files?"
@@ -359,14 +366,14 @@ func renderBrowseContent(sessionID, cwd, browsePath string) string {
 		fullPath := filepath.Join(cwd, browsePath)
 		info, err := os.Stat(fullPath)
 		if err == nil && !info.IsDir() {
-			return renderFileView(&b, baseURL, sessionID, cwd, browsePath, fullPath, info)
+			return renderFileView(t, &b, baseURL, sessionID, cwd, browsePath, fullPath, info)
 		}
 	}
 
 	// Directory listing
 	renderBreadcrumbs(&b, baseURL, browsePath)
 
-	entries, err := GitListDir(cwd, browsePath)
+	entries, err := GitListDir(t, cwd, browsePath)
 	if err != nil {
 		fmt.Fprintf(&b, `<div class="files-empty">Error: %s</div>`, Esc(err.Error()))
 		return b.String()
@@ -412,7 +419,7 @@ func renderBreadcrumbs(b *strings.Builder, baseURL, browsePath string) {
 	b.WriteString(`</div>`)
 }
 
-func renderFileView(b *strings.Builder, baseURL, sessionID, cwd, browsePath, fullPath string, info os.FileInfo) string {
+func renderFileView(t *GitTrace, b *strings.Builder, baseURL, sessionID, cwd, browsePath, fullPath string, info os.FileInfo) string {
 	renderBreadcrumbs(b, baseURL, browsePath)
 
 	// File size limit: 1MB
@@ -430,7 +437,7 @@ func renderFileView(b *strings.Builder, baseURL, sessionID, cwd, browsePath, ful
 	// Check if file has uncommitted changes — link to diff
 	var extraLinks string
 	if sessionID != "" {
-		diffContent, _ := GitDiffFileContent(cwd, browsePath, "unstaged")
+		diffContent, _ := GitDiffFileContent(t, cwd, browsePath, "unstaged")
 		if diffContent != "" {
 			diffHref := fmt.Sprintf("/files?session=%s&diff=%s", Esc(sessionID), Esc(browsePath))
 			extraLinks = fmt.Sprintf(` <a href="%s" style="font-size:11px;color:var(--accent)">view diff</a>`, diffHref)
@@ -465,7 +472,7 @@ func highlightFile(filename, content string) string {
 
 // --- Search tab ---
 
-func renderSearchContent(sessionID, cwd, query string) string {
+func renderSearchContent(t *GitTrace, sessionID, cwd, query string) string {
 	var b strings.Builder
 
 	baseURL := "/files?"
@@ -492,7 +499,7 @@ func renderSearchContent(sessionID, cwd, query string) string {
 		return b.String()
 	}
 
-	results, err := GitGrep(cwd, query)
+	results, err := GitGrep(t, cwd, query)
 	if err != nil {
 		fmt.Fprintf(&b, `<div class="files-empty">Error: %s</div>`, Esc(err.Error()))
 		return b.String()
@@ -528,8 +535,8 @@ func renderSearchContent(sessionID, cwd, query string) string {
 
 // --- Commits tab ---
 
-func renderCommitsContent(sessionID, cwd string) string {
-	commits, err := GitLog(cwd, 50)
+func renderCommitsContent(t *GitTrace, sessionID, cwd string) string {
+	commits, err := GitLog(t, cwd, 50)
 	if err != nil || len(commits) == 0 {
 		return `<div class="files-empty">No commits</div>`
 	}
@@ -553,7 +560,7 @@ func renderCommitsContent(sessionID, cwd string) string {
 	return b.String()
 }
 
-func renderCommitDetail(sessionID, cwd, hash string) string {
+func renderCommitDetail(t *GitTrace, sessionID, cwd, hash string) string {
 	var b strings.Builder
 
 	baseURL := "/files?"
@@ -564,7 +571,7 @@ func renderCommitDetail(sessionID, cwd, hash string) string {
 	}
 
 	// Get commit metadata
-	meta, err := GitLogOne(cwd, hash)
+	meta, err := GitLogOne(t, cwd, hash)
 	if err != nil {
 		return fmt.Sprintf(`<div class="files-empty">Error: %s</div>`, Esc(err.Error()))
 	}
@@ -581,7 +588,7 @@ func renderCommitDetail(sessionID, cwd, hash string) string {
 	b.WriteString(`</div>`)
 
 	// File list
-	files, _ := GitShowCommitFiles(cwd, hash)
+	files, _ := GitShowCommitFiles(t, cwd, hash)
 	if len(files) > 0 {
 		b.WriteString(`<div class="commit-detail-files">`)
 		for _, f := range files {
@@ -591,7 +598,7 @@ func renderCommitDetail(sessionID, cwd, hash string) string {
 	}
 
 	// Full diff
-	diffContent, err := GitShowCommit(cwd, hash)
+	diffContent, err := GitShowCommit(t, cwd, hash)
 	if err != nil || diffContent == "" {
 		b.WriteString(`<div class="files-empty">No changes</div>`)
 		return b.String()

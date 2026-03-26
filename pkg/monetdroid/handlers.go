@@ -245,13 +245,15 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			var landingHTML string
 
 			// Workstream status panel.
-			for repoName, panel := range AllWorkstreams() {
+			t := NewGitTrace("landing")
+		defer t.Log()
+		for repoName, panel := range AllWorkstreams(t) {
 				_ = repoName // TODO: show repo name when multiple repos
 				landingHTML += RenderWorkstreamStatus(panel)
 			}
 
 			// Tracked sessions.
-			if sessHTML := RenderTrackedSessions(h.Tracker.List()); sessHTML != "" {
+			if sessHTML := RenderTrackedSessions(t, h.Tracker.List()); sessHTML != "" {
 				landingHTML += `<div class="queue-header">Sessions</div>` + sessHTML
 			}
 
@@ -315,7 +317,9 @@ func (h *Hub) handleNewWorkstream(w http.ResponseWriter, r *http.Request) {
 		cwd = home + cwd[1:]
 	}
 
-	wtPath, err := CreateWorkstream(cwd, name)
+	t := NewGitTrace("new-workstream")
+	defer t.Log()
+	wtPath, err := CreateWorkstream(t, cwd, name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -621,6 +625,8 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 
 
 func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
+	t := NewGitTrace("drawer")
+	defer t.Log()
 	var buf strings.Builder
 
 	tracked := h.Tracker.List()
@@ -635,7 +641,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 				summary = "(no label)"
 			}
 
-			sp := ShortPath(MainWorktree(ts.Cwd))
+			sp := ShortPath(MainWorktree(t, ts.Cwd))
 
 			var statusHTML string
 			switch ts.Status {
@@ -669,7 +675,7 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	groups, err := ScanHistory()
+	groups, err := ScanHistory(t)
 	if err == nil && len(groups) > 0 {
 		buf.WriteString(`<div class="drawer-section-label">History</div>`)
 		for i, group := range groups {
@@ -825,7 +831,9 @@ func (h *Hub) handleNotifications(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleQueue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(RenderTrackedSessions(h.Tracker.List())))
+	t := NewGitTrace("queue")
+	defer t.Log()
+	w.Write([]byte(RenderTrackedSessions(t, h.Tracker.List())))
 }
 
 func (h *Hub) handleCloseSession(w http.ResponseWriter, r *http.Request) {
@@ -867,7 +875,9 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	// Run pull in the main worktree where main/master is checked out.
-	mainWt := MainWorktree(cwd)
+	t := NewGitTrace("pull-main")
+	defer t.Log()
+	mainWt := MainWorktree(t, cwd)
 	cmd := exec.Command("git", "pull", "--ff-only", "--progress")
 	cmd.Dir = mainWt
 	// git pull writes progress to stderr.
@@ -948,20 +958,22 @@ func (h *Hub) handleRebaseWorkstream(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	rebaseWorkstream(w, flusher, cwd, false)
+	t := NewGitTrace("rebase")
+	defer t.Log()
+	rebaseWorkstream(t, w, flusher, cwd, false)
 }
 
 // rebaseWorkstream rebases branches in a workstream onto their upstreams.
 // If abortOnConflict is true, runs git rebase --abort and returns (for mass sync).
 // If false, leaves the broken state for the user to resolve (for single sync).
 // Returns true if all rebases succeeded.
-func rebaseWorkstream(w http.ResponseWriter, flusher http.Flusher, cwd string, abortOnConflict bool) bool {
+func rebaseWorkstream(t *GitTrace, w http.ResponseWriter, flusher http.Flusher, cwd string, abortOnConflict bool) bool {
 	wsName := filepath.Base(cwd)
 	fmt.Fprintf(w, `<div class="ws-cmd-section"><div class="ws-cmd-header">Rebase %s</div>`, Esc(wsName))
 	flusher.Flush()
 
-	defaultBranch := GitDefaultBranch(cwd)
-	branches := branchStack(cwd, defaultBranch)
+	defaultBranch := GitDefaultBranch(t, cwd)
+	branches := branchStack(t, cwd, defaultBranch)
 	if len(branches) == 0 {
 		fmt.Fprint(w, `<div class="ws-cmd-err">no branches found</div></div>`)
 		flusher.Flush()
@@ -1021,8 +1033,10 @@ func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
+	t := NewGitTrace("mass-sync")
+	defer t.Log()
 	synced := 0
-	for _, panel := range AllWorkstreams() {
+	for _, panel := range AllWorkstreams(t) {
 		for _, ws := range panel.Workstreams {
 			// Only rebase workstreams that are behind main.
 			hasBehind := false
@@ -1035,7 +1049,7 @@ func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
 			if !hasBehind {
 				continue
 			}
-			rebaseWorkstream(w, flusher, ws.Path, true)
+			rebaseWorkstream(t, w, flusher, ws.Path, true)
 			synced++
 		}
 	}
@@ -1046,17 +1060,21 @@ func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
+	t := NewGitTrace("refresh")
+	defer t.Log()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var html string
-	for _, panel := range AllWorkstreams() {
+	for _, panel := range AllWorkstreams(t) {
 		html += RenderBranchList(panel)
 	}
 	fmt.Fprint(w, html)
 }
 
 func (h *Hub) renderPanel(w http.ResponseWriter) {
+	t := NewGitTrace("render-panel")
+	defer t.Log()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	for _, panel := range AllWorkstreams() {
+	for _, panel := range AllWorkstreams(t) {
 		fmt.Fprint(w, RenderWorkstreamStatus(panel))
 	}
 }
@@ -1088,7 +1106,9 @@ func (h *Hub) handleUnarchiveWorkstream(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Hub) handlePrune(w http.ResponseWriter, r *http.Request) {
-	plan := BuildPrunePlan()
+	t := NewGitTrace("prune-plan")
+	defer t.Log()
+	plan := BuildPrunePlan(t)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, RenderPruneConfirmation(plan))
 }
@@ -1100,7 +1120,9 @@ func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no paths", http.StatusBadRequest)
 		return
 	}
-	pruneLog := ExecutePrune(paths)
+	t := NewGitTrace("prune")
+	defer t.Log()
+	pruneLog := ExecutePrune(t, paths)
 
 	// Build prune log HTML.
 	var logHTML strings.Builder
@@ -1117,7 +1139,7 @@ func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
 	// Re-render the full panel with prune log in the output area.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rendered := false
-	for _, panel := range AllWorkstreams() {
+	for _, panel := range AllWorkstreams(t) {
 		html := RenderWorkstreamStatus(panel)
 		if html != "" {
 			html = strings.Replace(html, `<div id="ws-cmd-output" class="ws-cmd-output"></div>`,

@@ -682,7 +682,7 @@ func renderBranchChips(branches []string) string {
 	return b.String()
 }
 
-func RenderTrackedSessions(items []TrackedSession) string {
+func RenderTrackedSessions(t *GitTrace, items []TrackedSession) string {
 	if len(items) == 0 {
 		return ""
 	}
@@ -714,7 +714,7 @@ func RenderTrackedSessions(items []TrackedSession) string {
 		}
 		fmt.Fprintf(&b, `<div class="qi-label"><span>%s</span>%s</div>`, Esc(displayLabel), renderBranchChips(item.Branches))
 		if item.Cwd != "" {
-			fmt.Fprintf(&b, `<div class="qi-cwd">%s</div>`, Esc(ShortPath(MainWorktree(item.Cwd))))
+			fmt.Fprintf(&b, `<div class="qi-cwd">%s</div>`, Esc(ShortPath(MainWorktree(t, item.Cwd))))
 		}
 		if result != "" {
 			fmt.Fprintf(&b, `<div class="qi-result">%s</div>`, Esc(result))

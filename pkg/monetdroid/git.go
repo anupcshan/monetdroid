@@ -3,21 +3,116 @@ package monetdroid
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
+
+// GitTrace collects timing information for git operations within a high-level action.
+type GitTrace struct {
+	label string
+	start time.Time
+	mu    sync.Mutex
+	ops   []traceOp
+}
+
+type traceOp struct {
+	offset time.Duration // wall-clock offset from trace start
+	dur    time.Duration // duration of this call
+	args   string
+	cwd    string
+}
+
+// NewGitTrace creates a trace for a high-level action (e.g. "landing", "refresh").
+func NewGitTrace(label string) *GitTrace {
+	return &GitTrace{label: label, start: time.Now()}
+}
+
+// Log prints the collected trace summary.
+func (t *GitTrace) Log() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	total := time.Since(t.start)
+	log.Printf("[%s %dms total, %d git calls]", t.label, total.Milliseconds(), len(t.ops))
+	for _, op := range t.ops {
+		log.Printf("  +%dms %4dms %s (cwd=%s)", op.offset.Milliseconds(), op.dur.Milliseconds(), op.args, op.cwd)
+	}
+}
+
+func (t *GitTrace) record(cwd string, dur time.Duration, args []string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.ops = append(t.ops, traceOp{
+		offset: time.Since(t.start) - dur,
+		dur:    dur,
+		args:   strings.Join(args, " "),
+		cwd:    cwd,
+	})
+	t.mu.Unlock()
+}
+
+// Output runs a git command and returns its stdout.
+func (t *GitTrace) Output(cwd string, args ...string) ([]byte, error) {
+	start := time.Now()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	t.record(cwd, time.Since(start), args)
+	return out, err
+}
+
+// Run runs a git command ignoring stdout.
+func (t *GitTrace) Run(cwd string, args ...string) error {
+	start := time.Now()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = cwd
+	err := cmd.Run()
+	t.record(cwd, time.Since(start), args)
+	return err
+}
+
+// CombinedOutput runs a git command and returns combined stdout+stderr.
+func (t *GitTrace) CombinedOutput(cwd string, args ...string) ([]byte, error) {
+	start := time.Now()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	t.record(cwd, time.Since(start), args)
+	return out, err
+}
+
+// OutputExitOK runs a git command where exit code 1 is normal (e.g. git grep, git diff --no-index).
+func (t *GitTrace) OutputExitOK(cwd string, args ...string) ([]byte, int, error) {
+	start := time.Now()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	t.record(cwd, time.Since(start), args)
+	if err != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
+		return out, 1, nil
+	}
+	if err != nil {
+		return nil, -1, err
+	}
+	return out, 0, nil
+}
 
 // GitCommonDir returns the path to the shared .git directory for a repo or worktree.
 // For the main checkout this returns the .git dir; for worktrees it returns the main
 // repo's .git dir. Returns "" if cwd is not a git repo.
-func GitCommonDir(cwd string) string {
-	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitCommonDir(t *GitTrace, cwd string) string {
+	out, err := t.Output(cwd, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return ""
 	}
@@ -31,8 +126,8 @@ func GitCommonDir(cwd string) string {
 
 // MainWorktree resolves a cwd (which may be a linked worktree) to the main
 // worktree's root directory. Falls back to cwd if not a git repo.
-func MainWorktree(cwd string) string {
-	gcd := GitCommonDir(cwd)
+func MainWorktree(t *GitTrace, cwd string) string {
+	gcd := GitCommonDir(t, cwd)
 	if gcd == "" {
 		return cwd
 	}
@@ -40,10 +135,8 @@ func MainWorktree(cwd string) string {
 }
 
 // GitToplevel returns the repository root directory.
-func GitToplevel(cwd string) string {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitToplevel(t *GitTrace, cwd string) string {
+	out, err := t.Output(cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return ""
 	}
@@ -51,11 +144,9 @@ func GitToplevel(cwd string) string {
 }
 
 // GitDefaultBranch returns the default branch name (e.g. "main" or "master").
-func GitDefaultBranch(cwd string) string {
+func GitDefaultBranch(t *GitTrace, cwd string) string {
 	// Try the symbolic ref for origin/HEAD first.
-	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
-	cmd.Dir = cwd
-	if out, err := cmd.Output(); err == nil {
+	if out, err := t.Output(cwd, "symbolic-ref", "refs/remotes/origin/HEAD"); err == nil {
 		ref := strings.TrimSpace(string(out))
 		// refs/remotes/origin/main → main
 		if i := strings.LastIndex(ref, "/"); i >= 0 {
@@ -64,9 +155,7 @@ func GitDefaultBranch(cwd string) string {
 	}
 	// Fallback: check if "main" exists, otherwise "master".
 	for _, name := range []string{"main", "master"} {
-		cmd = exec.Command("git", "rev-parse", "--verify", "refs/heads/"+name)
-		cmd.Dir = cwd
-		if cmd.Run() == nil {
+		if t.Run(cwd, "rev-parse", "--verify", "refs/heads/"+name) == nil {
 			return name
 		}
 	}
@@ -86,18 +175,16 @@ func WorktreeDir(repoRoot string) string {
 // CreateWorkstream creates a new branch off the default branch and a worktree for it.
 // The branch's upstream is set to the default branch for stack topology inference.
 // Returns the worktree path.
-func CreateWorkstream(cwd, name string) (string, error) {
-	repoRoot := GitToplevel(cwd)
+func CreateWorkstream(t *GitTrace, cwd, name string) (string, error) {
+	repoRoot := GitToplevel(t, cwd)
 	if repoRoot == "" {
 		return "", fmt.Errorf("not a git repository: %s", cwd)
 	}
 
-	defaultBranch := GitDefaultBranch(repoRoot)
+	defaultBranch := GitDefaultBranch(t, repoRoot)
 	wtPath := filepath.Join(WorktreeDir(repoRoot), name)
 
-	cmd := exec.Command("git", "worktree", "add", "-b", name, "--track", wtPath, defaultBranch)
-	cmd.Dir = repoRoot
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := t.CombinedOutput(repoRoot, "worktree", "add", "-b", name, "--track", wtPath, defaultBranch); err != nil {
 		return "", fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 	}
 
@@ -136,9 +223,9 @@ type BranchPanel struct {
 
 // PruneBranch describes a branch's prune safety status.
 type PruneBranch struct {
-	Name    string
-	Safe    bool   // safe to delete (merged or remote gone)
-	Reason  string // human-readable reason
+	Name   string
+	Safe   bool   // safe to delete (merged or remote gone)
+	Reason string // human-readable reason
 }
 
 // PruneWorkstream describes a workstream ready for pruning.
@@ -154,9 +241,9 @@ type PrunePlan struct {
 }
 
 // BuildPrunePlan scans archived workstreams and classifies branches.
-func BuildPrunePlan() PrunePlan {
+func BuildPrunePlan(t *GitTrace) PrunePlan {
 	var plan PrunePlan
-	for _, panel := range AllWorkstreams() {
+	for _, panel := range AllWorkstreams(t) {
 		for _, ws := range panel.Workstreams {
 			if !ws.Archived {
 				continue
@@ -187,41 +274,37 @@ func BuildPrunePlan() PrunePlan {
 }
 
 // ExecutePrune deletes worktrees and safe branches for the given workstreams.
-func ExecutePrune(paths []string) []string {
-	var log []string
+func ExecutePrune(t *GitTrace, paths []string) []string {
+	var plog []string
 	for _, wsPath := range paths {
-		repoRoot := MainWorktree(wsPath)
-		defaultBranch := GitDefaultBranch(repoRoot)
-		branches := branchStack(wsPath, defaultBranch)
+		repoRoot := MainWorktree(t, wsPath)
+		defaultBranch := GitDefaultBranch(t, repoRoot)
+		branches := branchStack(t, wsPath, defaultBranch)
 
-		cmd := exec.Command("git", "worktree", "remove", wsPath)
-		cmd.Dir = repoRoot
-		if out, err := cmd.CombinedOutput(); err != nil {
-			log = append(log, fmt.Sprintf("error removing worktree %s: %s", filepath.Base(wsPath), strings.TrimSpace(string(out))))
+		if out, err := t.CombinedOutput(repoRoot, "worktree", "remove", wsPath); err != nil {
+			plog = append(plog, fmt.Sprintf("error removing worktree %s: %s", filepath.Base(wsPath), strings.TrimSpace(string(out))))
 			continue
 		}
-		log = append(log, fmt.Sprintf("removed worktree %s", filepath.Base(wsPath)))
+		plog = append(plog, fmt.Sprintf("removed worktree %s", filepath.Base(wsPath)))
 
 		// Delete safe branches.
 		for _, br := range branches {
 			safe := br.RemoteGone || br.AheadMain == 0
 			if !safe {
-				log = append(log, fmt.Sprintf("kept branch %s (%d commits ahead)", br.Name, br.AheadMain))
+				plog = append(plog, fmt.Sprintf("kept branch %s (%d commits ahead)", br.Name, br.AheadMain))
 				continue
 			}
-			cmd = exec.Command("git", "branch", "-d", br.Name)
-			cmd.Dir = repoRoot
-			if out, err := cmd.CombinedOutput(); err != nil {
-				log = append(log, fmt.Sprintf("error deleting branch %s: %s", br.Name, strings.TrimSpace(string(out))))
+			if out, err := t.CombinedOutput(repoRoot, "branch", "-d", br.Name); err != nil {
+				plog = append(plog, fmt.Sprintf("error deleting branch %s: %s", br.Name, strings.TrimSpace(string(out))))
 			} else {
-				log = append(log, fmt.Sprintf("deleted branch %s", br.Name))
+				plog = append(plog, fmt.Sprintf("deleted branch %s", br.Name))
 			}
 		}
 
 		// Clean up archived entry.
 		UnarchiveWorkstream(wsPath)
 	}
-	return log
+	return plog
 }
 
 // workstreamArchivePath returns the path to the workstream archive JSON file.
@@ -291,7 +374,7 @@ func saveArchivedWorkstreams(m map[string]bool) error {
 }
 
 // AllWorkstreams returns workstream status grouped by repo, scanning ~/.monetdroid/worktrees/.
-func AllWorkstreams() map[string]BranchPanel {
+func AllWorkstreams(t *GitTrace) map[string]BranchPanel {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
@@ -308,7 +391,7 @@ func AllWorkstreams() map[string]BranchPanel {
 			continue
 		}
 		repoDir := filepath.Join(baseDir, repo.Name())
-		ws := listWorkstreamsInDir(repoDir)
+		ws := listWorkstreamsInDir(t, repoDir)
 		if len(ws) == 0 {
 			continue
 		}
@@ -317,10 +400,10 @@ func AllWorkstreams() map[string]BranchPanel {
 				ws[i].Archived = true
 			}
 		}
-		repoPath := MainWorktree(ws[0].Path)
-		defaultBranch := GitDefaultBranch(repoPath)
+		repoPath := MainWorktree(t, ws[0].Path)
+		defaultBranch := GitDefaultBranch(t, repoPath)
 		mainDirty := false
-		if files, err := GitStatusFiles(repoPath); err == nil && len(files) > 0 {
+		if files, err := GitStatusFiles(t, repoPath); err == nil && len(files) > 0 {
 			mainDirty = true
 		}
 		result[repo.Name()] = BranchPanel{
@@ -334,7 +417,7 @@ func AllWorkstreams() map[string]BranchPanel {
 }
 
 // listWorkstreamsInDir returns status for all workstreams under a worktree directory.
-func listWorkstreamsInDir(wtDir string) []WorkstreamStatus {
+func listWorkstreamsInDir(t *GitTrace, wtDir string) []WorkstreamStatus {
 	entries, err := os.ReadDir(wtDir)
 	if err != nil {
 		return nil
@@ -347,7 +430,7 @@ func listWorkstreamsInDir(wtDir string) []WorkstreamStatus {
 			continue
 		}
 		wtPath := filepath.Join(wtDir, e.Name())
-		if db := GitDefaultBranch(wtPath); db != "" {
+		if db := GitDefaultBranch(t, wtPath); db != "" {
 			defaultBranch = db
 			break
 		}
@@ -363,12 +446,10 @@ func listWorkstreamsInDir(wtDir string) []WorkstreamStatus {
 		}
 		wtPath := filepath.Join(wtDir, e.Name())
 		// Verify it's actually a git worktree.
-		cmd := exec.Command("git", "rev-parse", "--git-dir")
-		cmd.Dir = wtPath
-		if cmd.Run() != nil {
+		if t.Run(wtPath, "rev-parse", "--git-dir") != nil {
 			continue
 		}
-		branches := branchStack(wtPath, defaultBranch)
+		branches := branchStack(t, wtPath, defaultBranch)
 		ws := WorkstreamStatus{
 			Name:     e.Name(),
 			Path:     wtPath,
@@ -381,11 +462,9 @@ func listWorkstreamsInDir(wtDir string) []WorkstreamStatus {
 
 // branchStack returns the branch stack for a worktree, walking the upstream chain.
 // Returns branches in topological order (root/closest-to-main first).
-func branchStack(wtPath, defaultBranch string) []BranchStatus {
+func branchStack(t *GitTrace, wtPath, defaultBranch string) []BranchStatus {
 	// Get current branch.
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	cmd.Dir = wtPath
-	out, err := cmd.Output()
+	out, err := t.Output(wtPath, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return nil
 	}
@@ -395,7 +474,7 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 	}
 
 	// Build local upstream map: branch → upstream for branches with remote=".".
-	upstreamOf := localUpstreamMap(wtPath)
+	upstreamOf := localUpstreamMap(t, wtPath)
 
 	// Walk from current branch up to defaultBranch to find the root of the stack.
 	root := currentBranch
@@ -446,16 +525,14 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 
 	// Check for dirty worktree (applies only to current branch).
 	dirty := false
-	cmd = exec.Command("git", "status", "--porcelain")
-	cmd.Dir = wtPath
-	if out, err := cmd.Output(); err == nil {
+	if out, err := t.Output(wtPath, "status", "--porcelain"); err == nil {
 		dirty = len(strings.TrimSpace(string(out))) > 0
 	}
 
 	// Build result with status for each branch.
 	result := make([]BranchStatus, 0, len(ordered))
 	for _, e := range ordered {
-		bs := branchStatus(wtPath, e.name, defaultBranch)
+		bs := branchStatus(t, wtPath, e.name, defaultBranch)
 		bs.Depth = e.depth
 		if e.name == currentBranch {
 			bs.Dirty = dirty
@@ -463,10 +540,8 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 		// For child branches, show ahead/behind relative to parent, not main.
 		if e.depth > 0 {
 			if upstream := upstreamOf[e.name]; upstream != "" {
-				cmd := exec.Command("git", "rev-list", "--left-right", "--count",
-					fmt.Sprintf("%s...%s", upstream, e.name))
-				cmd.Dir = wtPath
-				if out, err := cmd.Output(); err == nil {
+				if out, err := t.Output(wtPath, "rev-list", "--left-right", "--count",
+					fmt.Sprintf("%s...%s", upstream, e.name)); err == nil {
 					parts := strings.Fields(strings.TrimSpace(string(out)))
 					if len(parts) == 2 {
 						bs.BehindMain, _ = strconv.Atoi(parts[0])
@@ -482,11 +557,9 @@ func branchStack(wtPath, defaultBranch string) []BranchStatus {
 
 // localUpstreamMap returns a map of branch → upstream for all local branches
 // that have a local upstream (remote = ".").
-func localUpstreamMap(cwd string) map[string]string {
+func localUpstreamMap(t *GitTrace, cwd string) map[string]string {
 	// Find all branches with a local upstream (remote=".") in one git call.
-	cmd := exec.Command("git", "config", "--get-regexp", `branch\..*\.remote`, `^\.$`)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+	out, err := t.Output(cwd, "config", "--get-regexp", `branch\..*\.remote`, `^\.$`)
 	if err != nil {
 		return nil
 	}
@@ -511,9 +584,7 @@ func localUpstreamMap(cwd string) map[string]string {
 
 	// Build regex to fetch merge refs for just these branches.
 	pattern := `branch\.(` + strings.Join(names, "|") + `)\.merge`
-	cmd = exec.Command("git", "config", "--get-regexp", pattern)
-	cmd.Dir = cwd
-	out, err = cmd.Output()
+	out, err = t.Output(cwd, "config", "--get-regexp", pattern)
 	if err != nil {
 		return nil
 	}
@@ -536,23 +607,19 @@ func localUpstreamMap(cwd string) map[string]string {
 }
 
 // branchStatus gathers status for a single branch.
-func branchStatus(cwd, branch, defaultBranch string) BranchStatus {
+func branchStatus(t *GitTrace, cwd, branch, defaultBranch string) BranchStatus {
 	bs := BranchStatus{Name: branch}
 
 	// Get upstream.
-	cmd := exec.Command("git", "config", fmt.Sprintf("branch.%s.merge", branch))
-	cmd.Dir = cwd
-	if out, err := cmd.Output(); err == nil {
+	if out, err := t.Output(cwd, "config", fmt.Sprintf("branch.%s.merge", branch)); err == nil {
 		ref := strings.TrimSpace(string(out))
 		// refs/heads/main → main
 		bs.Upstream = strings.TrimPrefix(ref, "refs/heads/")
 	}
 
 	// Ahead/behind default branch.
-	cmd = exec.Command("git", "rev-list", "--left-right", "--count",
-		fmt.Sprintf("%s...%s", defaultBranch, branch))
-	cmd.Dir = cwd
-	if out, err := cmd.Output(); err == nil {
+	if out, err := t.Output(cwd, "rev-list", "--left-right", "--count",
+		fmt.Sprintf("%s...%s", defaultBranch, branch)); err == nil {
 		parts := strings.Fields(strings.TrimSpace(string(out)))
 		if len(parts) == 2 {
 			bs.BehindMain, _ = strconv.Atoi(parts[0])
@@ -561,9 +628,7 @@ func branchStatus(cwd, branch, defaultBranch string) BranchStatus {
 	}
 
 	// Remote tracking info.
-	cmd = exec.Command("git", "config", fmt.Sprintf("branch.%s.remote", branch))
-	cmd.Dir = cwd
-	remoteOut, remoteErr := cmd.Output()
+	remoteOut, remoteErr := t.Output(cwd, "config", fmt.Sprintf("branch.%s.remote", branch))
 	remote := strings.TrimSpace(string(remoteOut))
 	if remoteErr != nil || remote == "" || remote == "." {
 		// No remote or local-only upstream.
@@ -572,9 +637,7 @@ func branchStatus(cwd, branch, defaultBranch string) BranchStatus {
 
 	// Check if remote tracking branch still exists.
 	remoteBranch := remote + "/" + branch
-	cmd = exec.Command("git", "rev-parse", "--verify", "refs/remotes/"+remoteBranch)
-	cmd.Dir = cwd
-	if cmd.Run() != nil {
+	if t.Run(cwd, "rev-parse", "--verify", "refs/remotes/"+remoteBranch) != nil {
 		bs.HasRemote = true
 		bs.RemoteGone = true
 		return bs
@@ -582,10 +645,8 @@ func branchStatus(cwd, branch, defaultBranch string) BranchStatus {
 
 	bs.HasRemote = true
 	// Ahead/behind remote.
-	cmd = exec.Command("git", "rev-list", "--left-right", "--count",
-		fmt.Sprintf("%s...%s", remoteBranch, branch))
-	cmd.Dir = cwd
-	if out, err := cmd.Output(); err == nil {
+	if out, err := t.Output(cwd, "rev-list", "--left-right", "--count",
+		fmt.Sprintf("%s...%s", remoteBranch, branch)); err == nil {
 		parts := strings.Fields(strings.TrimSpace(string(out)))
 		if len(parts) == 2 {
 			bs.BehindRemote, _ = strconv.Atoi(parts[0])
@@ -601,10 +662,8 @@ type DiffStat struct {
 	Removed int
 }
 
-func GitDiffStat(cwd string) (DiffStat, error) {
-	cmd := exec.Command("git", "diff", "HEAD", "-w", "--numstat")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitDiffStat(t *GitTrace, cwd string) (DiffStat, error) {
+	out, err := t.Output(cwd, "diff", "HEAD", "-w", "--numstat")
 	if err != nil {
 		return DiffStat{}, err
 	}
@@ -661,10 +720,8 @@ type SearchMatch struct {
 }
 
 // GitStatusFiles returns the list of files from git status --porcelain -u.
-func GitStatusFiles(cwd string) ([]StatusFile, error) {
-	cmd := exec.Command("git", "status", "--porcelain", "-u")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitStatusFiles(t *GitTrace, cwd string) ([]StatusFile, error) {
+	out, err := t.Output(cwd, "status", "--porcelain", "-u")
 	if err != nil {
 		return nil, err
 	}
@@ -683,16 +740,15 @@ func GitStatusFiles(cwd string) ([]StatusFile, error) {
 }
 
 // gitDiffAll returns the combined diff for all staged or unstaged changes.
-func gitDiffAll(cwd, mode string) string {
-	var cmd *exec.Cmd
+func gitDiffAll(t *GitTrace, cwd, mode string) string {
+	var args []string
 	switch mode {
 	case "staged":
-		cmd = exec.Command("git", "diff", "--cached", "-w")
+		args = []string{"diff", "--cached", "-w"}
 	default:
-		cmd = exec.Command("git", "diff", "-w")
+		args = []string{"diff", "-w"}
 	}
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+	out, err := t.Output(cwd, args...)
 	if err != nil {
 		return ""
 	}
@@ -731,63 +787,52 @@ func splitDiffByFileMap(fullDiff string) map[string]string {
 
 // GitDiffFileContent returns the diff for a single file.
 // mode is "staged" (--cached), "unstaged" (working tree), or "untracked" (--no-index).
-func GitDiffFileContent(cwd, path, mode string) (string, error) {
-	var cmd *exec.Cmd
+func GitDiffFileContent(t *GitTrace, cwd, path, mode string) (string, error) {
+	var args []string
 	switch mode {
 	case "staged":
-		cmd = exec.Command("git", "diff", "--cached", "-w", "--", path)
+		args = []string{"diff", "--cached", "-w", "--", path}
 	case "untracked":
-		cmd = exec.Command("git", "diff", "--no-index", "-w", "--", "/dev/null", path)
+		args = []string{"diff", "--no-index", "-w", "--", "/dev/null", path}
 	default:
-		cmd = exec.Command("git", "diff", "-w", "--", path)
+		args = []string{"diff", "-w", "--", path}
 	}
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+	out, _, err := t.OutputExitOK(cwd, args...)
 	if err != nil {
-		// git diff --no-index exits 1 when files differ (normal)
-		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
-			return string(out), nil
-		}
 		return "", err
 	}
 	return string(out), nil
 }
 
 // GitStage stages files. If paths is empty, stages all (git add -A).
-func GitStage(cwd string, paths []string) error {
+func GitStage(t *GitTrace, cwd string, paths []string) error {
 	var args []string
 	if len(paths) == 0 {
 		args = []string{"add", "-A"}
 	} else {
 		args = append([]string{"add", "--"}, paths...)
 	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = cwd
-	return cmd.Run()
+	return t.Run(cwd, args...)
 }
 
 // GitUnstage unstages files. If paths is empty, unstages all (git reset HEAD).
-func GitUnstage(cwd string, paths []string) error {
+func GitUnstage(t *GitTrace, cwd string, paths []string) error {
 	var args []string
 	if len(paths) == 0 {
 		args = []string{"reset", "HEAD"}
 	} else {
 		args = append([]string{"reset", "HEAD", "--"}, paths...)
 	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = cwd
-	return cmd.Run()
+	return t.Run(cwd, args...)
 }
 
 // GitListDir lists files and directories under dir (relative to cwd), respecting .gitignore.
-func GitListDir(cwd, dir string) ([]FileEntry, error) {
+func GitListDir(t *GitTrace, cwd, dir string) ([]FileEntry, error) {
 	args := []string{"ls-files", "--cached", "--others", "--exclude-standard"}
 	if dir != "" {
 		args = append(args, dir+"/")
 	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+	out, err := t.Output(cwd, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -827,16 +872,13 @@ func GitListDir(cwd, dir string) ([]FileEntry, error) {
 }
 
 // GitGrep searches for a regex pattern across the repository.
-func GitGrep(cwd, pattern string) ([]SearchMatch, error) {
-	cmd := exec.Command("git", "grep", "-n", "-I", "-E", "--untracked", pattern)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitGrep(t *GitTrace, cwd, pattern string) ([]SearchMatch, error) {
+	out, _, err := t.OutputExitOK(cwd, "grep", "-n", "-I", "-E", "--untracked", pattern)
 	if err != nil {
-		// git grep exits 1 when no matches
-		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
-			return nil, nil
-		}
 		return nil, err
+	}
+	if out == nil {
+		return nil, nil
 	}
 	var results []SearchMatch
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
@@ -872,10 +914,8 @@ type CommitEntry struct {
 }
 
 // GitLog returns recent commits.
-func GitLog(cwd string, limit int) ([]CommitEntry, error) {
-	cmd := exec.Command("git", "log", fmt.Sprintf("-%d", limit), "--format=%H%x00%h%x00%s%x00%an%x00%ar")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitLog(t *GitTrace, cwd string, limit int) ([]CommitEntry, error) {
+	out, err := t.Output(cwd, "log", fmt.Sprintf("-%d", limit), "--format=%H%x00%h%x00%s%x00%an%x00%ar")
 	if err != nil {
 		return nil, err
 	}
@@ -900,10 +940,8 @@ func GitLog(cwd string, limit int) ([]CommitEntry, error) {
 }
 
 // GitShowCommit returns the diff for a specific commit.
-func GitShowCommit(cwd, hash string) (string, error) {
-	cmd := exec.Command("git", "show", "-w", "--format=", hash)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitShowCommit(t *GitTrace, cwd, hash string) (string, error) {
+	out, err := t.Output(cwd, "show", "-w", "--format=", hash)
 	if err != nil {
 		return "", err
 	}
@@ -911,10 +949,8 @@ func GitShowCommit(cwd, hash string) (string, error) {
 }
 
 // GitLogOne returns metadata for a single commit by hash.
-func GitLogOne(cwd, hash string) (CommitEntry, error) {
-	cmd := exec.Command("git", "log", "-1", "--format=%H%x00%h%x00%s%x00%an%x00%ar", hash)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitLogOne(t *GitTrace, cwd, hash string) (CommitEntry, error) {
+	out, err := t.Output(cwd, "log", "-1", "--format=%H%x00%h%x00%s%x00%an%x00%ar", hash)
 	if err != nil {
 		return CommitEntry{}, err
 	}
@@ -932,10 +968,8 @@ func GitLogOne(cwd, hash string) (CommitEntry, error) {
 }
 
 // GitShowCommitFiles returns the files changed in a specific commit.
-func GitShowCommitFiles(cwd, hash string) ([]string, error) {
-	cmd := exec.Command("git", "show", "--name-only", "--format=", hash)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func GitShowCommitFiles(t *GitTrace, cwd, hash string) ([]string, error) {
+	out, err := t.Output(cwd, "show", "--name-only", "--format=", hash)
 	if err != nil {
 		return nil, err
 	}

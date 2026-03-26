@@ -177,7 +177,7 @@ func (c *sessionInfoCache) get(fpath string, modTime time.Time) (cachedSessionIn
 	return info, true
 }
 
-func ScanHistory() ([]HistoryGroup, error) {
+func ScanHistory(t *GitTrace) ([]HistoryGroup, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -244,13 +244,13 @@ func ScanHistory() ([]HistoryGroup, error) {
 	merged := make(map[string]*mergedGroup) // key: git common dir (or cwd if not a git repo)
 	var mergeOrder []string                 // preserve insertion order
 	for _, rg := range raw {
-		key := GitCommonDir(rg.cwd)
+		key := GitCommonDir(t, rg.cwd)
 		if key == "" {
 			key = rg.cwd // not a git repo or dir doesn't exist
 		}
 		mg, exists := merged[key]
 		if !exists {
-			mg = &mergedGroup{dir: MainWorktree(rg.cwd)}
+			mg = &mergedGroup{dir: MainWorktree(t, rg.cwd)}
 			merged[key] = mg
 			mergeOrder = append(mergeOrder, key)
 		}
