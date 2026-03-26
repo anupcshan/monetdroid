@@ -241,20 +241,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		} else {
 			// No active session — show landing page
-			var landingHTML string
-
-			// Workstream status panel.
-			t := NewGitTrace("landing")
-			defer t.Log()
-			for repoName, panel := range AllWorkstreams(t) {
-				_ = repoName // TODO: show repo name when multiple repos
-				landingHTML += RenderWorkstreamStatus(panel)
-			}
-
-			// Tracked sessions.
-			if sessHTML := RenderTrackedSessions(t, h.Tracker.List()); sessHTML != "" {
-				landingHTML += `<div class="queue-header">Sessions</div>` + sessHTML
-			}
+			landingHTML := h.renderLanding()
 
 			if landingHTML != "" {
 				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML", landingHTML)))
@@ -1055,6 +1042,20 @@ func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<div class="ws-cmd-section"><div class="ws-cmd-line ws-cmd-ok">all workstreams up to date</div></div>`)
 		flusher.Flush()
 	}
+}
+
+func (h *Hub) renderLanding() string {
+	t := NewGitTrace("landing")
+	defer t.Log()
+	var landingHTML string
+	for repoName, panel := range AllWorkstreams(t) {
+		_ = repoName // TODO: show repo name when multiple repos
+		landingHTML += RenderWorkstreamStatus(panel)
+	}
+	if sessHTML := RenderTrackedSessions(t, h.Tracker.List()); sessHTML != "" {
+		landingHTML += `<div class="queue-header">Sessions</div>` + sessHTML
+	}
+	return landingHTML
 }
 
 func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
