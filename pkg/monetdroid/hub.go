@@ -13,25 +13,60 @@ import (
 
 // SSEEvent is a rendered SSE event string tagged with a monotonic sequence number.
 type SSEEvent struct {
-	Seq   uint64
-	Event string
+	Seq        uint64
+	Event      string
+	CompactKey string // non-empty → newer event with same key supersedes this one
 }
 
 // EventLog is an append-only log of rendered SSE events for a session.
 // Broadcast appends to it; replay reads from it. This ensures both paths
-// produce identical output.
+// produce identical output. Events with a CompactKey are deduplicated:
+// when a new event arrives with the same key, the older one is removed.
 type EventLog struct {
 	mu     sync.Mutex
 	events []SSEEvent
 	seq    uint64
 }
 
+// compactKey returns a dedup key for single-element OOB swaps that use
+// innerHTML or outerHTML. Multi-swap events and beforeend appends return "".
+func compactKey(event string) string {
+	if strings.Count(event, "hx-swap-oob=") != 1 {
+		return ""
+	}
+	if !strings.Contains(event, `hx-swap-oob="innerHTML"`) &&
+		!strings.Contains(event, `hx-swap-oob="outerHTML"`) {
+		return ""
+	}
+	idx := strings.Index(event, `id="`)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + 4
+	end := strings.IndexByte(event[start:], '"')
+	if end < 0 {
+		return ""
+	}
+	return event[start : start+end]
+}
+
 // Append adds an event to the log and returns its sequence number.
+// If the event is a single innerHTML/outerHTML OOB swap, any previous
+// event targeting the same element is removed (it's been superseded).
 func (l *EventLog) Append(event string) uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	key := compactKey(event)
+	if key != "" {
+		for i := len(l.events) - 1; i >= 0; i-- {
+			if l.events[i].CompactKey == key {
+				l.events = append(l.events[:i], l.events[i+1:]...)
+				break
+			}
+		}
+	}
 	l.seq++
-	l.events = append(l.events, SSEEvent{Seq: l.seq, Event: event})
+	l.events = append(l.events, SSEEvent{Seq: l.seq, Event: event, CompactKey: key})
 	return l.seq
 }
 
