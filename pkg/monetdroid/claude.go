@@ -21,6 +21,10 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 	case "assistant":
 		for _, b := range event.Message.Content.Blocks {
 			switch b.Type {
+			case "thinking":
+				if b.Thinking != "" {
+					broadcast(ServerMsg{Type: "thinking", SessionID: s.ID, Text: b.Thinking})
+				}
 			case "text":
 				if b.Text != "" {
 					broadcast(ServerMsg{Type: "text", SessionID: s.ID, Text: b.Text})

@@ -77,6 +77,7 @@ type modelUsageInfo struct {
 type contentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	RawInput  json.RawMessage `json:"input,omitempty"`
@@ -424,6 +425,10 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			}
 			for _, b := range entry.Message.Content.Blocks {
 				switch b.Type {
+				case "thinking":
+					if b.Thinking != "" {
+						msgs = append(msgs, HistoryMessage{Type: "thinking", Text: b.Thinking})
+					}
 				case "text":
 					if b.Text != "" {
 						msgs = append(msgs, HistoryMessage{Type: "assistant", Text: b.Text})

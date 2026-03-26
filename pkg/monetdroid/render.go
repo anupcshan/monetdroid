@@ -301,6 +301,15 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		content.WriteString(strings.ReplaceAll(Esc(msg.Text), "\n", "<br>"))
 		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, content.String())
+	case "thinking":
+		if strings.TrimSpace(msg.Text) == "" {
+			return ""
+		}
+		preview := msg.Text
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		return fmt.Sprintf(`<div class="msg msg-thinking"><details class="thinking-chip"><summary class="thinking-summary">%s</summary><div class="thinking-detail">%s</div></details></div>`, Esc(preview), Esc(msg.Text))
 	case "text":
 		rendered := RenderMarkdown(msg.Text)
 		if strings.TrimSpace(rendered) == "" {

@@ -175,6 +175,7 @@ func (c *streamMessageContent) UnmarshalJSON(data []byte) error {
 type streamBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	RawInput  json.RawMessage `json:"input,omitempty"`

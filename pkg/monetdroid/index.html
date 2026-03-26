@@ -660,6 +660,39 @@
     40% { transform: scale(1); opacity: 1; }
   }
 
+  /* --- Thinking block --- */
+  .thinking-chip {
+    background: #1e1a2e;
+    border: 1px solid #6b5b95;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .thinking-chip .thinking-summary {
+    color: #6b5b95;
+    cursor: pointer;
+    list-style: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .thinking-chip .thinking-summary::marker { content: ''; }
+  .thinking-chip .thinking-summary::before { content: '▶ '; font-size: 9px; }
+  .thinking-chip[open] .thinking-summary::before { content: '▼ '; }
+  .thinking-chip[open] .thinking-summary {
+    white-space: normal;
+    overflow: visible;
+  }
+  .thinking-chip .thinking-detail {
+    color: var(--text2);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-top: 6px;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
   /* --- Permission prompt --- */
   .perm-prompt {
     background: #1a1a2e;

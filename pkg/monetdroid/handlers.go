@@ -96,6 +96,9 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 			sm.Type = "user_message"
 			sm.Text = m.Text
 			sm.Images = m.Images
+		case "thinking":
+			sm.Type = "thinking"
+			sm.Text = m.Text
 		case "assistant":
 			sm.Type = "text"
 			sm.Text = m.Text
