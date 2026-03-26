@@ -885,6 +885,8 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stream combined output. Split on \r and \n since git progress uses \r.
+	// Both goroutines send lines to a channel; a single writer drains it.
+	lines := make(chan string, 16)
 	done := make(chan struct{})
 	streamLines := func(r io.Reader) {
 		defer func() { done <- struct{}{} }()
@@ -904,18 +906,23 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 			return 0, nil, nil
 		})
 		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				continue
+			if line := scanner.Text(); line != "" {
+				lines <- line
 			}
-			fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-line">`+Esc(line)+`</div>`))
-			flusher.Flush()
 		}
 	}
 	go streamLines(stderr)
 	go streamLines(stdout)
-	<-done
-	<-done
+	// Close lines channel after both readers finish.
+	go func() {
+		<-done
+		<-done
+		close(lines)
+	}()
+	for line := range lines {
+		fmt.Fprint(w, FormatSSE("line", `<div class="ws-cmd-line">`+Esc(line)+`</div>`))
+		flusher.Flush()
+	}
 
 	cmdErr := cmd.Wait()
 

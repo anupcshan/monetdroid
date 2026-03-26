@@ -384,14 +384,53 @@ func saveArchivedWorkstreams(m map[string]bool) error {
 	return os.WriteFile(p, data, 0644)
 }
 
-// AllWorkstreams returns workstream status grouped by repo, scanning ~/.monetdroid/worktrees/.
+// worktreeEntry represents a single worktree from git worktree list --porcelain.
+type worktreeEntry struct {
+	Path   string
+	Branch string // short branch name (e.g. "main", "feature-x")
+}
+
+// isDefaultBranch returns true if the branch name is a common default branch.
+func isDefaultBranch(name string) bool {
+	return name == "main" || name == "master"
+}
+
+// gitWorktreeList parses git worktree list --porcelain output from any worktree in the repo.
+func gitWorktreeList(t *GitTrace, cwd string) []worktreeEntry {
+	out, err := t.Output(cwd, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	var result []worktreeEntry
+	var current worktreeEntry
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			current = worktreeEntry{Path: strings.TrimPrefix(line, "worktree ")}
+		case strings.HasPrefix(line, "branch "):
+			ref := strings.TrimPrefix(line, "branch ")
+			current.Branch = strings.TrimPrefix(ref, "refs/heads/")
+		case line == "":
+			if current.Path != "" {
+				result = append(result, current)
+				current = worktreeEntry{}
+			}
+		}
+	}
+	if current.Path != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+// AllWorkstreams returns workstream status grouped by repo, scanning via git worktree list.
 func AllWorkstreams(t *GitTrace) map[string]BranchPanel {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
-	baseDir := filepath.Join(home, ".monetdroid", "worktrees")
-	repos, err := os.ReadDir(baseDir)
+	wtBase := filepath.Join(home, ".monetdroid", "worktrees")
+	repos, err := os.ReadDir(wtBase)
 	if err != nil {
 		return nil
 	}
@@ -401,88 +440,115 @@ func AllWorkstreams(t *GitTrace) map[string]BranchPanel {
 		if !repo.IsDir() {
 			continue
 		}
-		repoDir := filepath.Join(baseDir, repo.Name())
-		ws := listWorkstreamsInDir(t, repoDir)
-		if len(ws) == 0 {
+		repoDir := filepath.Join(wtBase, repo.Name())
+		// Find any worktree to bootstrap git worktree list.
+		entries, err := os.ReadDir(repoDir)
+		if err != nil {
 			continue
 		}
-		for i := range ws {
-			if archived[ws[i].Path] {
-				ws[i].Archived = true
+		var anyWT string
+		for _, e := range entries {
+			if e.IsDir() && !strings.HasPrefix(e.Name(), "pool-") {
+				anyWT = filepath.Join(repoDir, e.Name())
+				break
 			}
 		}
-		repoPath := MainWorktree(t, ws[0].Path)
-		defaultBranch := GitDefaultBranch(t, repoPath)
-		mainDirty := gitDirty(t, repoPath)
+		if anyWT == "" {
+			continue
+		}
+
+		// One git call to get all worktrees + branches.
+		allWTs := gitWorktreeList(t, anyWT)
+		if len(allWTs) == 0 {
+			log.Printf("[AllWorkstreams] gitWorktreeList returned empty for %s", anyWT)
+			continue
+		}
+
+		// Identify default branch and main worktree from the list.
+		var defaultBranch, repoPath string
+		for _, wt := range allWTs {
+			if isDefaultBranch(wt.Branch) {
+				defaultBranch = wt.Branch
+				repoPath = wt.Path
+				break
+			}
+		}
+		if defaultBranch == "" {
+			// Fallback: use GitDefaultBranch from any worktree.
+			defaultBranch = GitDefaultBranch(t, anyWT)
+			// Main worktree is the one not under ~/.monetdroid/worktrees/.
+			for _, wt := range allWTs {
+				if !strings.HasPrefix(wt.Path, wtBase) {
+					repoPath = wt.Path
+					break
+				}
+			}
+			if repoPath == "" {
+				repoPath = allWTs[0].Path
+			}
+		}
+
+		// Collect workstream worktrees (those under ~/.monetdroid/worktrees/<repo>/).
+		type wsEntry struct {
+			name  string
+			path  string
+			index int
+		}
+		var workstreams []wsEntry
+		for _, wt := range allWTs {
+			if strings.HasPrefix(wt.Path, repoDir+"/") {
+				workstreams = append(workstreams, wsEntry{
+					name:  filepath.Base(wt.Path),
+					path:  wt.Path,
+					index: len(workstreams),
+				})
+			}
+		}
+		if len(workstreams) == 0 {
+			continue
+		}
+
+		// Fan out branchStack + gitDirty for all worktrees in parallel,
+		// including the main worktree's dirty check.
+		wsResult := make([]WorkstreamStatus, len(workstreams))
+		var mainDirty bool
+		sem := make(chan struct{}, max(runtime.NumCPU()/2, 1))
+		var wg sync.WaitGroup
+
+		// Main worktree dirty check.
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			mainDirty = gitDirty(t, repoPath)
+		})
+
+		// Workstream branchStack calls.
+		for _, ws := range workstreams {
+			wg.Go(func() {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				branches := branchStack(t, ws.path, defaultBranch)
+				wsResult[ws.index] = WorkstreamStatus{
+					Name:     ws.name,
+					Path:     ws.path,
+					Branches: branches,
+				}
+			})
+		}
+		wg.Wait()
+
+		for i := range wsResult {
+			if archived[wsResult[i].Path] {
+				wsResult[i].Archived = true
+			}
+		}
 		result[repo.Name()] = BranchPanel{
 			DefaultBranch: defaultBranch,
 			MainDirty:     mainDirty,
 			RepoPath:      repoPath,
-			Workstreams:   ws,
+			Workstreams:   wsResult,
 		}
 	}
-	return result
-}
-
-// listWorkstreamsInDir returns status for all workstreams under a worktree directory.
-func listWorkstreamsInDir(t *GitTrace, wtDir string) []WorkstreamStatus {
-	entries, err := os.ReadDir(wtDir)
-	if err != nil {
-		return nil
-	}
-
-	// Find default branch from the first valid worktree.
-	var defaultBranch string
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), "pool-") {
-			continue
-		}
-		wtPath := filepath.Join(wtDir, e.Name())
-		if db := GitDefaultBranch(t, wtPath); db != "" {
-			defaultBranch = db
-			break
-		}
-	}
-	if defaultBranch == "" {
-		return nil
-	}
-
-	// Verify worktrees sequentially (fast), collect valid ones.
-	type validWT struct {
-		name  string
-		path  string
-		index int
-	}
-	var valid []validWT
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), "pool-") {
-			continue
-		}
-		wtPath := filepath.Join(wtDir, e.Name())
-		// Verify it's actually a git worktree.
-		if t.Run(wtPath, "rev-parse", "--git-dir") != nil {
-			continue
-		}
-		valid = append(valid, validWT{name: e.Name(), path: wtPath, index: len(valid)})
-	}
-
-	// Fan out branchStack calls with bounded concurrency.
-	result := make([]WorkstreamStatus, len(valid))
-	sem := make(chan struct{}, max(runtime.NumCPU()/2, 1))
-	var wg sync.WaitGroup
-	for _, vw := range valid {
-		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			branches := branchStack(t, vw.path, defaultBranch)
-			result[vw.index] = WorkstreamStatus{
-				Name:     vw.name,
-				Path:     vw.path,
-				Branches: branches,
-			}
-		})
-	}
-	wg.Wait()
 	return result
 }
 
