@@ -17,7 +17,7 @@ func Screenshot(t *testing.T, page *rod.Page, name string) {
 	dir := filepath.Join(TestdataDir(), "screenshots")
 	os.MkdirAll(dir, 0o755)
 	path := filepath.Join(dir, name+".png")
-	data, err := page.Timeout(10 * time.Second).Screenshot(true, &proto.PageCaptureScreenshot{
+	data, err := page.Timeout(10*time.Second).Screenshot(true, &proto.PageCaptureScreenshot{
 		Format: proto.PageCaptureScreenshotFormatPng,
 	})
 	if err != nil {

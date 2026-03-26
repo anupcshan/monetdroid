@@ -123,16 +123,16 @@ type permDenyResponse struct {
 
 // streamEvent is the top-level envelope for all non-control events.
 type streamEvent struct {
-	Type           string                    `json:"type"` // "user", "assistant", "result", "system"
-	Subtype        string                    `json:"subtype,omitempty"`
-	SessionID      string                    `json:"session_id,omitempty"`
-	ToolUseID      string                    `json:"tool_use_id,omitempty"`
-	Status         string                    `json:"status,omitempty"`
-	Message        streamMessage             `json:"message"`
-	Result         string                    `json:"result,omitempty"`
-	TotalCost      float64                   `json:"total_cost_usd,omitempty"`
-	ModelUsage     map[string]modelUsageInfo `json:"modelUsage,omitempty"`
-	ToolUseResult  *toolUseResult            `json:"tool_use_result,omitempty"`
+	Type          string                    `json:"type"` // "user", "assistant", "result", "system"
+	Subtype       string                    `json:"subtype,omitempty"`
+	SessionID     string                    `json:"session_id,omitempty"`
+	ToolUseID     string                    `json:"tool_use_id,omitempty"`
+	Status        string                    `json:"status,omitempty"`
+	Message       streamMessage             `json:"message"`
+	Result        string                    `json:"result,omitempty"`
+	TotalCost     float64                   `json:"total_cost_usd,omitempty"`
+	ModelUsage    map[string]modelUsageInfo `json:"modelUsage,omitempty"`
+	ToolUseResult *toolUseResult            `json:"tool_use_result,omitempty"`
 }
 
 // toolUseResult carries structured tool output from the CLI.

@@ -668,7 +668,6 @@ func FormatSSE(event, data string) string {
 	return buf.String()
 }
 
-
 func renderBranchChips(branches []string) string {
 	if len(branches) == 0 {
 		return ""

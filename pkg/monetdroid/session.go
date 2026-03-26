@@ -21,7 +21,7 @@ type Session struct {
 	QueuedText        string
 	CostAccum         CostInfo
 	Todos             []Todo
-	SuppressedToolIDs map[string]string      // tool_use id → tool name, for suppressing results
+	SuppressedToolIDs map[string]string        // tool_use id → tool name, for suppressing results
 	BgTaskStops       map[string]chan struct{} // tool_use id → stop channel for bg tailers
 	DiffStat          DiffStat
 	EventLog          EventLog
@@ -419,7 +419,6 @@ func (sm *SessionManager) FindByJSONLPath(path string) *Session {
 	}
 	return nil
 }
-
 
 func (sm *SessionManager) Remove(id string) *Session {
 	sm.mu.Lock()

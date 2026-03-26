@@ -22,7 +22,6 @@ import (
 //go:embed index.html
 var indexHTML string
 
-
 func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.handleIndex)
@@ -246,8 +245,8 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 			// Workstream status panel.
 			t := NewGitTrace("landing")
-		defer t.Log()
-		for repoName, panel := range AllWorkstreams(t) {
+			defer t.Log()
+			for repoName, panel := range AllWorkstreams(t) {
 				_ = repoName // TODO: show repo name when multiple repos
 				landingHTML += RenderWorkstreamStatus(panel)
 			}
@@ -622,7 +621,6 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(204)
 }
-
 
 func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 	t := NewGitTrace("drawer")
