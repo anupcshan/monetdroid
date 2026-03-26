@@ -439,7 +439,13 @@ func listWorkstreamsInDir(t *GitTrace, wtDir string) []WorkstreamStatus {
 		return nil
 	}
 
-	var result []WorkstreamStatus
+	// Verify worktrees sequentially (fast), collect valid ones.
+	type validWT struct {
+		name  string
+		path  string
+		index int
+	}
+	var valid []validWT
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), "pool-") {
 			continue
@@ -449,14 +455,26 @@ func listWorkstreamsInDir(t *GitTrace, wtDir string) []WorkstreamStatus {
 		if t.Run(wtPath, "rev-parse", "--git-dir") != nil {
 			continue
 		}
-		branches := branchStack(t, wtPath, defaultBranch)
-		ws := WorkstreamStatus{
-			Name:     e.Name(),
-			Path:     wtPath,
-			Branches: branches,
-		}
-		result = append(result, ws)
+		valid = append(valid, validWT{name: e.Name(), path: wtPath, index: len(valid)})
 	}
+
+	// Fan out branchStack calls with bounded concurrency.
+	result := make([]WorkstreamStatus, len(valid))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for _, vw := range valid {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			branches := branchStack(t, vw.path, defaultBranch)
+			result[vw.index] = WorkstreamStatus{
+				Name:     vw.name,
+				Path:     vw.path,
+				Branches: branches,
+			}
+		})
+	}
+	wg.Wait()
 	return result
 }
 
