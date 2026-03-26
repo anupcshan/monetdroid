@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -467,7 +468,7 @@ func listWorkstreamsInDir(t *GitTrace, wtDir string) []WorkstreamStatus {
 
 	// Fan out branchStack calls with bounded concurrency.
 	result := make([]WorkstreamStatus, len(valid))
-	sem := make(chan struct{}, 4)
+	sem := make(chan struct{}, max(runtime.NumCPU()/2, 1))
 	var wg sync.WaitGroup
 	for _, vw := range valid {
 		wg.Go(func() {
