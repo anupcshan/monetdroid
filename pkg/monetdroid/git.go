@@ -108,6 +108,16 @@ func (t *GitTrace) OutputExitOK(cwd string, args ...string) ([]byte, int, error)
 	return out, 0, nil
 }
 
+// gitDirty returns true if the worktree has uncommitted changes to tracked files.
+// Does not include untracked files (-u) to avoid scanning the entire working tree.
+func gitDirty(t *GitTrace, cwd string) bool {
+	out, err := t.Output(cwd, "status", "--porcelain")
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
 // GitCommonDir returns the path to the shared .git directory for a repo or worktree.
 // For the main checkout this returns the .git dir; for worktrees it returns the main
 // repo's .git dir. Returns "" if cwd is not a git repo.
@@ -402,10 +412,7 @@ func AllWorkstreams(t *GitTrace) map[string]BranchPanel {
 		}
 		repoPath := MainWorktree(t, ws[0].Path)
 		defaultBranch := GitDefaultBranch(t, repoPath)
-		mainDirty := false
-		if files, err := GitStatusFiles(t, repoPath); err == nil && len(files) > 0 {
-			mainDirty = true
-		}
+		mainDirty := gitDirty(t, repoPath)
 		result[repo.Name()] = BranchPanel{
 			DefaultBranch: defaultBranch,
 			MainDirty:     mainDirty,
@@ -542,10 +549,7 @@ func branchStack(t *GitTrace, wtPath, defaultBranch string) []BranchStatus {
 	walk(root, 0)
 
 	// Check for dirty worktree (applies only to current branch).
-	dirty := false
-	if out, err := t.Output(wtPath, "status", "--porcelain"); err == nil {
-		dirty = len(strings.TrimSpace(string(out))) > 0
-	}
+	dirty := gitDirty(t, wtPath)
 
 	// Build result with status for each branch.
 	result := make([]BranchStatus, 0, len(ordered))
