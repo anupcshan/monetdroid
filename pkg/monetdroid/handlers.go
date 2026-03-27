@@ -59,6 +59,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	mux.HandleFunc("/bg-output/connect", hub.handleBgOutputConnect)
 	mux.HandleFunc("/bg-output/stream", hub.handleBgOutputStream)
+	mux.HandleFunc("/messages/before", hub.handleMessagesBefore)
 	return mux
 }
 
@@ -1169,6 +1170,48 @@ func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleMessagesBefore renders older messages for pagination.
+// The sentinel at the top of the message list triggers this via hx-trigger="revealed".
+func (h *Hub) handleMessagesBefore(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session")
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+
+	idxStr := r.URL.Query().Get("idx")
+	idx := 0
+	fmt.Sscanf(idxStr, "%d", &idx)
+
+	snap := s.GetLog()
+	if idx <= 0 || idx > len(snap) {
+		w.WriteHeader(204)
+		return
+	}
+
+	rc := precomputeRenderContext(snap)
+
+	// Determine how far back to render
+	start := idx - 100
+	if start < 0 {
+		start = 0
+	}
+	// Don't split inside the compacted region
+	if rc.lastCompact >= 0 && start > 0 && start <= rc.lastCompact {
+		start = 0
+	}
+
+	var b strings.Builder
+	if start > 0 {
+		b.WriteString(renderSentinel(sessionID, start))
+	}
+	b.WriteString(renderMessages(snap, start, idx, rc, sessionID))
+
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprint(w, b.String())
+}
+
 // handleBgOutputConnect returns the SSE-connected div for a bg task.
 // Called lazily when the tool chip's <details> is opened and the
 // bg-slot becomes visible (hx-trigger="revealed").
@@ -1247,6 +1290,8 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 		// If task is done (no stop channel, or stop channel closed), send
 		// one last read and exit.
 		if stopCh == nil {
+			fmt.Fprint(w, FormatSSE("done", ""))
+			flusher.Flush()
 			return
 		}
 		select {
@@ -1260,6 +1305,8 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 					flusher.Flush()
 				}
 			}
+			fmt.Fprint(w, FormatSSE("done", ""))
+			flusher.Flush()
 			return
 		case <-ctx.Done():
 			return

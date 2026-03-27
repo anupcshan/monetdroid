@@ -481,10 +481,11 @@ func Add(a, b int) int {
 		t.Fatalf("expected content to overflow at 300px: scrollHeight=%d clientHeight=%d", scrollHeight, clientHeight)
 	}
 
-	// Should be scrolled to bottom, not stuck at top
-	if scrollTop == 0 {
-		Screenshot(t, page, "session_reload_stuck_at_top")
-		t.Fatalf("messages stuck at top: scrollTop=%d scrollHeight=%d clientHeight=%d", scrollTop, scrollHeight, clientHeight)
+	// Should be scrolled to bottom (within 10px tolerance)
+	distFromBottom := scrollHeight - scrollTop - clientHeight
+	if distFromBottom > 10 {
+		Screenshot(t, page, "session_reload_not_at_bottom")
+		t.Fatalf("not scrolled to bottom: scrollTop=%d scrollHeight=%d clientHeight=%d distFromBottom=%d", scrollTop, scrollHeight, clientHeight, distFromBottom)
 	}
 	Screenshot(t, page, "session_reload_scrolled")
 }

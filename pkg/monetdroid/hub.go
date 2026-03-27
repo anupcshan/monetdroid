@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -465,6 +466,90 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc *ClaudeProcess) {
 	}
 }
 
+// renderContext holds precomputed metadata for rendering a slice of messages.
+type renderContext struct {
+	lastCompact    int
+	completedTools map[string]bool
+	bgTaskResults  map[string]string // tool_use id → output file path
+	suppressedIDs  map[string]bool   // tool_use ids for tools whose results are suppressed
+}
+
+// precomputeRenderContext scans the full log to build rendering metadata.
+func precomputeRenderContext(log []ServerMsg) renderContext {
+	rc := renderContext{
+		lastCompact:    -1,
+		completedTools: make(map[string]bool),
+		bgTaskResults:  make(map[string]string),
+		suppressedIDs:  make(map[string]bool),
+	}
+	for i, msg := range log {
+		if msg.Type == "compact_boundary" {
+			rc.lastCompact = i
+		}
+		if msg.Type == "tool_result" && msg.ToolUseID != "" {
+			rc.completedTools[msg.ToolUseID] = true
+			if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
+				rc.bgTaskResults[msg.ToolUseID] = bgPath
+			}
+		}
+		if msg.Type == "tool_use" && suppressResultTools[msg.Tool] {
+			rc.suppressedIDs[msg.ToolUseID] = true
+		}
+	}
+	return rc
+}
+
+// renderMessages renders messages from log[start:end] into HTML.
+func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID string) string {
+	var b strings.Builder
+	if rc.lastCompact >= 0 && start <= rc.lastCompact {
+		// We're rendering from inside the compacted region
+		if start == 0 {
+			b.WriteString(`<div class="compacted-context">`)
+		}
+	}
+	for i := start; i < end; i++ {
+		msg := log[i]
+		if msg.Type == "compact_boundary" && i == rc.lastCompact {
+			b.WriteString(`</div>`)
+			b.WriteString(RenderMsg(msg))
+			continue
+		}
+		if msg.Type == "tool_result" && rc.suppressedIDs[msg.ToolUseID] {
+			if len(msg.Images) == 0 {
+				continue
+			}
+		}
+		// Suppress bg task tool_results — their output is loaded lazily
+		if msg.Type == "tool_result" && rc.bgTaskResults[msg.ToolUseID] != "" {
+			continue
+		}
+		rendered := RenderMsg(msg)
+		// Strip spinners for tool_use events that already have results
+		if msg.Type == "tool_use" && rc.completedTools[msg.ToolUseID] {
+			rendered = stripSpinner(rendered, msg.ToolUseID)
+		}
+		// Populate the bg-slot with a lazy-load trigger for bg task tool chips
+		if msg.Type == "tool_use" && rc.bgTaskResults[msg.ToolUseID] != "" {
+			emptySlot := fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
+			populatedSlot := fmt.Sprintf(`<div id="bg-slot-%s">%s</div>`, Esc(msg.ToolUseID), RenderBgSlot(sessionID, msg.ToolUseID))
+			rendered = strings.Replace(rendered, emptySlot, populatedSlot, 1)
+		}
+		b.WriteString(rendered)
+	}
+	return b.String()
+}
+
+// renderSentinel returns an HTML element that triggers loading older messages.
+// Scroll position is preserved by the beforeSwap/afterSwap handlers on #messages.
+func renderSentinel(sessionID string, beforeIdx int) string {
+	return fmt.Sprintf(
+		`<div id="load-older" hx-get="/messages/before?session=%s&idx=%d" `+
+			`hx-trigger="intersect root:#messages threshold:0" hx-swap="outerHTML">`+
+			`<span class="loading-older">Loading older messages...</span></div>`,
+		url.QueryEscape(sessionID), beforeIdx)
+}
+
 // SeedEventLog populates a session's EventLog from its current state.
 // Called once when loading a session from disk or when a new session is
 // created, before any live Broadcast events arrive.
@@ -537,66 +622,28 @@ func (h *Hub) SeedEventLog(s *Session) {
 
 	s.EventLog.Append(FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 
-	// --- Render all messages from the log ---
-	// Find last compact boundary to wrap pre-compaction messages
-	lastCompact := -1
-	for i, msg := range snap.Log {
-		if msg.Type == "compact_boundary" {
-			lastCompact = i
-		}
+	// --- Render messages from the log (paginated) ---
+	rc := precomputeRenderContext(snap.Log)
+	// Register bg paths for lazy-load stream endpoint
+	for id, bgPath := range rc.bgTaskResults {
+		s.RegisterBgPath(id, bgPath)
 	}
 
-	// Collect tool_use IDs that have results (so we can strip spinners),
-	// and identify background task tool_results for lazy-load slots.
-	completedTools := make(map[string]bool)
-	bgTaskResults := make(map[string]string) // tool_use id → output file path
-	for _, msg := range snap.Log {
-		if msg.Type == "tool_result" && msg.ToolUseID != "" {
-			completedTools[msg.ToolUseID] = true
-			if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
-				bgTaskResults[msg.ToolUseID] = bgPath
-				s.RegisterBgPath(msg.ToolUseID, bgPath)
-			}
+	const pageSize = 100
+	start := 0
+	if len(snap.Log) > pageSize {
+		start = len(snap.Log) - pageSize
+		// Don't split inside the compacted region
+		if rc.lastCompact >= 0 && start <= rc.lastCompact {
+			start = 0
 		}
 	}
 
 	var msgsHTML strings.Builder
-	if lastCompact >= 0 {
-		msgsHTML.WriteString(`<div class="compacted-context">`)
+	if start > 0 {
+		msgsHTML.WriteString(renderSentinel(s.ID, start))
 	}
-	suppressedIDs := make(map[string]bool)
-	for i, msg := range snap.Log {
-		if msg.Type == "compact_boundary" && i == lastCompact {
-			msgsHTML.WriteString(`</div>`)
-			msgsHTML.WriteString(RenderMsg(msg))
-			continue
-		}
-		if msg.Type == "tool_use" && suppressResultTools[msg.Tool] {
-			suppressedIDs[msg.ToolUseID] = true
-		}
-		if msg.Type == "tool_result" && suppressedIDs[msg.ToolUseID] {
-			delete(suppressedIDs, msg.ToolUseID)
-			if len(msg.Images) == 0 {
-				continue
-			}
-		}
-		// Suppress bg task tool_results — their output is loaded lazily
-		if msg.Type == "tool_result" && bgTaskResults[msg.ToolUseID] != "" {
-			continue
-		}
-		rendered := RenderMsg(msg)
-		// Strip spinners for tool_use events that already have results
-		if msg.Type == "tool_use" && completedTools[msg.ToolUseID] {
-			rendered = stripSpinner(rendered, msg.ToolUseID)
-		}
-		// Populate the bg-slot with a lazy-load trigger for bg task tool chips
-		if msg.Type == "tool_use" && bgTaskResults[msg.ToolUseID] != "" {
-			emptySlot := fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
-			populatedSlot := fmt.Sprintf(`<div id="bg-slot-%s">%s</div>`, Esc(msg.ToolUseID), RenderBgSlot(s.ID, msg.ToolUseID))
-			rendered = strings.Replace(rendered, emptySlot, populatedSlot, 1)
-		}
-		msgsHTML.WriteString(rendered)
-	}
+	msgsHTML.WriteString(renderMessages(snap.Log, start, len(snap.Log), rc, s.ID))
 
 	s.EventLog.Append(FormatSSE("htmx", OobSwap("messages", "innerHTML", msgsHTML.String())))
 }

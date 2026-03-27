@@ -368,6 +368,8 @@
   .msg {
     margin-bottom: 16px;
     max-width: 100%;
+  }
+  #messages > :nth-last-child(n+20) {
     content-visibility: auto;
     contain-intrinsic-size: auto 60px;
   }
@@ -628,8 +630,6 @@
     color: var(--accent);
     font-size: 12px;
     font-weight: 600;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 30px;
   }
   .compact-boundary::before, .compact-boundary::after {
     content: '';
@@ -700,8 +700,6 @@
     border-radius: var(--radius);
     padding: 14px;
     margin-bottom: 16px;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 120px;
   }
   .perm-prompt .perm-header {
     font-size: 13px;
@@ -1177,6 +1175,15 @@
   }
   .scroll-btn:hover { background: var(--surface2); border-color: var(--text2); }
 
+  /* --- Load older messages sentinel --- */
+  .loading-older {
+    display: block;
+    text-align: center;
+    padding: 12px;
+    color: var(--text2);
+    font-size: 12px;
+  }
+
   /* --- Empty state --- */
   .empty-state {
     display: flex;
@@ -1229,7 +1236,9 @@
 
   <div class="messages-wrap">
     <div class="messages" id="messages"
-         hx-on:scroll="var ab=this.scrollHeight-this.scrollTop-this.clientHeight<200;window._ab=ab;document.getElementById('scroll-btn').style.display=ab?'none':'flex'">
+         hx-on:scroll="if(this.scrollTop===0){window._ab=true}else{var ab=this.scrollHeight-this.scrollTop-this.clientHeight<200;window._ab=ab;document.getElementById('scroll-btn').style.display=ab?'none':'flex'}"
+         hx-on:htmx:before-swap="if(event.detail.target.id==='load-older'){this._sh=this.scrollHeight}"
+         hx-on:htmx:after-swap="if(this._sh){this.scrollTop+=this.scrollHeight-this._sh;delete this._sh}">
       <div class="empty-state">
         <div class="empty-icon">⌘</div>
         <p>Start a new session to begin working with Claude Code on your project</p>

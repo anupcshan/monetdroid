@@ -53,7 +53,7 @@ func RenderBgSlot(sessionID, toolUseID string) string {
 	return fmt.Sprintf(
 		`<div class="tool-bg-output" id="bg-%s" `+
 			`hx-get="/bg-output/connect?session=%s&tool_id=%s" `+
-			`hx-trigger="revealed" hx-swap="innerHTML"></div>`,
+			`hx-trigger="revealed once" hx-swap="innerHTML"></div>`,
 		Esc(toolUseID), url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
 }
 
@@ -63,6 +63,6 @@ func RenderBgSSEDiv(sessionID, toolUseID string) string {
 	return fmt.Sprintf(
 		`<div hx-ext="sse" `+
 			`sse-connect="/bg-output/stream?session=%s&tool_id=%s" `+
-			`sse-swap="chunk" hx-swap="beforeend"></div>`,
+			`sse-swap="chunk" hx-swap="beforeend" sse-close="done"></div>`,
 		url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
 }
