@@ -10,7 +10,9 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8222", "listen address")
+	trace := flag.Bool("trace", false, "enable git trace logging")
 	flag.Parse()
+	monetdroid.SetTraceEnabled(*trace)
 
 	hub := monetdroid.NewHub()
 	mux := monetdroid.RegisterRoutes(hub)

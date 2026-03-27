@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,14 +31,20 @@ type traceOp struct {
 	cwd    string
 }
 
+// traceEnabled controls whether GitTrace logs are printed.
+var traceEnabled atomic.Bool
+
+// SetTraceEnabled enables or disables git trace logging.
+func SetTraceEnabled(v bool) { traceEnabled.Store(v) }
+
 // NewGitTrace creates a trace for a high-level action (e.g. "landing", "refresh").
 func NewGitTrace(label string) *GitTrace {
 	return &GitTrace{label: label, start: time.Now()}
 }
 
-// Log prints the collected trace summary.
+// Log prints the collected trace summary if tracing is enabled.
 func (t *GitTrace) Log() {
-	if t == nil {
+	if t == nil || !traceEnabled.Load() {
 		return
 	}
 	t.mu.Lock()
