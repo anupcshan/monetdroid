@@ -71,7 +71,7 @@ func TestEmptyState(t *testing.T) {
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 	page := f.Page()
 
-	WaitForText(t, page, ".empty-state", "Start a new session", 5*time.Second)
+	WaitForText(t, page, ".empty-state", "No active workstreams", 5*time.Second)
 	Screenshot(t, page, "empty_state")
 }
 

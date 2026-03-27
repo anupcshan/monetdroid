@@ -22,6 +22,9 @@ import (
 //go:embed index.html
 var indexHTML string
 
+//go:embed landing.html
+var landingPageHTML string
+
 //go:embed assets
 var assetsFS embed.FS
 
@@ -64,12 +67,15 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 }
 
 func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
-	html := indexHTML
-	if qs := r.URL.RawQuery; qs != "" {
-		html = strings.Replace(html, `sse-connect="/events"`, `sse-connect="/events?`+qs+`"`, 1)
-		// Hide the empty-state when restoring a session — it gets replaced by replay
-		html = strings.Replace(html, `class="empty-state"`, `class="empty-state" style="display:none"`, 1)
+	qs := r.URL.RawQuery
+	// Landing page: no session or cwd param
+	if qs == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(landingPageHTML))
+		return
 	}
+	// Session page: has ?session= or ?cwd=
+	html := strings.Replace(indexHTML, `sse-connect="/events"`, `sse-connect="/events?`+qs+`"`, 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
 }
@@ -253,13 +259,13 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
 		} else {
-			// No active session — show landing page
-			landingHTML := h.renderLanding()
-
-			if landingHTML != "" {
-				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML", landingHTML)+"\n"+TitleOob("")+"\n"+FaviconOob("")))
-				flusher.Flush()
+			// No active session — landing page
+			content := h.renderLanding()
+			if content == "" {
+				content = `<div class="empty-state"><p>No active workstreams. Click + to create one.</p></div>`
 			}
+			fmt.Fprint(w, FormatSSE("landing", content))
+			flusher.Flush()
 		}
 	}
 

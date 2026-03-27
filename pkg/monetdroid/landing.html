@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monet Droid</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/assets/styles.css">
+<script src="/assets/htmx-2.0.4.min.js"></script>
+<script src="/assets/htmx-ext-sse-2.2.3.js"></script>
+</head>
+<body>
+
+<div class="app" hx-ext="sse" sse-connect="/events">
+  <div sse-swap="htmx" hx-swap="none" style="display:none"></div>
+
+  <div class="header">
+    <button class="header-btn" popovertarget="drawer" hx-get="/drawer" hx-target="#drawer-content" hx-swap="innerHTML">☰</button>
+    <div class="header-title">Monet Droid</div>
+    <button class="header-btn" popovertarget="new-session-popover">+</button>
+  </div>
+
+  <div class="landing" id="landing" sse-swap="landing" hx-swap="innerHTML">
+    <div class="landing-loading"><span></span><span></span><span></span></div>
+  </div>
+</div>
+
+<!-- Drawer popover -->
+<div popover id="drawer">
+  <div id="drawer-content" style="padding:8px;text-align:center;color:var(--text2);font-size:13px">Loading...</div>
+</div>
+
+<!-- New session popover -->
+<div popover id="new-session-popover">
+  <h3>New Workstream</h3>
+  <form hx-post="/new-workstream" hx-swap="none"
+        hx-on::after-request="document.getElementById('new-session-popover').hidePopover()">
+    <label>Name</label>
+    <input type="text" name="name" placeholder="auth-refactor" required>
+    <label>Project directory</label>
+    <input type="text" name="cwd" placeholder="~/projects/my-app">
+    <div class="modal-actions">
+      <button type="button" class="btn-cancel" popovertarget="new-session-popover" popovertargetaction="hide">Cancel</button>
+      <button type="submit" class="btn-create">Create</button>
+    </div>
+  </form>
+  <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+  <details>
+    <summary style="font-size:13px;color:var(--text2);cursor:pointer">Plain session (no branch)</summary>
+    <form hx-post="/new" hx-swap="none" style="margin-top:12px"
+          hx-on::after-request="document.getElementById('new-session-popover').hidePopover()">
+      <label>Label</label>
+      <input type="text" name="label" placeholder="fix auth flaky test">
+      <label>Project directory</label>
+      <input type="text" name="cwd" placeholder="~/projects/my-app">
+      <div class="modal-actions">
+        <button type="button" class="btn-cancel" popovertarget="new-session-popover" popovertargetaction="hide">Cancel</button>
+        <button type="submit" class="btn-create">Create</button>
+      </div>
+    </form>
+  </details>
+</div>
+</body>
+</html>
