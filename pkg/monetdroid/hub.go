@@ -586,6 +586,8 @@ func (h *Hub) SeedEventLog(s *Session) {
 		}
 	}
 	chromeParts = append(chromeParts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
+	chromeParts = append(chromeParts, TitleOob(sessionLabel))
+	chromeParts = append(chromeParts, FaviconOob(sessionLabel))
 	chromeParts = append(chromeParts, OobSwap("session-id", "outerHTML",
 		fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))))
 	chromeParts = append(chromeParts, OobSwap("close-btn", "outerHTML",

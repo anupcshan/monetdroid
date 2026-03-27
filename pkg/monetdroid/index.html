@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Monet Droid</title>
+<link id="favicon" rel="icon" href="data:,">
 <script src="/assets/htmx-2.0.4.min.js"></script>
 <script src="/assets/htmx-ext-sse-2.2.3.js"></script>
 <style>
@@ -1203,6 +1204,7 @@
 <body>
 
 <div class="app" hx-ext="sse" sse-connect="/events">
+  <span id="page-title" style="display:none"></span>
   <!--
     SSE swap target: receives all server-sent events and processes OOB swaps.
     hx-swap="none" means the element itself isn't updated — only OOB elements

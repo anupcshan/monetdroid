@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"html"
 	"net/url"
 	"os"
@@ -988,4 +989,40 @@ func CwdCopyButton(cwd string) string {
 
 func OobSwap(id, strategy, content string) string {
 	return fmt.Sprintf(`<div id="%s" hx-swap-oob="%s">%s</div>`, id, strategy, content)
+}
+
+// FaviconOob returns an OOB swap that sets a colored SVG favicon based on the label.
+// The color is derived from a hash of the label text, and the icon shows the first
+// letter of the label for quick visual identification in browser tabs.
+func FaviconOob(label string) string {
+	if label == "" {
+		// Reset to default empty favicon
+		return `<link id="favicon" rel="icon" href="data:," hx-swap-oob="outerHTML">`
+	}
+	h := fnv.New32a()
+	h.Write([]byte(label))
+	hue := h.Sum32() % 360
+	// Pick the first rune of the label for the icon letter
+	letter := "?"
+	for _, r := range label {
+		letter = strings.ToUpper(string(r))
+		break
+	}
+	svg := fmt.Sprintf(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>`+
+		`<rect width='32' height='32' rx='6' fill='hsl(%d,55%%,45%%)'/>`+
+		`<text x='16' y='23' text-anchor='middle' fill='white' font-size='20' font-family='sans-serif' font-weight='600'>%s</text>`+
+		`</svg>`, hue, html.EscapeString(letter))
+	dataURL := "data:image/svg+xml," + url.PathEscape(svg)
+	return fmt.Sprintf(`<link id="favicon" rel="icon" href="%s" hx-swap-oob="outerHTML">`, dataURL)
+}
+
+// TitleOob returns an OOB-swapped hidden element that sets document.title via htmx:load event.
+func TitleOob(label string) string {
+	title := "Monet Droid"
+	if label != "" {
+		title = label + " · Monet Droid"
+	}
+	escaped := html.EscapeString(title)
+	// Use a hidden span; htmx:load fires when HTMX inserts it into the DOM.
+	return fmt.Sprintf(`<span id="page-title" style="display:none" hx-swap-oob="outerHTML" hx-on:htmx:load="document.title=this.textContent">%s</span>`, escaped)
 }

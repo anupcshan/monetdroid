@@ -154,7 +154,8 @@ func (h *Hub) handleLabel(w http.ResponseWriter, r *http.Request) {
 	label = s.UpdateLabel(label)
 	h.Labels.Set(s.ID, label)
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">%s</div>`, Esc(label))
+	fmt.Fprintf(w, `<div class="session-label" id="session-label" hx-get="/label-edit" hx-target="#session-label" hx-swap="outerHTML" hx-include="#session-id">%s</div>%s%s`,
+		Esc(label), TitleOob(label), FaviconOob(label))
 }
 
 // restoreSession finds a session by ID (in memory or on disk) and assigns it to the client.
@@ -241,6 +242,8 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			var chromeParts []string
 			chromeParts = append(chromeParts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
+			chromeParts = append(chromeParts, TitleOob(sessionLabel))
+			chromeParts = append(chromeParts, FaviconOob(sessionLabel))
 			chromeParts = append(chromeParts, OobSwap("session-cwd", "outerHTML",
 				fmt.Sprintf(`<input type="hidden" name="cwd" id="session-cwd" value="%s">`, Esc(cwd))))
 			chromeParts = append(chromeParts, OobSwap("session-label-value", "outerHTML",
@@ -254,7 +257,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			landingHTML := h.renderLanding()
 
 			if landingHTML != "" {
-				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML", landingHTML)))
+				fmt.Fprint(w, FormatSSE("htmx", OobSwap("messages", "innerHTML", landingHTML)+"\n"+TitleOob("")+"\n"+FaviconOob("")))
 				flusher.Flush()
 			}
 		}
@@ -442,6 +445,8 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			OobSwap("session-id", "outerHTML",
 				fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))),
 			OobSwap("session-label", "innerHTML", Esc(sessionLabel)),
+			TitleOob(sessionLabel),
+			FaviconOob(sessionLabel),
 			OobSwap("close-btn", "outerHTML",
 				`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`),
 			CwdCopyButton(s.GetCwd()),
