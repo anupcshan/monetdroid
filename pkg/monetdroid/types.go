@@ -89,3 +89,36 @@ type PermResponse struct {
 	Permissions  []PermSuggestion
 	UpdatedInput *ToolInput // non-nil for AskUserQuestion answers
 }
+
+// PermissionRequest is the exported view of an incoming can_use_tool request.
+// It exposes only the fields needed for policy decisions, keeping the wire
+// protocol types private.
+type PermissionRequest struct {
+	ToolName       string
+	ToolUseID      string
+	Input          *ToolInput
+	DecisionReason string
+}
+
+// PermissionHandler handles permission requests directly, bypassing the
+// broadcast-and-wait-on-channel flow. Called synchronously in the
+// handleControlRequest goroutine. Return a PermResponse indicating
+// allow/deny.
+type PermissionHandler func(req PermissionRequest) PermResponse
+
+// ProcessConfig holds optional configuration for StartProcessWithConfig.
+// All fields are optional; zero values preserve the default behavior.
+type ProcessConfig struct {
+	// PermissionHandler, when set, handles can_use_tool requests directly
+	// instead of broadcasting and waiting on the session's permission channel.
+	PermissionHandler PermissionHandler
+
+	// AppendSystemPrompt is passed as --append-system-prompt to the CLI.
+	AppendSystemPrompt string
+
+	// AllowedTools is passed as --allowedTools to the CLI (glob pattern).
+	AllowedTools string
+
+	// MaxTurns is passed as --max-turns to the CLI.
+	MaxTurns int
+}

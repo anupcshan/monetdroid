@@ -29,12 +29,20 @@ type ClaudeProcess struct {
 	dead        chan struct{} // closed when process exits
 	sessionIDCh chan string   // receives the ClaudeID from the first system event
 	ready       chan struct{} // closed when session is bound and broadcasting can begin
+
+	permHandler PermissionHandler // optional; short-circuits broadcast-and-wait when set
 }
 
-// StartProcess starts a new claude CLI subprocess.
+// StartProcess starts a new claude CLI subprocess with default configuration.
 // sess may be nil for new sessions (before the ClaudeID is known).
 // If resume is non-empty, passes --resume to restore conversation state.
 func StartProcess(sess *Session, cwd string, broadcast func(ServerMsg), resume string) (*ClaudeProcess, error) {
+	return StartProcessWithConfig(sess, cwd, broadcast, resume, nil)
+}
+
+// StartProcessWithConfig starts a new claude CLI subprocess with optional
+// configuration. When cfg is nil, behaves identically to StartProcess.
+func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg), resume string, cfg *ProcessConfig) (*ClaudeProcess, error) {
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -45,6 +53,17 @@ func StartProcess(sess *Session, cwd string, broadcast func(ServerMsg), resume s
 	}
 	if resume != "" {
 		args = append(args, "--resume", resume)
+	}
+	if cfg != nil {
+		if cfg.AppendSystemPrompt != "" {
+			args = append(args, "--append-system-prompt", cfg.AppendSystemPrompt)
+		}
+		if cfg.AllowedTools != "" {
+			args = append(args, "--allowedTools", cfg.AllowedTools)
+		}
+		if cfg.MaxTurns > 0 {
+			args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
+		}
 	}
 
 	cmd := exec.Command("claude", args...)
@@ -68,6 +87,11 @@ func StartProcess(sess *Session, cwd string, broadcast func(ServerMsg), resume s
 		return nil, fmt.Errorf("start: %w", err)
 	}
 
+	var permHandler PermissionHandler
+	if cfg != nil {
+		permHandler = cfg.PermissionHandler
+	}
+
 	p := &ClaudeProcess{
 		cmd:         cmd,
 		stdin:       stdin,
@@ -77,6 +101,7 @@ func StartProcess(sess *Session, cwd string, broadcast func(ServerMsg), resume s
 		dead:        make(chan struct{}),
 		sessionIDCh: make(chan string, 1),
 		ready:       make(chan struct{}),
+		permHandler: permHandler,
 	}
 	if sess != nil {
 		close(p.ready) // session already bound, no need to wait
@@ -199,6 +224,19 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 		return
 	}
 
+	// When a custom permission handler is set, call it directly
+	// instead of broadcasting and waiting on the session's channel.
+	if p.permHandler != nil {
+		resp := p.permHandler(PermissionRequest{
+			ToolName:       req.ToolName,
+			ToolUseID:      req.ToolUseID,
+			Input:          req.Input,
+			DecisionReason: req.DecisionReason,
+		})
+		p.sendPermResponse(req.RequestID, req.Input, resp)
+		return
+	}
+
 	<-p.ready // wait for session to be bound
 	ch := p.sess.RegisterPermChan(req.RequestID)
 
@@ -212,8 +250,13 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 
 	p.sess.DeletePermChan(req.RequestID)
 
+	p.sendPermResponse(req.RequestID, req.Input, resp)
+}
+
+// sendPermResponse sends an allow or deny control response for a permission request.
+func (p *ClaudeProcess) sendPermResponse(requestID string, originalInput *ToolInput, resp PermResponse) {
 	if resp.Allow {
-		input := req.Input
+		input := originalInput
 		if resp.UpdatedInput != nil {
 			input = resp.UpdatedInput
 		}
@@ -222,13 +265,13 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 			UpdatedInput:       input,
 			UpdatedPermissions: resp.Permissions,
 		}
-		p.sendControlResponse(req.RequestID, payload)
+		p.sendControlResponse(requestID, payload)
 	} else {
 		payload := permDenyResponse{
 			Behavior: "deny",
 			Message:  "User denied this action",
 		}
-		p.sendControlResponse(req.RequestID, payload)
+		p.sendControlResponse(requestID, payload)
 	}
 }
 
