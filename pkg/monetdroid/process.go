@@ -19,9 +19,11 @@ type ClaudeProcess struct {
 	stdin io.WriteCloser
 	sess  *Session
 
-	mu      sync.Mutex
+	mu      sync.Mutex // protects reqSeq and pending
 	reqSeq  int
 	pending map[string]chan ctlRespPayload // request_id → response channel
+
+	writeMu sync.Mutex // serializes all writes to stdin
 
 	turnDone    chan struct{} // sent (not closed) when a result event arrives
 	dead        chan struct{} // closed when process exits
@@ -230,6 +232,14 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 	}
 }
 
+// writeStdin serializes a JSON message to stdin.
+// All writes to the CLI process MUST go through this method.
+func (p *ClaudeProcess) writeStdin(data []byte) (int, error) {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	return p.stdin.Write(append(data, '\n'))
+}
+
 // sendControlRequest sends a control request and waits for the response.
 func (p *ClaudeProcess) sendControlRequest(request any) error {
 	p.mu.Lock()
@@ -244,8 +254,13 @@ func (p *ClaudeProcess) sendControlRequest(request any) error {
 		RequestID: id,
 		Request:   request,
 	}
-	data, _ := json.Marshal(msg)
-	p.stdin.Write(append(data, '\n'))
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal control request: %w", err)
+	}
+	if _, err := p.writeStdin(data); err != nil {
+		return fmt.Errorf("write control request: %w", err)
+	}
 
 	select {
 	case resp := <-ch:
@@ -276,8 +291,14 @@ func (p *ClaudeProcess) sendControlResponse(requestID string, response any) {
 			Response:  response,
 		},
 	}
-	data, _ := json.Marshal(msg)
-	p.stdin.Write(append(data, '\n'))
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[claude process] marshal control response: %s", err)
+		return
+	}
+	if _, err := p.writeStdin(data); err != nil {
+		log.Printf("[claude process] write control response: %s", err)
+	}
 }
 
 // SendUserMessage sends a user message to start a turn.
@@ -308,8 +329,11 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []ImageData) error {
 		SessionID: "",
 		Message:   userMessage{Role: "user", Content: content},
 	}
-	data, _ := json.Marshal(msg)
-	_, err := p.stdin.Write(append(data, '\n'))
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal user message: %w", err)
+	}
+	_, err = p.writeStdin(data)
 	return err
 }
 
