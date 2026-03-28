@@ -43,3 +43,16 @@ func TestPermissionHandlerAPI(t *testing.T) {
 		t.Fatal("expected deny for non-MCP tool")
 	}
 }
+
+func TestCommandAndExtraArgs(t *testing.T) {
+	cfg := &monetdroid.ProcessConfig{
+		Command:   []string{"podman", "run", "-i", "--rm", "container", "claude"},
+		ExtraArgs: []string{"--mcp-config", `{"assistant":{"type":"http"}}`, "--strict-mcp-config"},
+	}
+	if cfg.Command[0] != "podman" {
+		t.Fatal("expected podman as base command")
+	}
+	if cfg.ExtraArgs[0] != "--mcp-config" {
+		t.Fatal("expected --mcp-config in extra args")
+	}
+}

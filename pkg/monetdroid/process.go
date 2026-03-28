@@ -43,14 +43,22 @@ func StartProcess(sess *Session, cwd string, broadcast func(ServerMsg), resume s
 // StartProcessWithConfig starts a new claude CLI subprocess with optional
 // configuration. When cfg is nil, behaves identically to StartProcess.
 func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg), resume string, cfg *ProcessConfig) (*ClaudeProcess, error) {
-	args := []string{
+	// Build the base command: cfg.Command or default ["claude"].
+	binCmd := []string{"claude"}
+	if cfg != nil && len(cfg.Command) > 0 {
+		binCmd = cfg.Command
+	}
+
+	var args []string
+	args = append(args, binCmd[1:]...)
+	args = append(args,
 		"-p",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-prompt-tool", "stdio",
 		"--permission-mode", "default",
-	}
+	)
 	if resume != "" {
 		args = append(args, "--resume", resume)
 	}
@@ -64,9 +72,10 @@ func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg)
 		if cfg.MaxTurns > 0 {
 			args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
 		}
+		args = append(args, cfg.ExtraArgs...)
 	}
 
-	cmd := exec.Command("claude", args...)
+	cmd := exec.Command(binCmd[0], args...)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 

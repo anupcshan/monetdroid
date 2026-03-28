@@ -121,4 +121,14 @@ type ProcessConfig struct {
 
 	// MaxTurns is passed as --max-turns to the CLI.
 	MaxTurns int
+
+	// Command replaces the default "claude" binary. Command[0] is the
+	// executable and Command[1:] are prepended before monetdroid's own flags.
+	// When nil/empty, defaults to ["claude"].
+	// Example: ["podman", "run", "-i", "--rm", "my-container", "claude"]
+	Command []string
+
+	// ExtraArgs are additional flags appended after monetdroid's own flags.
+	// Example: ["--mcp-config", "{...}", "--strict-mcp-config"]
+	ExtraArgs []string
 }
