@@ -20,12 +20,24 @@ type ServerMsg struct {
 	Output          string           `json:"output,omitempty"`
 	Error           string           `json:"error,omitempty"`
 	Cost            *CostInfo        `json:"cost,omitempty"`
+	ParentToolUseID string           `json:"parent_tool_use_id,omitempty"`
+	AgentStat       *AgentStat       `json:"agent_stat,omitempty"`
 	PermID          string           `json:"perm_id,omitempty"`
 	PermTool        string           `json:"perm_tool,omitempty"`
 	PermInput       *ToolInput       `json:"perm_input,omitempty"`
 	PermReason      string           `json:"perm_reason,omitempty"`
 	PermSuggestions []PermSuggestion `json:"perm_suggestions,omitempty"`
 	PermMode        string           `json:"perm_mode,omitempty"`
+}
+
+// AgentStat tracks live stats for a sub-agent invocation.
+type AgentStat struct {
+	Description  string `json:"description"`
+	TotalTokens  int    `json:"total_tokens"`
+	ToolUses     int    `json:"tool_uses"`
+	DurationMs   int    `json:"duration_ms"`
+	LastToolName string `json:"last_tool_name,omitempty"`
+	Completed    bool   `json:"completed"`
 }
 
 type CostInfo struct {

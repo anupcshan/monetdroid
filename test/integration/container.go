@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 )
@@ -225,6 +227,25 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		ReplayerURL: replayerURL,
 		Replayer:    replayer,
 	}
+}
+
+// SessionLog fetches the parsed event log from the first active session.
+func (f *ContainerFixture) SessionLog() []monetdroid.ServerMsg {
+	f.T.Helper()
+	resp, err := http.Get(f.ServerURL + "/test/session-log")
+	if err != nil {
+		f.T.Fatalf("SessionLog: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		f.T.Fatalf("SessionLog: status %d: %s", resp.StatusCode, body)
+	}
+	var msgs []monetdroid.ServerMsg
+	if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil {
+		f.T.Fatalf("SessionLog decode: %v", err)
+	}
+	return msgs
 }
 
 // Page creates a new browser page and auto-captures a screenshot on failure.

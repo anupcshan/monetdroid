@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -54,6 +55,15 @@ func TestMain(m *testing.M) {
 				return
 			}
 			w.Write(data)
+		})
+		mux.HandleFunc("/test/session-log", func(w http.ResponseWriter, r *http.Request) {
+			sessions := hub.Sessions.List()
+			if len(sessions) == 0 {
+				http.Error(w, "no sessions", 404)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(sessions[0].GetLog())
 		})
 
 		log.Printf("monetdroid server listening on :8222")
@@ -1528,4 +1538,573 @@ func TestBranchTree(t *testing.T) {
 		t.Fatalf("expected at least 4 nested child nodes, got %d", len(nestedChildren))
 	}
 	Screenshot(t, page, "tree_done")
+}
+
+func TestAgentSubagent(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "agent_subagent.jsonl", testMode())
+
+	// Create a multi-directory codebase large enough to trigger Agent tool usage.
+	files := map[string]string{
+		"/go.mod": "module myapp\ngo 1.21\n",
+		"/cmd/server/main.go": `package main
+
+import (
+	"log"
+	"net/http"
+	"myapp/internal/api"
+	"myapp/internal/db"
+	"myapp/internal/middleware"
+)
+
+func main() {
+	database := db.Connect("postgres://localhost:5432/myapp?sslmode=disable")
+	router := api.NewRouter(database)
+	handler := middleware.Chain(router, middleware.Logger, middleware.Auth)
+	log.Println("starting server on :8080")
+	log.Fatal(http.ListenAndServe(":8080", handler))
+}
+`,
+		"/cmd/worker/main.go": `package main
+
+import (
+	"log"
+	"myapp/internal/db"
+	"myapp/internal/jobs"
+)
+
+func main() {
+	database := db.Connect("postgres://localhost:5432/myapp?sslmode=disable")
+	runner := jobs.NewRunner(database)
+	log.Println("starting worker")
+	runner.Run()
+}
+`,
+		"/internal/api/router.go": `package api
+
+import (
+	"database/sql"
+	"net/http"
+)
+
+func NewRouter(db *sql.DB) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/users", handleUsers(db))
+	mux.HandleFunc("/api/users/", handleUserByID(db))
+	mux.HandleFunc("/api/posts", handlePosts(db))
+	mux.HandleFunc("/api/posts/", handlePostByID(db))
+	mux.HandleFunc("/api/comments", handleComments(db))
+	mux.HandleFunc("/api/auth/login", handleLogin(db))
+	mux.HandleFunc("/api/auth/register", handleRegister(db))
+	mux.HandleFunc("/api/auth/refresh", handleRefresh(db))
+	mux.HandleFunc("/health", handleHealth)
+	return mux
+}
+`,
+		"/internal/api/users.go": `package api
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+func handleUsers(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		query := fmt.Sprintf("SELECT id, name, email FROM users WHERE name = '%s'", name)
+		rows, err := db.Query(query)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer rows.Close()
+		var users []map[string]any
+		for rows.Next() {
+			var id int; var n, email string
+			rows.Scan(&id, &n, &email)
+			users = append(users, map[string]any{"id": id, "name": n, "email": email})
+		}
+		json.NewEncoder(w).Encode(users)
+	}
+}
+
+func handleUserByID(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[len("/api/users/"):]
+		row := db.QueryRow("SELECT id, name, email FROM users WHERE id = $1", id)
+		var user struct{ ID int; Name, Email string }
+		if err := row.Scan(&user.ID, &user.Name, &user.Email); err != nil {
+			http.Error(w, "not found", 404)
+			return
+		}
+		json.NewEncoder(w).Encode(user)
+	}
+}
+`,
+		"/internal/api/posts.go": `package api
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+)
+
+func handlePosts(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.Query("SELECT id, title, body, user_id FROM posts ORDER BY created_at DESC LIMIT 50")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer rows.Close()
+		var posts []map[string]any
+		for rows.Next() {
+			var id, userID int; var title, body string
+			rows.Scan(&id, &title, &body, &userID)
+			posts = append(posts, map[string]any{"id": id, "title": title, "body": body, "user_id": userID})
+		}
+		json.NewEncoder(w).Encode(posts)
+	}
+}
+
+func handlePostByID(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[len("/api/posts/"):]
+		row := db.QueryRow("SELECT id, title, body, user_id FROM posts WHERE id = $1", id)
+		var post struct{ ID, UserID int; Title, Body string }
+		if err := row.Scan(&post.ID, &post.Title, &post.Body, &post.UserID); err != nil {
+			http.Error(w, "not found", 404)
+			return
+		}
+		json.NewEncoder(w).Encode(post)
+	}
+}
+`,
+		"/internal/api/comments.go": `package api
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+)
+
+func handleComments(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		postID := r.URL.Query().Get("post_id")
+		rows, err := db.Query("SELECT id, body, user_id FROM comments WHERE post_id = $1", postID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer rows.Close()
+		var comments []map[string]any
+		for rows.Next() {
+			var id, userID int; var body string
+			rows.Scan(&id, &body, &userID)
+			comments = append(comments, map[string]any{"id": id, "body": body, "user_id": userID})
+		}
+		json.NewEncoder(w).Encode(comments)
+	}
+}
+`,
+		"/internal/api/auth.go": `package api
+
+import (
+	"crypto/md5"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"time"
+)
+
+var jwtSecret = "supersecretkey123"
+
+func handleLogin(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var creds struct{ Email, Password string }
+		json.NewDecoder(r.Body).Decode(&creds)
+		hash := md5.Sum([]byte(creds.Password))
+		passHash := hex.EncodeToString(hash[:])
+		row := db.QueryRow("SELECT id, name FROM users WHERE email = $1 AND password_hash = $2", creds.Email, passHash)
+		var id int; var name string
+		if err := row.Scan(&id, &name); err != nil {
+			http.Error(w, "invalid credentials", 401)
+			return
+		}
+		token := generateJWT(id, name, time.Now().Add(24*time.Hour))
+		json.NewEncoder(w).Encode(map[string]string{"token": token})
+	}
+}
+
+func handleRegister(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input struct{ Name, Email, Password string }
+		json.NewDecoder(r.Body).Decode(&input)
+		hash := md5.Sum([]byte(input.Password))
+		passHash := hex.EncodeToString(hash[:])
+		_, err := db.Exec("INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3)", input.Name, input.Email, passHash)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.WriteHeader(201)
+	}
+}
+
+func handleRefresh(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(501)
+	}
+}
+
+func generateJWT(id int, name string, exp time.Time) string {
+	return "fake-jwt-token"
+}
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+`,
+		"/internal/db/connection.go": `package db
+
+import (
+	"database/sql"
+	"log"
+	_ "github.com/lib/pq"
+)
+
+func Connect(dsn string) *sql.DB {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	return db
+}
+`,
+		"/internal/db/migrations.go": `package db
+
+import "database/sql"
+
+func Migrate(db *sql.DB) error {
+	_, err := db.Exec(` + "`" + `
+		CREATE TABLE IF NOT EXISTS users (
+			id SERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			email TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT NOW()
+		);
+		CREATE TABLE IF NOT EXISTS posts (
+			id SERIAL PRIMARY KEY,
+			title TEXT NOT NULL,
+			body TEXT NOT NULL,
+			user_id INT REFERENCES users(id),
+			created_at TIMESTAMP DEFAULT NOW()
+		);
+		CREATE TABLE IF NOT EXISTS comments (
+			id SERIAL PRIMARY KEY,
+			body TEXT NOT NULL,
+			post_id INT REFERENCES posts(id),
+			user_id INT REFERENCES users(id),
+			created_at TIMESTAMP DEFAULT NOW()
+		);
+	` + "`" + `)
+	return err
+}
+`,
+		"/internal/db/queries.go": `package db
+
+import "database/sql"
+
+func GetUserPosts(db *sql.DB, userID int) ([]map[string]any, error) {
+	rows, err := db.Query("SELECT id, title, body FROM posts WHERE user_id = $1", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var posts []map[string]any
+	for rows.Next() {
+		var id int; var title, body string
+		rows.Scan(&id, &title, &body)
+		posts = append(posts, map[string]any{"id": id, "title": title, "body": body})
+	}
+	return posts, nil
+}
+`,
+		"/internal/middleware/auth.go": `package middleware
+
+import (
+	"net/http"
+	"strings"
+)
+
+func Auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/auth/") || r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			http.Error(w, "unauthorized", 401)
+			return
+		}
+		// TODO: validate JWT
+		next.ServeHTTP(w, r)
+	})
+}
+`,
+		"/internal/middleware/logging.go": `package middleware
+
+import (
+	"log"
+	"net/http"
+	"time"
+)
+
+func Logger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+func Chain(h http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		h = middlewares[i](h)
+	}
+	return h
+}
+`,
+		"/internal/jobs/runner.go": `package jobs
+
+import (
+	"database/sql"
+	"log"
+	"time"
+)
+
+type Runner struct {
+	db *sql.DB
+}
+
+func NewRunner(db *sql.DB) *Runner {
+	return &Runner{db: db}
+}
+
+func (r *Runner) Run() {
+	for {
+		r.processNotifications()
+		r.cleanupExpiredSessions()
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func (r *Runner) processNotifications() {
+	rows, _ := r.db.Query("SELECT id, user_id, message FROM notifications WHERE sent = false")
+	if rows == nil { return }
+	defer rows.Close()
+	for rows.Next() {
+		var id, userID int; var message string
+		rows.Scan(&id, &userID, &message)
+		log.Printf("sending notification %d to user %d: %s", id, userID, message)
+		r.db.Exec("UPDATE notifications SET sent = true WHERE id = $1", id)
+	}
+}
+
+func (r *Runner) cleanupExpiredSessions() {
+	r.db.Exec("DELETE FROM sessions WHERE expires_at < NOW()")
+}
+`,
+		"/internal/models/user.go": `package models
+
+import "time"
+
+type User struct {
+	ID           int       ` + "`" + `json:"id"` + "`" + `
+	Name         string    ` + "`" + `json:"name"` + "`" + `
+	Email        string    ` + "`" + `json:"email"` + "`" + `
+	PasswordHash string    ` + "`" + `json:"-"` + "`" + `
+	CreatedAt    time.Time ` + "`" + `json:"created_at"` + "`" + `
+}
+`,
+		"/internal/models/post.go": `package models
+
+import "time"
+
+type Post struct {
+	ID        int       ` + "`" + `json:"id"` + "`" + `
+	Title     string    ` + "`" + `json:"title"` + "`" + `
+	Body      string    ` + "`" + `json:"body"` + "`" + `
+	UserID    int       ` + "`" + `json:"user_id"` + "`" + `
+	CreatedAt time.Time ` + "`" + `json:"created_at"` + "`" + `
+}
+
+type Comment struct {
+	ID        int       ` + "`" + `json:"id"` + "`" + `
+	Body      string    ` + "`" + `json:"body"` + "`" + `
+	PostID    int       ` + "`" + `json:"post_id"` + "`" + `
+	UserID    int       ` + "`" + `json:"user_id"` + "`" + `
+	CreatedAt time.Time ` + "`" + `json:"created_at"` + "`" + `
+}
+`,
+		"/pkg/logger/logger.go": `package logger
+
+import (
+	"log"
+	"os"
+)
+
+var (
+	Info  = log.New(os.Stdout, "[INFO] ", log.LstdFlags)
+	Error = log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lshortfile)
+	Debug = log.New(os.Stdout, "[DEBUG] ", log.LstdFlags|log.Lshortfile)
+)
+`,
+		"/config/config.go": `package config
+
+import "os"
+
+type Config struct {
+	DatabaseURL string
+	Port        string
+	JWTSecret   string
+	Debug       bool
+}
+
+func Load() Config {
+	return Config{
+		DatabaseURL: getEnv("DATABASE_URL", "postgres://localhost:5432/myapp"),
+		Port:        getEnv("PORT", "8080"),
+		JWTSecret:   getEnv("JWT_SECRET", "supersecretkey123"),
+		Debug:       getEnv("DEBUG", "") == "1",
+	}
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+`,
+	}
+
+	for path, content := range files {
+		f.WriteFile(containerWorkdir+path, content)
+	}
+
+	// Init git repo so claude has full context
+	f.DockerExec("git", "init", containerWorkdir)
+	f.DockerExec("git", "-C", containerWorkdir, "add", ".")
+	f.DockerExec("git", "-C", containerWorkdir, "commit", "-m", "initial")
+
+	page := f.Page()
+
+	// Create session
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	Screenshot(t, page, "agent_before_send")
+
+	// Send a prompt that explicitly requests Agent tool usage for parallel investigation
+	page.MustElement(`textarea[name="text"]`).MustInput(
+		"Use agents to investigate three things in parallel: 1) Find all SQL queries and check for injection vulnerabilities, 2) Search for hardcoded secrets or credentials, 3) Check HTTP handlers for input validation issues. Launch three separate agents and report combined findings.")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for first tool chip (agent is working)
+	WaitForElement(t, page, ".tool-chip", 120*time.Second)
+	Screenshot(t, page, "agent_first_tool")
+
+	// Wait for first assistant text
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	Screenshot(t, page, "agent_first_text")
+
+	// Wait for turn to complete (generous timeout — agent usage involves multiple API calls)
+	WaitForElement(t, page, "#stop-btn:empty", 300*time.Second)
+	Screenshot(t, page, "agent_complete")
+
+	// Scroll to top and click open the first Agent chip to inspect its detail
+	page.MustEval(`() => document.querySelector('#messages').scrollTop = 0`)
+	WaitForElement(t, page, ".tool-chip summary", 5*time.Second).MustClick()
+	WaitForElement(t, page, ".agent-detail-slot:not(:empty)", 10*time.Second)
+	Screenshot(t, page, "agent_detail_open")
+
+	// Dump session event log for analysis
+	events := f.SessionLog()
+	t.Logf("=== SESSION EVENT LOG (%d events) ===", len(events))
+	for i, e := range events {
+		line := fmt.Sprintf("[%3d] type=%-20s tool=%-20s toolUseID=%s", i, e.Type, e.Tool, e.ToolUseID)
+		if e.Cost != nil {
+			line += fmt.Sprintf(" cost={used=%d window=%d usd=%.4f}", e.Cost.ContextUsed, e.Cost.ContextWindow, e.Cost.TotalCostUSD)
+		}
+		if e.Text != "" {
+			text := e.Text
+			if len(text) > 80 {
+				text = text[:80] + "..."
+			}
+			line += fmt.Sprintf(" text=%q", text)
+		}
+		t.Logf("%s", line)
+	}
+
+	// --- Assertions ---
+
+	// Agent tool_use events should be present
+	agentCount := 0
+	for _, e := range events {
+		if e.Type == "tool_use" && e.Tool == "Agent" {
+			agentCount++
+		}
+	}
+	if agentCount == 0 {
+		t.Fatal("expected Agent tool_use events in session log")
+	}
+
+	// No sub-agent events should leak into the main stream
+	for _, e := range events {
+		if e.ParentToolUseID != "" {
+			t.Fatalf("sub-agent event leaked into main stream: type=%s tool=%s parent=%s", e.Type, e.Tool, e.ParentToolUseID)
+		}
+	}
+
+	// Context usage should be monotonically non-decreasing — a drop means
+	// a sub-agent's smaller context leaked into the parent's cost bar.
+	var lastContextUsed int
+	for _, e := range events {
+		if e.Type == "cost" && e.Cost != nil && e.Cost.ContextUsed > 0 {
+			if e.Cost.ContextUsed < lastContextUsed {
+				t.Fatalf("context usage decreased: %d -> %d (sub-agent context leak)", lastContextUsed, e.Cost.ContextUsed)
+			}
+			lastContextUsed = e.Cost.ContextUsed
+		}
+	}
+
+	// task_done events should appear for each agent
+	taskDoneCount := 0
+	for _, e := range events {
+		if e.Type == "task_done" {
+			taskDoneCount++
+		}
+	}
+	if taskDoneCount != agentCount {
+		t.Fatalf("expected %d task_done events (one per agent), got %d", agentCount, taskDoneCount)
+	}
+
+	// agent_progress events should be present
+	progressCount := 0
+	for _, e := range events {
+		if e.Type == "agent_progress" {
+			progressCount++
+		}
+	}
+	if progressCount == 0 {
+		t.Fatal("expected agent_progress events in session log")
+	}
 }

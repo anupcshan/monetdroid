@@ -549,6 +549,19 @@ details[open] > .history-group-header::before { content: '▼ '; }
   background: none;
   padding: 0;
 }
+.agent-detail-slot {
+  background: #1a1a1e;
+  border-radius: 6px;
+  padding: 8px;
+  margin-top: 6px;
+  max-height: 500px;
+  overflow: auto;
+}
+.agent-stats {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text2);
+}
 .tool-spinner {
   display: inline-flex;
   align-items: center;

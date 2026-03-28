@@ -281,6 +281,7 @@ var (
 		"max_tokens":    true,
 		"thinking":      true,
 		"output_config": true,
+		"temperature":   true,
 	}
 
 	// deniedRequestKeys are stripped from the cassette silently.

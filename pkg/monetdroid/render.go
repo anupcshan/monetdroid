@@ -82,6 +82,17 @@ func ToolChipSummary(tool string, input *ToolInput) string {
 			return input.Bash.Command
 		}
 		return "Bash"
+	case input.Agent != nil:
+		var parts []string
+		if input.Agent.SubagentType != "" {
+			parts = append(parts, fmt.Sprintf("Agent (%s)", strings.ToLower(input.Agent.SubagentType)))
+		} else {
+			parts = append(parts, "Agent")
+		}
+		if input.Agent.Description != "" {
+			parts = append(parts, input.Agent.Description)
+		}
+		return strings.Join(parts, ": ")
 	}
 	return tool
 }
@@ -334,16 +345,22 @@ func RenderMsg(msg ServerMsg) string {
 			}
 		}
 		var spinnerHTML string
-		if msg.Tool == "Bash" {
+		if msg.Tool == "Bash" || msg.Tool == "Agent" {
 			spinnerHTML = fmt.Sprintf(` <span class="tool-spinner" id="spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span> <span class="tool-elapsed" id="elapsed-%s"></span></span>`, Esc(msg.ToolUseID), Esc(msg.ToolUseID))
 		}
 		summary := ToolChipSummary(msg.Tool, msg.Input)
 		detail := FormatToolInput(msg.Tool, msg.Input)
-		bgSlot := ""
+		extraSlot := ""
 		if msg.Tool == "Bash" {
-			bgSlot = fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
+			extraSlot = fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
 		}
-		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail">%s</div>%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, Esc(detail), bgSlot)
+		if msg.Tool == "Agent" {
+			statsHTML := fmt.Sprintf(`<span class="agent-stats" id="agent-stats-%s"></span>`, Esc(msg.ToolUseID))
+			agentSlot := RenderAgentSlot(msg.SessionID, msg.ToolUseID)
+			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s %s</summary>%s</details></div>`,
+				Esc(msg.ToolUseID), Esc(summary), spinnerHTML, statsHTML, agentSlot)
+		}
+		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail">%s</div>%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, Esc(detail), extraSlot)
 	case "tool_result":
 		if len(msg.Images) > 0 {
 			var content strings.Builder
@@ -360,6 +377,8 @@ func RenderMsg(msg ServerMsg) string {
 		return fmt.Sprintf(`<div class="msg"><div class="msg-error">✗ %s</div></div>`, Esc(msg.Error))
 	case "permission_request":
 		return RenderPermission(msg)
+	case "agent_progress":
+		return "" // handled via OOB swap in hub.go
 	case "compact_boundary":
 		return `<div class="compact-boundary"><span>context compacted</span></div>`
 	case "result":

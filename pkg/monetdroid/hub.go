@@ -209,9 +209,11 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 	s := h.Sessions.Get(sessionID)
 
-	// Accumulate cost
+	// Accumulate cost — skip sub-agent cost events to avoid overwriting parent context
 	if msg.Type == "cost" && msg.Cost != nil && s != nil {
-		s.AccumulateCost(msg.Cost)
+		if s.GetAgentDepth() == 0 {
+			s.AccumulateCost(msg.Cost)
+		}
 	}
 
 	// Update todos from TodoWrite tool_use events
@@ -234,6 +236,11 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 
 	if msg.Type == "cost" && s != nil {
 		parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
+	}
+
+	// Update agent chip stats via OOB swap
+	if msg.Type == "agent_progress" && msg.AgentStat != nil && msg.ToolUseID != "" {
+		parts = append(parts, OobSwap("agent-stats-"+msg.ToolUseID, "innerHTML", RenderAgentStatHTML(msg.AgentStat)))
 	}
 
 	thinkingHTML := `<div class="thinking-indicator" id="thinking"><span></span><span></span><span></span></div>`

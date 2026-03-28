@@ -27,6 +27,11 @@ type Session struct {
 	DiffStat          DiffStat
 	EventLog          EventLog
 	PermChans         map[string]chan PermResponse
+	AgentDepth        int                      // nesting depth of active sub-agents
+	AgentToolIDs      map[string]bool          // active Agent tool_use IDs
+	AgentEvents       map[string][]ServerMsg   // buffered sub-agent events per parent Agent tool_use ID
+	AgentStats        map[string]*AgentStat    // live stats per Agent tool_use ID
+	AgentStops        map[string]chan struct{} // stop channels for agent detail streams
 	proc              *ClaudeProcess
 	mu                sync.Mutex
 }
@@ -272,6 +277,111 @@ func (s *Session) RemoveSuppressed(id string) bool {
 		delete(s.SuppressedToolIDs, id)
 	}
 	return ok
+}
+
+// --- Agent operations ---
+
+// StartAgent registers a new sub-agent and increments the nesting depth.
+func (s *Session) StartAgent(toolUseID, description string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.AgentDepth++
+	if s.AgentToolIDs == nil {
+		s.AgentToolIDs = make(map[string]bool)
+	}
+	s.AgentToolIDs[toolUseID] = true
+	if s.AgentStats == nil {
+		s.AgentStats = make(map[string]*AgentStat)
+	}
+	s.AgentStats[toolUseID] = &AgentStat{Description: description}
+	if s.AgentEvents == nil {
+		s.AgentEvents = make(map[string][]ServerMsg)
+	}
+	if s.AgentStops == nil {
+		s.AgentStops = make(map[string]chan struct{})
+	}
+	s.AgentStops[toolUseID] = make(chan struct{})
+}
+
+// FinishAgent marks an agent as completed and decrements depth.
+func (s *Session) FinishAgent(toolUseID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.AgentToolIDs[toolUseID] {
+		s.AgentDepth--
+		delete(s.AgentToolIDs, toolUseID)
+	}
+	if stat := s.AgentStats[toolUseID]; stat != nil {
+		stat.Completed = true
+	}
+	if ch, ok := s.AgentStops[toolUseID]; ok {
+		close(ch)
+		delete(s.AgentStops, toolUseID)
+	}
+}
+
+// UpdateAgentStat updates the live stats for an agent from a task_progress event.
+func (s *Session) UpdateAgentStat(toolUseID string, usage *taskUsage, description, lastTool string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stat := s.AgentStats[toolUseID]
+	if stat == nil {
+		return
+	}
+	if usage != nil {
+		stat.TotalTokens = usage.TotalTokens
+		stat.ToolUses = usage.ToolUses
+		stat.DurationMs = usage.DurationMs
+	}
+	if description != "" {
+		stat.Description = description
+	}
+	if lastTool != "" {
+		stat.LastToolName = lastTool
+	}
+}
+
+// BufferAgentEvent appends a ServerMsg to the buffer for a sub-agent.
+func (s *Session) BufferAgentEvent(parentToolUseID string, msg ServerMsg) {
+	s.mu.Lock()
+	s.AgentEvents[parentToolUseID] = append(s.AgentEvents[parentToolUseID], msg)
+	s.mu.Unlock()
+}
+
+// GetAgentEvents returns a copy of the buffered events for an agent.
+func (s *Session) GetAgentEvents(toolUseID string) []ServerMsg {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	events := s.AgentEvents[toolUseID]
+	out := make([]ServerMsg, len(events))
+	copy(out, events)
+	return out
+}
+
+// GetAgentStat returns a copy of the agent stat.
+func (s *Session) GetAgentStat(toolUseID string) *AgentStat {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stat := s.AgentStats[toolUseID]
+	if stat == nil {
+		return nil
+	}
+	cp := *stat
+	return &cp
+}
+
+// GetAgentDepth returns the current agent nesting depth.
+func (s *Session) GetAgentDepth() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.AgentDepth
+}
+
+// GetAgentStop returns the stop channel for an agent's detail stream, if still running.
+func (s *Session) GetAgentStop(toolUseID string) chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.AgentStops[toolUseID]
 }
 
 // --- Compound operations ---

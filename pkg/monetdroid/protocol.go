@@ -123,16 +123,32 @@ type permDenyResponse struct {
 
 // streamEvent is the top-level envelope for all non-control events.
 type streamEvent struct {
-	Type          string                    `json:"type"` // "user", "assistant", "result", "system"
-	Subtype       string                    `json:"subtype,omitempty"`
-	SessionID     string                    `json:"session_id,omitempty"`
-	ToolUseID     string                    `json:"tool_use_id,omitempty"`
-	Status        string                    `json:"status,omitempty"`
-	Message       streamMessage             `json:"message"`
-	Result        string                    `json:"result,omitempty"`
-	TotalCost     float64                   `json:"total_cost_usd,omitempty"`
-	ModelUsage    map[string]modelUsageInfo `json:"modelUsage,omitempty"`
-	ToolUseResult *toolUseResult            `json:"tool_use_result,omitempty"`
+	Type            string                    `json:"type"` // "user", "assistant", "result", "system"
+	Subtype         string                    `json:"subtype,omitempty"`
+	SessionID       string                    `json:"session_id,omitempty"`
+	ToolUseID       string                    `json:"tool_use_id,omitempty"`
+	Status          string                    `json:"status,omitempty"`
+	ParentToolUseID *string                   `json:"parent_tool_use_id"`
+	Message         streamMessage             `json:"message"`
+	Result          string                    `json:"result,omitempty"`
+	TotalCost       float64                   `json:"total_cost_usd,omitempty"`
+	ModelUsage      map[string]modelUsageInfo `json:"modelUsage,omitempty"`
+	ToolUseResult   *toolUseResult            `json:"tool_use_result,omitempty"`
+
+	// Agent task fields (system events with subtype task_started/task_progress/task_notification)
+	TaskID       string     `json:"task_id,omitempty"`
+	TaskType     string     `json:"task_type,omitempty"`
+	Description  string     `json:"description,omitempty"`
+	Summary      string     `json:"summary,omitempty"`
+	LastToolName string     `json:"last_tool_name,omitempty"`
+	TaskUsage    *taskUsage `json:"usage,omitempty"`
+}
+
+// taskUsage carries agent task usage stats from task_progress/task_notification events.
+type taskUsage struct {
+	TotalTokens int `json:"total_tokens"`
+	ToolUses    int `json:"tool_uses"`
+	DurationMs  int `json:"duration_ms"`
 }
 
 // toolUseResult carries structured tool output from the CLI.
@@ -239,6 +255,7 @@ type ToolInput struct {
 	Glob  *GlobInput
 	Todo  *TodoInput
 	Ask   *AskInput
+	Agent *AgentInput
 }
 
 // MarshalJSON returns the preserved raw JSON so unknown fields survive round-trips.
@@ -281,6 +298,9 @@ func ParseToolInput(tool string, raw json.RawMessage) *ToolInput {
 	case "AskUserQuestion":
 		t.Ask = &AskInput{}
 		json.Unmarshal(raw, t.Ask)
+	case "Agent":
+		t.Agent = &AgentInput{}
+		json.Unmarshal(raw, t.Agent)
 	}
 	return t
 }
@@ -342,6 +362,13 @@ type AskQuestion struct {
 type AskOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+}
+
+type AgentInput struct {
+	Description  string `json:"description,omitempty"`
+	Prompt       string `json:"prompt,omitempty"`
+	SubagentType string `json:"subagent_type,omitempty"`
+	Model        string `json:"model,omitempty"`
 }
 
 // --- Permission suggestion types ---

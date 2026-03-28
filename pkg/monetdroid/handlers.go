@@ -62,6 +62,8 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	mux.HandleFunc("/bg-output/connect", hub.handleBgOutputConnect)
 	mux.HandleFunc("/bg-output/stream", hub.handleBgOutputStream)
+	mux.HandleFunc("/agent-detail/connect", hub.handleAgentDetailConnect)
+	mux.HandleFunc("/agent-detail/stream", hub.handleAgentDetailStream)
 	mux.HandleFunc("/messages/before", hub.handleMessagesBefore)
 	return mux
 }
@@ -1314,6 +1316,111 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 				if escaped != "" {
 					fmt.Fprint(w, FormatSSE("chunk", fmt.Sprintf("<span>%s\n</span>", escaped)))
 					flusher.Flush()
+				}
+			}
+			fmt.Fprint(w, FormatSSE("done", ""))
+			flusher.Flush()
+			return
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// handleAgentDetailConnect returns the rendered agent detail content.
+// For completed agents, returns static HTML of all buffered events.
+// For running agents, returns an SSE div that streams events as they arrive.
+func (h *Hub) handleAgentDetailConnect(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session")
+	toolID := r.URL.Query().Get("tool_id")
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	stat := s.GetAgentStat(toolID)
+	w.Header().Set("Content-Type", "text/html")
+
+	if stat != nil && stat.Completed {
+		// Agent is done — render all buffered events as static HTML
+		events := s.GetAgentEvents(toolID)
+		fmt.Fprint(w, RenderAgentDetail(events))
+		return
+	}
+
+	// Agent still running — return SSE div for live streaming
+	// First render any events buffered so far, then append SSE div
+	events := s.GetAgentEvents(toolID)
+	fmt.Fprint(w, RenderAgentDetail(events))
+	fmt.Fprint(w, RenderAgentSSEDiv(sessionID, toolID))
+}
+
+// handleAgentDetailStream serves buffered agent events as an SSE stream.
+// Sends new events as they arrive until the agent completes.
+func (h *Hub) handleAgentDetailStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	sessionID := r.URL.Query().Get("session")
+	toolID := r.URL.Query().Get("tool_id")
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	stopCh := s.GetAgentStop(toolID)
+	ctx := r.Context()
+	offset := len(s.GetAgentEvents(toolID))
+
+	const pollInterval = 500 * time.Millisecond
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		events := s.GetAgentEvents(toolID)
+		if len(events) > offset {
+			for _, msg := range events[offset:] {
+				rendered := RenderMsg(msg)
+				if rendered != "" {
+					fmt.Fprint(w, FormatSSE("event", rendered))
+					flusher.Flush()
+				}
+			}
+			offset = len(events)
+		}
+
+		if stopCh == nil {
+			// Agent already done
+			fmt.Fprint(w, FormatSSE("done", ""))
+			flusher.Flush()
+			return
+		}
+		select {
+		case <-stopCh:
+			// Agent just completed — send remaining events
+			events := s.GetAgentEvents(toolID)
+			if len(events) > offset {
+				for _, msg := range events[offset:] {
+					rendered := RenderMsg(msg)
+					if rendered != "" {
+						fmt.Fprint(w, FormatSSE("event", rendered))
+						flusher.Flush()
+					}
 				}
 			}
 			fmt.Fprint(w, FormatSSE("done", ""))
