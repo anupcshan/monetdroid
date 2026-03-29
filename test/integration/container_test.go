@@ -219,16 +219,15 @@ func TestPermissionFlow(t *testing.T) {
 	page.MustElement(`textarea[name="text"]`).MustInput("Create a file called hello.txt containing 'Hello, World!'")
 	page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for permission prompt
-	WaitForElement(t, page, ".perm-prompt", 60*time.Second)
-	WaitForText(t, page, ".perm-tool", "Write", 5*time.Second)
+	// Wait for permission prompt (inline inside tool chip)
+	WaitForElement(t, page, ".perm-inline", 60*time.Second)
 	Screenshot(t, page, "permission_prompt")
 
 	// Click Allow
 	page.MustElement(`.perm-allow`).MustClick()
 
-	// Permission should be resolved
-	WaitForText(t, page, ".perm-actions", "Allowed", 10*time.Second)
+	// Permission should be resolved — status shows in tool chip summary
+	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 	Screenshot(t, page, "permission_allowed")
 
 	// Wait for completion
@@ -313,8 +312,8 @@ func main() {
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
 	page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for permission with diff
-	WaitForElement(t, page, ".perm-prompt", 60*time.Second)
+	// Wait for permission with diff (inline inside tool chip)
+	WaitForElement(t, page, ".perm-inline", 60*time.Second)
 	Screenshot(t, page, "edit_diff_permission")
 
 	// Allow it
@@ -349,8 +348,8 @@ func main() {
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
 	page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for permission prompt with Accept Edits button
-	WaitForElement(t, page, ".perm-prompt", 60*time.Second)
+	// Wait for permission prompt with Accept Edits button (inline inside tool chip)
+	WaitForElement(t, page, ".perm-inline", 60*time.Second)
 	Screenshot(t, page, "accept_edits_permission")
 
 	// Click "Accept Edits" instead of plain "Allow"
@@ -360,8 +359,8 @@ func main() {
 	}
 	acceptBtn.MustClick()
 
-	// Permission should be resolved
-	WaitForText(t, page, ".perm-actions", "Allowed", 10*time.Second)
+	// Permission should be resolved — status shows in tool chip summary
+	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 	Screenshot(t, page, "accept_edits_allowed")
 
 	// Wait for first turn to complete
@@ -381,14 +380,15 @@ func main() {
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 	Screenshot(t, page, "accept_edits_second_turn")
 
-	// Verify no second permission prompt appeared (only one .perm-prompt from first turn)
-	prompts, err := page.Elements(".perm-prompt")
+	// Verify no second permission prompt appeared — after first was resolved,
+	// the perm-inline was cleared, so there should be zero .perm-inline elements
+	prompts, err := page.Elements(".perm-inline")
 	if err != nil {
-		t.Fatalf("failed to query perm-prompts: %v", err)
+		t.Fatalf("failed to query perm-inlines: %v", err)
 	}
-	if len(prompts) > 1 {
+	if len(prompts) > 0 {
 		Screenshot(t, page, "accept_edits_unexpected_perm")
-		t.Fatalf("expected at most 1 permission prompt after Accept Edits, got %d", len(prompts))
+		t.Fatalf("expected 0 inline permission prompts after Accept Edits, got %d", len(prompts))
 	}
 
 	// Verify the file was edited
@@ -695,8 +695,8 @@ func TestBashSpinner(t *testing.T) {
 	}
 	Screenshot(t, page, "bash_spinner_still_running")
 
-	// Open the tool chip details to trigger lazy-load of bg output
-	page.MustElement(`.tool-chip summary`).MustClick()
+	// Tool chip details is already open from the permission flow's auto-open,
+	// so the bg-slot SSE lazy-load triggers as soon as it's populated.
 
 	// Wait for streaming to start — at least 2 lines visible
 	WaitForText(t, page, ".tool-bg-output", "step 2", 30*time.Second)

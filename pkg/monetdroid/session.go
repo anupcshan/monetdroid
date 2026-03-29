@@ -153,6 +153,28 @@ func (s *Session) LastAssistantText() string {
 	return ""
 }
 
+func (s *Session) IsTopLevelTool(toolUseID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.Log {
+		if m.Type == "tool_use" && m.ToolUseID == toolUseID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Session) FindPermToolUseID(permID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.Log {
+		if m.Type == "permission_request" && m.PermID == permID {
+			return m.ToolUseID
+		}
+	}
+	return ""
+}
+
 func (s *Session) FindPermInput(permID string) *ToolInput {
 	s.mu.Lock()
 	defer s.mu.Unlock()

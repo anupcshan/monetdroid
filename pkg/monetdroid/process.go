@@ -275,7 +275,8 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 
 	broadcast(ServerMsg{
 		Type: "permission_request", SessionID: p.sess.ID,
-		PermID: req.RequestID, PermTool: req.ToolName, PermInput: req.Input,
+		ToolUseID: req.ToolUseID,
+		PermID:    req.RequestID, PermTool: req.ToolName, PermInput: req.Input,
 		PermReason: req.DecisionReason, PermSuggestions: req.PermissionSuggestions,
 	})
 

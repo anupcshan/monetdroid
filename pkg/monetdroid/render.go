@@ -340,7 +340,8 @@ func RenderMsg(msg ServerMsg) string {
 				diffHTML := RenderEditDiffHTML(fp, old, new_)
 				if diffHTML != "" {
 					summary := editSummary(fp, old, new_)
-					return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`, Esc(summary), diffHTML)
+					return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s<span id="perm-status-%s"></span></summary><div class="tool-detail" id="tool-detail-%s">%s</div><div id="perm-slot-%s"></div></details></div>`,
+						Esc(msg.ToolUseID), Esc(summary), Esc(msg.ToolUseID), Esc(msg.ToolUseID), diffHTML, Esc(msg.ToolUseID))
 				}
 			}
 		}
@@ -354,13 +355,15 @@ func RenderMsg(msg ServerMsg) string {
 		if msg.Tool == "Bash" {
 			extraSlot = fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
 		}
+		permSlot := fmt.Sprintf(`<div id="perm-slot-%s"></div>`, Esc(msg.ToolUseID))
+		permStatus := fmt.Sprintf(`<span id="perm-status-%s"></span>`, Esc(msg.ToolUseID))
 		if msg.Tool == "Agent" {
 			statsHTML := fmt.Sprintf(`<span class="agent-stats" id="agent-stats-%s"></span>`, Esc(msg.ToolUseID))
 			agentSlot := RenderAgentSlot(msg.SessionID, msg.ToolUseID)
-			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s %s</summary>%s</details></div>`,
-				Esc(msg.ToolUseID), Esc(summary), spinnerHTML, statsHTML, agentSlot)
+			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s %s%s</summary>%s%s</details></div>`,
+				Esc(msg.ToolUseID), Esc(summary), spinnerHTML, statsHTML, permStatus, permSlot, agentSlot)
 		}
-		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail">%s</div>%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, Esc(detail), extraSlot)
+		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s%s</summary><div class="tool-detail" id="tool-detail-%s">%s</div>%s%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, permStatus, Esc(msg.ToolUseID), Esc(detail), permSlot, extraSlot)
 	case "tool_result":
 		if len(msg.Images) > 0 {
 			var content strings.Builder
@@ -376,6 +379,9 @@ func RenderMsg(msg ServerMsg) string {
 	case "error":
 		return fmt.Sprintf(`<div class="msg"><div class="msg-error">✗ %s</div></div>`, Esc(msg.Error))
 	case "permission_request":
+		if msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
+			return "" // rendered inline via OOB swap into tool chip
+		}
 		return RenderPermission(msg)
 	case "agent_progress":
 		return "" // handled via OOB swap in hub.go
@@ -444,6 +450,43 @@ func RenderPermission(msg ServerMsg) string {
 		Esc(msg.SessionID), Esc(msg.PermID),
 		suggBtns.String(),
 	)
+}
+
+// RenderInlinePermission renders permission actions for OOB swap into a tool chip's perm-slot.
+// No header, tool name, or detail — the tool chip already shows those.
+func RenderInlinePermission(msg ServerMsg) string {
+	var b strings.Builder
+	b.WriteString(`<div class="perm-inline" hx-on:htmx:load="this.closest('details').open=true">`)
+	if msg.PermReason != "" {
+		fmt.Fprintf(&b, `<div class="perm-reason">%s</div>`, Esc(msg.PermReason))
+	}
+	fmt.Fprintf(&b, `<div class="perm-actions" id="perm-actions-%s">`, Esc(msg.PermID))
+	fmt.Fprintf(&b, `<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form>`,
+		Esc(msg.SessionID), Esc(msg.PermID))
+	fmt.Fprintf(&b, `<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow</button></form>`,
+		Esc(msg.SessionID), Esc(msg.PermID))
+	for _, s := range msg.PermSuggestions {
+		var label string
+		switch s.Type {
+		case "setMode":
+			if s.Mode == "acceptEdits" {
+				label = "Accept Edits"
+			} else {
+				label = s.Mode
+			}
+		case "addDirectories":
+			label = "Add " + strings.Join(s.Directories, ", ")
+		default:
+			label = s.Type
+		}
+		sJSON, _ := json.Marshal(s)
+		fmt.Fprintf(&b,
+			`<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><input type="hidden" name="suggestion" value="%s"><button type="submit" class="perm-allow" style="width:100%%;font-size:11px">%s</button></form>`,
+			Esc(msg.SessionID), Esc(msg.PermID), Esc(string(sJSON)), Esc(label),
+		)
+	}
+	b.WriteString(`</div></div>`)
+	return b.String()
 }
 
 func RenderAskUser(msg ServerMsg) string {

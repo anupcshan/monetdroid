@@ -525,6 +525,9 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 		ch <- PermResponse{Allow: allow, Permissions: perms}
 	}
 
+	// Look up the ToolUseID before removing the permission from the log
+	toolUseID := s.FindPermToolUseID(permID)
+
 	var resultHTML string
 	if allow {
 		label := "Allowed"
@@ -535,7 +538,15 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resultHTML = `<span style="color:var(--error);font-size:12px">✗ Denied</span>`
 	}
-	event := FormatSSE("htmx", OobSwap("perm-actions-"+permID, "innerHTML", resultHTML))
+	var oobParts []string
+	// Always update perm-actions (works for standalone; no-op if inline already cleared it)
+	oobParts = append(oobParts, OobSwap("perm-actions-"+permID, "innerHTML", resultHTML))
+	if toolUseID != "" {
+		// Inline permission: show status on the tool chip summary and clear the perm-slot
+		oobParts = append(oobParts, OobSwap("perm-status-"+toolUseID, "innerHTML", " "+resultHTML))
+		oobParts = append(oobParts, OobSwap("perm-slot-"+toolUseID, "innerHTML", ""))
+	}
+	event := FormatSSE("htmx", strings.Join(oobParts, "\n"))
 	h.BroadcastToSession(sessionID, event)
 
 	s.RemovePermission(permID)

@@ -268,6 +268,28 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			Branches:  info.Branches,
 		})
 	}
+	// Inline permission: OOB swap into the tool chip's perm-slot (top-level tools only)
+	if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
+		if s != nil && s.IsTopLevelTool(msg.ToolUseID) {
+			parts = append(parts, OobSwap("perm-slot-"+msg.ToolUseID, "innerHTML", RenderInlinePermission(msg)))
+			// Upgrade the tool chip's detail with richer permission detail
+			if msg.PermTool == "Edit" || msg.PermTool == "FileEdit" {
+				if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
+					if diffHTML := RenderEditDiffHTML(fp, old, new_); diffHTML != "" {
+						parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", diffHTML))
+					}
+				}
+			} else {
+				permDetail := FormatPermDetail(msg.PermTool, msg.PermInput)
+				if permDetail != "" {
+					parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", Esc(permDetail)))
+				}
+			}
+		} else {
+			// Sub-agent or unknown tool — render standalone
+			msgHTML = RenderPermission(msg)
+		}
+	}
 	if msg.Type == "done" && s != nil {
 		info := s.GetTrackerInfo()
 		result := s.LastAssistantText()
@@ -477,8 +499,9 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc *ClaudeProcess) {
 type renderContext struct {
 	lastCompact    int
 	completedTools map[string]bool
-	bgTaskResults  map[string]string // tool_use id → output file path
-	suppressedIDs  map[string]bool   // tool_use ids for tools whose results are suppressed
+	bgTaskResults  map[string]string    // tool_use id → output file path
+	suppressedIDs  map[string]bool      // tool_use ids for tools whose results are suppressed
+	pendingPerms   map[string]ServerMsg // tool_use id → unresolved inline permission_request
 }
 
 // precomputeRenderContext scans the full log to build rendering metadata.
@@ -488,6 +511,7 @@ func precomputeRenderContext(log []ServerMsg) renderContext {
 		completedTools: make(map[string]bool),
 		bgTaskResults:  make(map[string]string),
 		suppressedIDs:  make(map[string]bool),
+		pendingPerms:   make(map[string]ServerMsg),
 	}
 	for i, msg := range log {
 		if msg.Type == "compact_boundary" {
@@ -501,6 +525,9 @@ func precomputeRenderContext(log []ServerMsg) renderContext {
 		}
 		if msg.Type == "tool_use" && suppressResultTools[msg.Tool] {
 			rc.suppressedIDs[msg.ToolUseID] = true
+		}
+		if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
+			rc.pendingPerms[msg.ToolUseID] = msg
 		}
 	}
 	return rc
@@ -531,6 +558,10 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 		if msg.Type == "tool_result" && rc.bgTaskResults[msg.ToolUseID] != "" {
 			continue
 		}
+		// Skip inline permission_request messages — they're rendered inside tool chips
+		if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
+			continue
+		}
 		rendered := RenderMsg(msg)
 		// Strip spinners for tool_use events that already have results
 		if msg.Type == "tool_use" && rc.completedTools[msg.ToolUseID] {
@@ -541,6 +572,16 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 			emptySlot := fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
 			populatedSlot := fmt.Sprintf(`<div id="bg-slot-%s">%s</div>`, Esc(msg.ToolUseID), RenderBgSlot(sessionID, msg.ToolUseID))
 			rendered = strings.Replace(rendered, emptySlot, populatedSlot, 1)
+		}
+		// Populate the perm-slot with inline permission for unresolved permissions
+		if msg.Type == "tool_use" && msg.ToolUseID != "" {
+			if pm, ok := rc.pendingPerms[msg.ToolUseID]; ok {
+				emptySlot := fmt.Sprintf(`<div id="perm-slot-%s"></div>`, Esc(msg.ToolUseID))
+				filledSlot := fmt.Sprintf(`<div id="perm-slot-%s">%s</div>`, Esc(msg.ToolUseID), RenderInlinePermission(pm))
+				rendered = strings.Replace(rendered, emptySlot, filledSlot, 1)
+				// Force the tool chip <details> open so the permission buttons are visible
+				rendered = strings.Replace(rendered, `<details class="tool-chip">`, `<details class="tool-chip" open>`, 1)
+			}
 		}
 		b.WriteString(rendered)
 	}

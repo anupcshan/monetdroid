@@ -761,6 +761,26 @@ details[open] > .history-group-header::before { content: '▼ '; }
 .perm-allow { background: var(--tool); color: var(--bg); }
 .perm-deny { background: var(--error); color: white; }
 
+/* --- Inline permission (inside tool chip) --- */
+.tool-chip:has(.perm-inline) {
+  border-color: var(--accent);
+  background: #1a1a2e;
+  padding: 12px 14px;
+}
+.tool-chip:has(.perm-inline) .tool-name {
+  color: var(--accent);
+}
+.perm-inline {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.perm-inline .perm-reason {
+  font-size: 12px;
+  color: var(--text2);
+  margin-bottom: 10px;
+}
+
 /* --- Ask User (multiple choice) --- */
 .ask-question { margin-bottom: 12px; }
 .ask-header { font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
