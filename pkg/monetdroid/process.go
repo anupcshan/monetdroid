@@ -26,9 +26,18 @@ type ClaudeProcess struct {
 	writeMu sync.Mutex // serializes all writes to stdin
 
 	turnDone    chan struct{} // sent (not closed) when a result event arrives
-	dead        chan struct{} // closed when process exits
+	dead        chan struct{} // closed when process exits (by scan goroutine)
 	sessionIDCh chan string   // receives the ClaudeID from the first system event
 	ready       chan struct{} // closed when session is bound and broadcasting can begin
+
+	// killing is closed by Kill() to unblock goroutines waiting on ready.
+	// This is a workaround for a design flaw: ClaudeProcess holds a *Session
+	// and gates access to it via the ready channel. When Kill() is called
+	// before BindSession (e.g. library consumers that never bind a session),
+	// scan blocks on <-ready forever, which blocks <-dead, which blocks Kill().
+	// Closing killing breaks that deadlock. The right fix is to decouple
+	// ClaudeProcess from Session entirely — this is a stopgap.
+	killing chan struct{}
 
 	permHandler PermissionHandler // optional; short-circuits broadcast-and-wait when set
 }
@@ -110,6 +119,7 @@ func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg)
 		dead:        make(chan struct{}),
 		sessionIDCh: make(chan string, 1),
 		ready:       make(chan struct{}),
+		killing:     make(chan struct{}),
 		permHandler: permHandler,
 	}
 	if sess != nil {
@@ -193,8 +203,14 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLab
 				default:
 				}
 			}
-			// Wait for session to be bound before broadcasting
-			<-p.ready
+			// Wait for session to be bound before broadcasting.
+			// Also select on killing so Kill() can unblock us if the
+			// session is never bound (see killing field comment).
+			select {
+			case <-p.ready:
+			case <-p.killing:
+				continue
+			}
 			handleStreamEvent(p.sess, &event, broadcast)
 			if envelope.Type == "result" {
 				select {
@@ -221,7 +237,11 @@ func (p *ClaudeProcess) handleControlResponse(resp ctlRespPayload) {
 		select {
 		case ch <- resp:
 		case <-time.After(5 * time.Second):
-			log.Printf("[claude process][%s] response timeout for %s", p.sess.ID, resp.RequestID)
+			sessID := "<unbound>"
+			if p.sess != nil {
+				sessID = p.sess.ID
+			}
+			log.Printf("[claude process][%s] response timeout for %s", sessID, resp.RequestID)
 		}
 	}
 }
@@ -246,7 +266,11 @@ func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast f
 		return
 	}
 
-	<-p.ready // wait for session to be bound
+	select {
+	case <-p.ready:
+	case <-p.killing:
+		return
+	}
 	ch := p.sess.RegisterPermChan(req.RequestID)
 
 	broadcast(ServerMsg{
@@ -418,6 +442,7 @@ func (p *ClaudeProcess) IsDead() bool {
 
 // Kill terminates the process and waits for exit.
 func (p *ClaudeProcess) Kill() {
+	close(p.killing) // unblock goroutines waiting on ready (see field comment)
 	p.stdin.Close()
 	p.cmd.Process.Kill()
 	p.cmd.Wait()
