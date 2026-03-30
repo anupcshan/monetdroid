@@ -872,10 +872,11 @@ func (h *Hub) handlePullMain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cwd is required", http.StatusBadRequest)
 		return
 	}
+	repo := r.FormValue("repo")
 	// Return an SSE-connected output area that streams the pull.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="ws-cmd-output" class="ws-cmd-output" hx-ext="sse" sse-connect="/pull-main-stream?cwd=%s" sse-swap="line" hx-swap="beforeend"></div>`,
-		url.QueryEscape(cwd))
+	fmt.Fprintf(w, `<div id="ws-cmd-output-%s" class="ws-cmd-output" hx-ext="sse" sse-connect="/pull-main-stream?cwd=%s" sse-swap="line" hx-swap="beforeend"></div>`,
+		Esc(repo), url.QueryEscape(cwd))
 }
 
 func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
@@ -1059,10 +1060,14 @@ func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
+	repo := r.URL.Query().Get("repo")
 	t := NewGitTrace("mass-sync")
 	defer t.Log()
 	synced := 0
-	for _, panel := range AllWorkstreams(t) {
+	for name, panel := range AllWorkstreams(t) {
+		if repo != "" && name != repo {
+			continue
+		}
 		for _, ws := range panel.Workstreams {
 			// Only rebase workstreams that are behind main.
 			hasBehind := false
@@ -1089,8 +1094,7 @@ func (h *Hub) renderLanding() string {
 	t := NewGitTrace("landing")
 	defer t.Log()
 	var landingHTML string
-	for repoName, panel := range AllWorkstreams(t) {
-		_ = repoName // TODO: show repo name when multiple repos
+	for _, panel := range AllWorkstreams(t) {
 		landingHTML += RenderWorkstreamStatus(panel)
 	}
 	if sessHTML := RenderTrackedSessions(t, h.Tracker.List()); sessHTML != "" {
@@ -1103,18 +1107,29 @@ func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
 	t := NewGitTrace("refresh")
 	defer t.Log()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	var html string
-	for _, panel := range AllWorkstreams(t) {
-		html += RenderBranchList(panel)
+	repo := r.URL.Query().Get("repo")
+	panels := AllWorkstreams(t)
+	if panel, ok := panels[repo]; ok {
+		fmt.Fprint(w, RenderBranchList(panel))
+		return
 	}
-	fmt.Fprint(w, html)
+	for _, panel := range panels {
+		fmt.Fprint(w, RenderBranchList(panel))
+	}
 }
 
-func (h *Hub) renderPanel(w http.ResponseWriter) {
+// renderPanel re-renders the workstream panel for the repo that owns cwd.
+func (h *Hub) renderPanel(w http.ResponseWriter, cwd string) {
 	t := NewGitTrace("render-panel")
 	defer t.Log()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	for _, panel := range AllWorkstreams(t) {
+	repo := filepath.Base(filepath.Dir(cwd))
+	panels := AllWorkstreams(t)
+	if panel, ok := panels[repo]; ok {
+		fmt.Fprint(w, RenderWorkstreamStatus(panel))
+		return
+	}
+	for _, panel := range panels {
 		fmt.Fprint(w, RenderWorkstreamStatus(panel))
 	}
 }
@@ -1129,7 +1144,7 @@ func (h *Hub) handleArchiveWorkstream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.renderPanel(w)
+	h.renderPanel(w, cwd)
 }
 
 func (h *Hub) handleUnarchiveWorkstream(w http.ResponseWriter, r *http.Request) {
@@ -1142,15 +1157,16 @@ func (h *Hub) handleUnarchiveWorkstream(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.renderPanel(w)
+	h.renderPanel(w, cwd)
 }
 
 func (h *Hub) handlePrune(w http.ResponseWriter, r *http.Request) {
 	t := NewGitTrace("prune-plan")
 	defer t.Log()
+	repo := r.URL.Query().Get("repo")
 	plan := BuildPrunePlan(t)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, RenderPruneConfirmation(plan))
+	fmt.Fprint(w, RenderPruneConfirmation(plan, repo))
 }
 
 func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
@@ -1160,6 +1176,7 @@ func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no paths", http.StatusBadRequest)
 		return
 	}
+	repo := r.URL.Query().Get("repo")
 	t := NewGitTrace("prune")
 	defer t.Log()
 	pruneLog := ExecutePrune(t, paths)
@@ -1176,22 +1193,22 @@ func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	logHTML.WriteString(`<div class="ws-cmd-line ws-cmd-ok">done</div></div>`)
 
-	// Re-render the full panel with prune log in the output area.
+	// Re-render the panel for this repo with prune log in the output area.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	rendered := false
-	for _, panel := range AllWorkstreams(t) {
+	panels := AllWorkstreams(t)
+	if panel, ok := panels[repo]; ok {
 		html := RenderWorkstreamStatus(panel)
 		if html != "" {
-			html = strings.Replace(html, `<div id="ws-cmd-output" class="ws-cmd-output"></div>`,
-				`<div id="ws-cmd-output" class="ws-cmd-output">`+logHTML.String()+`</div>`, 1)
+			outputID := fmt.Sprintf(`<div id="ws-cmd-output-%s" class="ws-cmd-output"></div>`, Esc(repo))
+			outputWithLog := fmt.Sprintf(`<div id="ws-cmd-output-%s" class="ws-cmd-output">%s</div>`, Esc(repo), logHTML.String())
+			html = strings.Replace(html, outputID, outputWithLog, 1)
 			fmt.Fprint(w, html)
-			rendered = true
+			return
 		}
 	}
-	if !rendered {
-		// All workstreams pruned — render a minimal panel with just the log.
-		fmt.Fprintf(w, `<div id="ws-panel"><div class="queue-header">Workstreams</div><div id="ws-cmd-output" class="ws-cmd-output">%s</div></div>`, logHTML.String())
-	}
+	// Fallback: all workstreams pruned — render a minimal panel with just the log.
+	fmt.Fprintf(w, `<div id="ws-panel-%s"><div class="queue-header">%s</div><div id="ws-cmd-output-%s" class="ws-cmd-output">%s</div></div>`,
+		Esc(repo), Esc(repo), Esc(repo), logHTML.String())
 }
 
 // handleMessagesBefore renders older messages for pagination.

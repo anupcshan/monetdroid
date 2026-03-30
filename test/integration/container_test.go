@@ -828,6 +828,23 @@ func initGitRepo(t *testing.T, f *ContainerFixture, dir string) {
 	}
 }
 
+// initSecondRepo creates a second git repo at /work2 with one workstream,
+// so that multi-repo rendering is exercised by every workstream test.
+func initSecondRepo(t *testing.T, f *ContainerFixture) {
+	t.Helper()
+	initGitRepo(t, f, "/work2")
+	wsPath := "/root/.monetdroid/worktrees/work2/other-feature"
+	for _, args := range [][]string{
+		{"git", "-C", "/work2", "branch", "other-feature"},
+		{"git", "-C", "/work2", "worktree", "add", wsPath, "other-feature"},
+		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "other-feature"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("initSecondRepo %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
 func TestDrawerNewWorkstream(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "drawer.jsonl", testMode())
@@ -1098,6 +1115,7 @@ func TestRebaseWorkstream(t *testing.T) {
 
 	// Set up git repo with a main branch.
 	initGitRepo(t, f, containerWorkdir)
+	initSecondRepo(t, f)
 
 	// Create a workstream: branch + worktree.
 	wsPath := "/root/.monetdroid/worktrees/work/test-rebase"
@@ -1122,27 +1140,34 @@ func TestRebaseWorkstream(t *testing.T) {
 
 	// Navigate to landing page.
 	page := f.Page()
-	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	WaitForElement(t, page, "[id^=\"ws-panel-\"]", 5*time.Second)
+
+	// Verify both repo panels are rendered.
+	panels := page.MustElements("[id^=\"ws-panel-\"]")
+	if len(panels) != 2 {
+		Screenshot(t, page, "rebase_wrong_panel_count")
+		t.Fatalf("expected 2 repo panels, got %d", len(panels))
+	}
 	Screenshot(t, page, "rebase_before")
 
 	// Verify the branch shows ↓1.
-	WaitForText(t, page, ".ws-behind", "↓1", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-behind", "↓1", 5*time.Second)
 
 	// Verify rebase button is present and click it.
-	btn := WaitForElement(t, page, ".ws-rebase-btn", 5*time.Second)
+	btn := WaitForElement(t, page, "#ws-panel-work .ws-rebase-btn", 5*time.Second)
 	btn.MustClick()
 
 	// Wait for "done" in the output.
-	WaitForText(t, page, ".ws-cmd-ok", "done", 10*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-cmd-ok", "done", 10*time.Second)
 	Screenshot(t, page, "rebase_done")
 
 	// Click refresh to update the branch list.
-	page.MustElement(`button.btn-sm[hx-get*="refresh"]`).MustClick()
+	page.MustElement(`#ws-panel-work button.btn-sm[hx-get*="refresh"]`).MustClick()
 	time.Sleep(1 * time.Second)
 	Screenshot(t, page, "rebase_refreshed")
 
 	// Branch should now be in sync (no ↓ indicator).
-	nodes := page.MustElements(".ws-child")
+	nodes := page.MustElements("#ws-panel-work .ws-child")
 	for _, node := range nodes {
 		text := node.MustElement(".ws-branch-row").MustText()
 		if strings.Contains(text, "↓") {
@@ -1157,6 +1182,7 @@ func TestPullMain(t *testing.T) {
 
 	// Set up git repo with a remote.
 	initGitRepo(t, f, containerWorkdir)
+	initSecondRepo(t, f)
 
 	// Create a bare remote and push to it.
 	for _, args := range [][]string{
@@ -1196,20 +1222,20 @@ func TestPullMain(t *testing.T) {
 
 	// Navigate to landing page.
 	page := f.Page()
-	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	WaitForElement(t, page, "[id^=\"ws-panel-\"]", 5*time.Second)
 	Screenshot(t, page, "pull_before")
 
-	// Click "Pull main".
-	page.MustElement(`button.btn-sm[hx-get*="pull-main"]`).MustClick()
+	// Click "Pull main" in the work panel.
+	page.MustElement(`#ws-panel-work button.btn-sm[hx-get*="pull-main"]`).MustClick()
 
 	// Wait for the SSE output to show done.
-	WaitForText(t, page, ".ws-cmd-ok", "done", 15*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-cmd-ok", "done", 15*time.Second)
 	Screenshot(t, page, "pull_done")
 
 	// Verify main advanced — the workstream should now show ↓1.
-	page.MustElement(`button.btn-sm[hx-get*="refresh"]`).MustClick()
+	page.MustElement(`#ws-panel-work button.btn-sm[hx-get*="refresh"]`).MustClick()
 	time.Sleep(1 * time.Second)
-	WaitForText(t, page, ".ws-behind", "↓1", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-behind", "↓1", 5*time.Second)
 	Screenshot(t, page, "pull_branch_behind")
 }
 
@@ -1218,6 +1244,7 @@ func TestMassSync(t *testing.T) {
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
+	initSecondRepo(t, f)
 
 	// Create two workstreams.
 	wsOK := "/root/.monetdroid/worktrees/work/ws-ok"
@@ -1259,22 +1286,22 @@ func TestMassSync(t *testing.T) {
 
 	// Navigate to landing page.
 	page := f.Page()
-	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	WaitForElement(t, page, "[id^=\"ws-panel-\"]", 5*time.Second)
 	Screenshot(t, page, "mass_sync_before")
 
 	// Both workstreams should show ↓1.
-	behind := page.MustElements(".ws-behind")
+	behind := page.MustElements("#ws-panel-work .ws-behind")
 	if len(behind) < 2 {
 		t.Fatalf("expected at least 2 behind indicators, got %d", len(behind))
 	}
 
-	// Click "Sync all".
-	syncBtn := WaitForElement(t, page, `button.btn-sm[hx-post*="mass-sync"]`, 5*time.Second)
+	// Click "Sync all" in the work panel.
+	syncBtn := WaitForElement(t, page, `#ws-panel-work button.btn-sm[hx-post*="mass-sync"]`, 5*time.Second)
 	syncBtn.MustClick()
 
 	// Wait for both sections to complete — one "done", one "aborted".
-	WaitForText(t, page, ".ws-cmd-ok", "done", 10*time.Second)
-	WaitForText(t, page, ".ws-cmd-err", "aborted", 10*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-cmd-ok", "done", 10*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-cmd-err", "aborted", 10*time.Second)
 	Screenshot(t, page, "mass_sync_done")
 
 	// Verify the conflicting worktree is not mid-rebase.
@@ -1287,7 +1314,7 @@ func TestMassSync(t *testing.T) {
 	}
 
 	// Click refresh and verify the successful workstream is now in sync.
-	page.MustElement(`button.btn-sm[hx-get*="refresh"]`).MustClick()
+	page.MustElement(`#ws-panel-work button.btn-sm[hx-get*="refresh"]`).MustClick()
 	time.Sleep(1 * time.Second)
 	Screenshot(t, page, "mass_sync_refreshed")
 }
@@ -1298,6 +1325,7 @@ func TestArchiveWorkstream(t *testing.T) {
 
 	// Set up git repo with a workstream.
 	initGitRepo(t, f, containerWorkdir)
+	initSecondRepo(t, f)
 	wsPath := "/root/.monetdroid/worktrees/work/test-archive"
 	for _, args := range [][]string{
 		{"git", "-C", containerWorkdir, "branch", "test-archive"},
@@ -1311,21 +1339,21 @@ func TestArchiveWorkstream(t *testing.T) {
 
 	// Navigate to landing page.
 	page := f.Page()
-	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	WaitForElement(t, page, "[id^=\"ws-panel-\"]", 5*time.Second)
 
 	// Verify the workstream is in the active branch list.
-	WaitForText(t, page, ".ws-child .ws-branch-name", "test-archive", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-child .ws-branch-name", "test-archive", 5*time.Second)
 	Screenshot(t, page, "archive_before")
 
-	// Click archive button.
-	page.MustElement(`.ws-archive-btn`).MustClick()
+	// Click archive button in the work panel.
+	page.MustElement(`#ws-panel-work .ws-archive-btn`).MustClick()
 
 	// Verify it appears in the archived section.
-	WaitForText(t, page, ".ws-archived-list .ws-branch-name", "test-archive", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-archived-list .ws-branch-name", "test-archive", 5*time.Second)
 	Screenshot(t, page, "archive_after")
 
 	// Verify the workstream is no longer in the active list.
-	activeRows := page.MustElements(".ws-child .ws-branch-name")
+	activeRows := page.MustElements("#ws-panel-work .ws-child .ws-branch-name")
 	for _, row := range activeRows {
 		if row.MustText() == "test-archive" {
 			t.Fatal("workstream should not be in active list after archiving")
@@ -1333,14 +1361,14 @@ func TestArchiveWorkstream(t *testing.T) {
 	}
 
 	// Click unarchive.
-	page.MustElement(`.ws-archived-list .ws-archive-btn`).MustClick()
+	page.MustElement(`#ws-panel-work .ws-archived-list .ws-archive-btn`).MustClick()
 
 	// Verify the workstream is back in the active list.
-	WaitForText(t, page, ".ws-child .ws-branch-name", "test-archive", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-child .ws-branch-name", "test-archive", 5*time.Second)
 	Screenshot(t, page, "unarchive_after")
 
-	// Verify the archived section is gone (no archived header visible).
-	archivedHeaders := page.MustElements(".ws-archived-header")
+	// Verify the archived section is gone in the work panel.
+	archivedHeaders := page.MustElements("#ws-panel-work .ws-archived-header")
 	if len(archivedHeaders) > 0 {
 		t.Fatal("archived section should be gone after unarchiving all")
 	}
@@ -1352,6 +1380,7 @@ func TestPruneWorkstream(t *testing.T) {
 
 	// Set up git repo with a workstream.
 	initGitRepo(t, f, containerWorkdir)
+	initSecondRepo(t, f)
 	wsPath := "/root/.monetdroid/worktrees/work/test-prune"
 	for _, args := range [][]string{
 		{"git", "-C", containerWorkdir, "branch", "test-prune"},
@@ -1365,28 +1394,28 @@ func TestPruneWorkstream(t *testing.T) {
 
 	// Navigate to landing page, verify workstream visible.
 	page := f.Page()
-	WaitForElement(t, page, "#ws-panel", 5*time.Second)
-	WaitForText(t, page, ".ws-child .ws-branch-name", "test-prune", 5*time.Second)
+	WaitForElement(t, page, "[id^=\"ws-panel-\"]", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-child .ws-branch-name", "test-prune", 5*time.Second)
 
 	// Archive the workstream.
-	page.MustElement(`.ws-archive-btn`).MustClick()
-	WaitForText(t, page, ".ws-archived-list .ws-branch-name", "test-prune", 5*time.Second)
+	page.MustElement(`#ws-panel-work .ws-archive-btn`).MustClick()
+	WaitForText(t, page, "#ws-panel-work .ws-archived-list .ws-branch-name", "test-prune", 5*time.Second)
 	Screenshot(t, page, "prune_archived")
 
 	// Click Prune button — should show confirmation.
-	btn := WaitForElement(t, page, `button.btn-sm[hx-get="/prune"]`, 5*time.Second)
+	btn := WaitForElement(t, page, `#ws-panel-work button.btn-sm[hx-get^="/prune"]`, 5*time.Second)
 	btn.MustClick()
 	WaitForElement(t, page, ".ws-prune-confirm", 5*time.Second)
 	Screenshot(t, page, "prune_confirm")
 
 	// Verify the confirmation shows test-prune as safe to delete (0 ahead).
-	WaitForText(t, page, ".ws-prune-safe", "delete", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-prune-safe", "delete", 5*time.Second)
 
 	// Click Confirm prune.
-	page.MustElement(`.ws-prune-btn`).MustClick()
+	page.MustElement(`#ws-panel-work .ws-prune-btn`).MustClick()
 
 	// Wait for prune output.
-	WaitForText(t, page, ".ws-cmd-ok", "done", 10*time.Second)
+	WaitForText(t, page, "#ws-panel-work .ws-cmd-ok", "done", 10*time.Second)
 	Screenshot(t, page, "prune_done")
 
 	// Verify the worktree directory is gone.
@@ -1405,13 +1434,13 @@ func TestPruneWorkstream(t *testing.T) {
 	}
 
 	// Verify the workstream is no longer in the branch list.
-	activeRows := page.MustElements(".ws-child .ws-branch-name")
+	activeRows := page.MustElements("#ws-panel-work .ws-child .ws-branch-name")
 	for _, row := range activeRows {
 		if row.MustText() == "test-prune" {
 			t.Fatal("workstream should not be in branch list after pruning")
 		}
 	}
-	archivedRows := page.MustElements(".ws-archived-list .ws-branch-name")
+	archivedRows := page.MustElements("#ws-panel-work .ws-archived-list .ws-branch-name")
 	for _, row := range archivedRows {
 		if row.MustText() == "test-prune" {
 			t.Fatal("workstream should not be in archived list after pruning")
@@ -1424,6 +1453,7 @@ func TestBranchTree(t *testing.T) {
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
+	initSecondRepo(t, f)
 
 	// Create the workstream worktree on "feat" branch.
 	wsPath := "/root/.monetdroid/worktrees/work/feat"
@@ -1492,11 +1522,11 @@ func TestBranchTree(t *testing.T) {
 
 	// Navigate to landing page.
 	page := f.Page()
-	WaitForElement(t, page, "#ws-panel", 5*time.Second)
+	WaitForElement(t, page, "[id^=\"ws-panel-\"]", 5*time.Second)
 	Screenshot(t, page, "tree_before")
 
-	// Verify all 5 tree nodes appear (feat + 4 children).
-	nodes := page.MustElements(".ws-child")
+	// Verify all 5 tree nodes appear in the work panel (feat + 4 children).
+	nodes := page.MustElements("#ws-panel-work .ws-child")
 	if len(nodes) != 5 {
 		var names []string
 		for _, n := range nodes {
@@ -1532,7 +1562,7 @@ func TestBranchTree(t *testing.T) {
 
 	// Verify nesting: feat-api and feat-ui should be inside a children
 	// container under feat (their parent nodes are nested, not flat).
-	nestedChildren := page.MustElements(".ws-child .ws-tree-children .ws-child")
+	nestedChildren := page.MustElements("#ws-panel-work .ws-child .ws-tree-children .ws-child")
 	if len(nestedChildren) < 4 {
 		Screenshot(t, page, "tree_not_nested")
 		t.Fatalf("expected at least 4 nested child nodes, got %d", len(nestedChildren))

@@ -237,6 +237,7 @@ type WorkstreamStatus struct {
 
 // BranchPanel holds everything needed to render the branch list for a repo.
 type BranchPanel struct {
+	RepoName      string             // short repo directory name (used as HTML ID slug)
 	DefaultBranch string             // e.g. "main" or "master"
 	MainDirty     bool               // uncommitted changes in main worktree
 	RepoPath      string             // main worktree path (for actions)
@@ -554,6 +555,7 @@ func AllWorkstreams(t *GitTrace) map[string]BranchPanel {
 			}
 		}
 		result[repo.Name()] = BranchPanel{
+			RepoName:      repo.Name(),
 			DefaultBranch: defaultBranch,
 			MainDirty:     mainDirty,
 			RepoPath:      repoPath,

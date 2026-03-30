@@ -810,15 +810,18 @@ func RenderWorkstreamStatus(panel BranchPanel) string {
 	if len(panel.Workstreams) == 0 {
 		return ""
 	}
+	repo := panel.RepoName
 	var b strings.Builder
-	b.WriteString(`<div id="ws-panel">`)
-	b.WriteString(`<div class="queue-header">Workstreams</div>`)
+	fmt.Fprintf(&b, `<div id="ws-panel-%s">`, Esc(repo))
+	fmt.Fprintf(&b, `<div class="queue-header">%s</div>`, Esc(repo))
 	// Action buttons.
 	b.WriteString(`<div class="ws-actions">`)
-	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s" hx-target="#ws-cmd-output" hx-swap="outerHTML">Pull main</button>`,
-		url.QueryEscape(panel.RepoPath))
-	b.WriteString(`<button class="btn-sm" hx-post="/mass-sync" hx-target="#ws-cmd-output" hx-swap="beforeend">Sync all</button>`)
-	b.WriteString(`<button class="btn-sm" hx-get="/refresh-branches" hx-target="#ws-branch-list" hx-swap="outerHTML">Refresh</button>`)
+	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/pull-main?cwd=%s&repo=%s" hx-target="#ws-cmd-output-%s" hx-swap="outerHTML">Pull main</button>`,
+		url.QueryEscape(panel.RepoPath), url.QueryEscape(repo), Esc(repo))
+	fmt.Fprintf(&b, `<button class="btn-sm" hx-post="/mass-sync?repo=%s" hx-target="#ws-cmd-output-%s" hx-swap="beforeend">Sync all</button>`,
+		url.QueryEscape(repo), Esc(repo))
+	fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/refresh-branches?repo=%s" hx-target="#ws-branch-list-%s" hx-swap="outerHTML">Refresh</button>`,
+		url.QueryEscape(repo), Esc(repo))
 	hasArchived := false
 	for _, ws := range panel.Workstreams {
 		if ws.Archived {
@@ -827,17 +830,19 @@ func RenderWorkstreamStatus(panel BranchPanel) string {
 		}
 	}
 	if hasArchived {
-		b.WriteString(`<button class="btn-sm" hx-get="/prune" hx-target="#ws-cmd-output" hx-swap="innerHTML">Prune</button>`)
+		fmt.Fprintf(&b, `<button class="btn-sm" hx-get="/prune?repo=%s" hx-target="#ws-cmd-output-%s" hx-swap="innerHTML">Prune</button>`,
+			url.QueryEscape(repo), Esc(repo))
 	}
 	b.WriteString(`</div>`)
 	b.WriteString(RenderBranchList(panel))
-	b.WriteString(`<div id="ws-cmd-output" class="ws-cmd-output"></div>`)
-	b.WriteString(`</div>`) // close #ws-panel
+	fmt.Fprintf(&b, `<div id="ws-cmd-output-%s" class="ws-cmd-output"></div>`, Esc(repo))
+	b.WriteString(`</div>`) // close #ws-panel-{repo}
 	return b.String()
 }
 
 // RenderBranchList renders the branch list with tree drawing.
 func RenderBranchList(panel BranchPanel) string {
+	repo := panel.RepoName
 	// Split active and archived.
 	var active, archived []WorkstreamStatus
 	for _, ws := range panel.Workstreams {
@@ -849,7 +854,7 @@ func RenderBranchList(panel BranchPanel) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(`<div id="ws-branch-list">`)
+	fmt.Fprintf(&b, `<div id="ws-branch-list-%s">`, Esc(repo))
 	b.WriteString(`<div class="ws-branch-list">`)
 	// Main branch row.
 	b.WriteString(`<div class="ws-branch-row ws-color-main">`)
@@ -866,7 +871,7 @@ func RenderBranchList(panel BranchPanel) string {
 		if i%2 == 1 {
 			colorClass = "ws-color-b"
 		}
-		renderBranchTree(&b, ws.Branches, colorClass, isLastWs, ws.Path)
+		renderBranchTree(&b, ws.Branches, colorClass, isLastWs, ws.Path, repo)
 	}
 	b.WriteString(`</div>`) // close .ws-branch-list
 	// Archived workstreams.
@@ -876,13 +881,13 @@ func RenderBranchList(panel BranchPanel) string {
 		for _, ws := range archived {
 			b.WriteString(`<div class="ws-branch-row ws-color-archived">`)
 			fmt.Fprintf(&b, `<span class="ws-branch-name">%s</span>`, Esc(ws.Name))
-			fmt.Fprintf(&b, `<button class="ws-archive-btn" hx-post="/unarchive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-panel" hx-swap="outerHTML">unarchive</button>`,
-				Esc(ws.Path))
+			fmt.Fprintf(&b, `<button class="ws-archive-btn" hx-post="/unarchive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-panel-%s" hx-swap="outerHTML">unarchive</button>`,
+				Esc(ws.Path), Esc(repo))
 			b.WriteString(`</div>`)
 		}
 		b.WriteString(`</div>`)
 	}
-	b.WriteString(`</div>`) // close #ws-branch-list
+	b.WriteString(`</div>`) // close #ws-branch-list-{repo}
 	return b.String()
 }
 
@@ -903,7 +908,7 @@ func renderBranchStatus(b *strings.Builder, br BranchStatus) {
 }
 
 // renderBranchTree renders a workstream's branches as a nested tree.
-func renderBranchTree(b *strings.Builder, branches []BranchStatus, colorClass string, isLastWs bool, wsPath string) {
+func renderBranchTree(b *strings.Builder, branches []BranchStatus, colorClass string, isLastWs bool, wsPath string, repo string) {
 	prevDepth := -1
 	for i, br := range branches {
 		depth := br.Depth
@@ -940,12 +945,12 @@ func renderBranchTree(b *strings.Builder, branches []BranchStatus, colorClass st
 		fmt.Fprintf(b, `<span class="ws-branch-name">%s</span>`, Esc(br.Name))
 		renderBranchStatus(b, br)
 		if br.BehindMain > 0 {
-			fmt.Fprintf(b, `<button class="ws-rebase-btn" hx-post="/rebase-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-cmd-output" hx-swap="beforeend">rebase</button>`,
-				Esc(wsPath))
+			fmt.Fprintf(b, `<button class="ws-rebase-btn" hx-post="/rebase-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-cmd-output-%s" hx-swap="beforeend">rebase</button>`,
+				Esc(wsPath), Esc(repo))
 		}
 		if depth == 0 {
-			fmt.Fprintf(b, `<button class="ws-archive-btn" hx-post="/archive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-panel" hx-swap="outerHTML">archive</button>`,
-				Esc(wsPath))
+			fmt.Fprintf(b, `<button class="ws-archive-btn" hx-post="/archive-workstream" hx-vals='{"cwd":"%s"}' hx-target="#ws-panel-%s" hx-swap="outerHTML">archive</button>`,
+				Esc(wsPath), Esc(repo))
 		}
 		b.WriteString(`</div>`) // close ws-branch-row
 
@@ -974,14 +979,15 @@ func isLastSibling(branches []BranchStatus, i int) bool {
 }
 
 // RenderPruneConfirmation renders the prune confirmation panel.
-func RenderPruneConfirmation(plan PrunePlan) string {
+func RenderPruneConfirmation(plan PrunePlan, repo string) string {
 	if len(plan.Workstreams) == 0 {
 		return `<div class="ws-cmd-section"><div class="ws-cmd-line ws-cmd-ok">nothing to prune</div></div>`
 	}
 	var b strings.Builder
 	b.WriteString(`<div id="ws-prune-confirm" class="ws-prune-confirm">`)
 	b.WriteString(`<div class="ws-prune-title">Prune archived workstreams</div>`)
-	b.WriteString(`<form hx-post="/prune-confirm" hx-target="#ws-panel" hx-swap="outerHTML">`)
+	fmt.Fprintf(&b, `<form hx-post="/prune-confirm?repo=%s" hx-target="#ws-panel-%s" hx-swap="outerHTML">`,
+		url.QueryEscape(repo), Esc(repo))
 	for _, ws := range plan.Workstreams {
 		fmt.Fprintf(&b, `<input type="hidden" name="path" value="%s">`, Esc(ws.Path))
 		fmt.Fprintf(&b, `<div class="ws-prune-ws">`)
