@@ -243,6 +243,30 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		parts = append(parts, OobSwap("agent-stats-"+msg.ToolUseID, "innerHTML", RenderAgentStatHTML(msg.AgentStat)))
 	}
 
+	// Start elapsed timer for Agent tool chips.
+	// agent_started is broadcast by handleStreamEvent when task_started arrives,
+	// which is after StartAgent creates the stop channel.
+	if msg.Type == "agent_started" && msg.ToolUseID != "" && s != nil {
+		toolUseID := msg.ToolUseID
+		go func() {
+			stopCh := s.GetAgentStop(toolUseID)
+			if stopCh == nil {
+				return
+			}
+			started := time.Now()
+			for {
+				select {
+				case <-stopCh:
+					return
+				case <-time.After(1 * time.Second):
+					secs := int(time.Since(started).Seconds())
+					h.BroadcastToSession(sessionID, FormatSSE("htmx",
+						OobSwap("elapsed-"+toolUseID, "innerHTML", fmt.Sprintf("%ds", secs))))
+				}
+			}
+		}()
+	}
+
 	thinkingHTML := `<div class="thinking-indicator" id="thinking"><span></span><span></span><span></span></div>`
 	emptyThinking := OobSwap("thinking", "outerHTML", `<div id="thinking"></div>`)
 

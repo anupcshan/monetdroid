@@ -383,8 +383,8 @@ func RenderMsg(msg ServerMsg) string {
 			return "" // rendered inline via OOB swap into tool chip
 		}
 		return RenderPermission(msg)
-	case "agent_progress":
-		return "" // handled via OOB swap in hub.go
+	case "agent_started", "agent_progress":
+		return "" // handled via OOB swap / timer in hub.go
 	case "compact_boundary":
 		return `<div class="compact-boundary"><span>context compacted</span></div>`
 	case "result":

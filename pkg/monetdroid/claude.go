@@ -28,6 +28,7 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 		case "task_started":
 			if event.TaskType == "local_agent" && event.ToolUseID != "" {
 				s.StartAgent(event.ToolUseID, event.Description)
+				broadcast(ServerMsg{Type: "agent_started", SessionID: s.ID, ToolUseID: event.ToolUseID})
 			}
 		case "task_progress":
 			if event.ToolUseID != "" {

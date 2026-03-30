@@ -38,12 +38,6 @@ func RenderAgentStatHTML(stat *AgentStat) string {
 	if stat.ToolUses > 0 {
 		parts = append(parts, fmt.Sprintf("%d tools", stat.ToolUses))
 	}
-	if stat.DurationMs > 0 {
-		secs := stat.DurationMs / 1000
-		if secs > 0 {
-			parts = append(parts, fmt.Sprintf("%ds", secs))
-		}
-	}
 	if len(parts) == 0 {
 		return ""
 	}
