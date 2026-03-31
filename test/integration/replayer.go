@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -135,6 +137,16 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	r.t.Logf("replayer: serving interaction %d for %s %s (%d bytes request body)",
 		idx, req.Method, req.URL.Path, len(body))
 
+	responseBody := interaction.Response.Body
+
+	// Plan mode: the CLI generates a random plan file name on each run.
+	// The recorded response references the old name (fragmented across SSE
+	// input_json_delta events). Detect the discrepancy and substitute.
+	if old, nw := detectPlanFileSub(interaction.Request.Body, string(body)); old != "" {
+		responseBody = substituteSSEDeltas(responseBody, old, nw)
+		r.t.Logf("replayer: substituted plan file %q -> %q", old, nw)
+	}
+
 	for k, v := range interaction.Response.Headers {
 		w.Header().Set(k, v)
 	}
@@ -142,10 +154,10 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 
 	// For SSE responses, flush to ensure the client receives the stream
 	if flusher, ok := w.(http.Flusher); ok {
-		w.Write([]byte(interaction.Response.Body))
+		w.Write([]byte(responseBody))
 		flusher.Flush()
 	} else {
-		w.Write([]byte(interaction.Response.Body))
+		w.Write([]byte(responseBody))
 	}
 }
 
@@ -291,6 +303,132 @@ var (
 		"metadata": true, // contains user_id and account IDs
 	}
 )
+
+// planFileRe matches the plan file path in the CLI's EnterPlanMode tool result.
+// The CLI generates text like:
+//
+//	"create your plan at /root/.claude/plans/adjective-noun-animal.md"
+//
+// FRAGILE: depends on the Claude CLI's tool result template. If a CLI version
+// bump changes this wording, update the regex and re-record affected cassettes.
+var planFileRe = regexp.MustCompile(`create your plan at ([^\s\\]+\.md)`)
+
+// detectPlanFileSub extracts the plan file path from the recorded and live
+// request bodies. Returns (old, new) if they differ, or ("", "") if no
+// substitution is needed.
+func detectPlanFileSub(recorded, live string) (old, nw string) {
+	rm := planFileRe.FindStringSubmatch(recorded)
+	lm := planFileRe.FindStringSubmatch(live)
+	if len(rm) < 2 || len(lm) < 2 {
+		return "", ""
+	}
+	if rm[1] == lm[1] {
+		return "", ""
+	}
+	return rm[1], lm[1]
+}
+
+// substituteSSEDeltas rewrites an SSE response body, replacing occurrences of
+// old with new in tool input JSON that arrives fragmented across
+// input_json_delta events.
+//
+// Approach: parse SSE events, accumulate partial_json values per content block,
+// do the substitution on the concatenated string, then put the full result in
+// the first delta and empty out the rest.
+func substituteSSEDeltas(body, old, nw string) string {
+	events := strings.Split(body, "\n\n")
+
+	// Track which events are input_json_delta for each content block index.
+	type deltaRef struct {
+		eventIdx int
+		partial  string
+	}
+	blockDeltas := map[int][]deltaRef{}
+
+	for ei, event := range events {
+		dataLine := sseDataLine(event)
+		if dataLine == "" {
+			continue
+		}
+		var parsed struct {
+			Index int `json:"index"`
+			Delta struct {
+				Type    string `json:"type"`
+				Partial string `json:"partial_json"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal([]byte(dataLine), &parsed) != nil {
+			continue
+		}
+		if parsed.Delta.Type == "input_json_delta" {
+			blockDeltas[parsed.Index] = append(blockDeltas[parsed.Index],
+				deltaRef{eventIdx: ei, partial: parsed.Delta.Partial})
+		}
+	}
+
+	for _, deltas := range blockDeltas {
+		var buf strings.Builder
+		for _, d := range deltas {
+			buf.WriteString(d.partial)
+		}
+		original := buf.String()
+		substituted := strings.ReplaceAll(original, old, nw)
+		if substituted == original {
+			continue
+		}
+		// Put the full substituted text in the first delta, empty the rest.
+		for i, d := range deltas {
+			p := ""
+			if i == 0 {
+				p = substituted
+			}
+			events[d.eventIdx] = sseReplacePartial(events[d.eventIdx], p)
+		}
+	}
+
+	return strings.Join(events, "\n\n")
+}
+
+// sseDataLine extracts the JSON string after "data: " from an SSE event.
+func sseDataLine(event string) string {
+	for _, line := range strings.Split(event, "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			return strings.TrimPrefix(line, "data: ")
+		}
+	}
+	return ""
+}
+
+// sseReplacePartial rebuilds an SSE event with a new partial_json value.
+func sseReplacePartial(event, newPartial string) string {
+	dataLine := sseDataLine(event)
+	if dataLine == "" {
+		return event
+	}
+	var parsed map[string]any
+	if json.Unmarshal([]byte(dataLine), &parsed) != nil {
+		return event
+	}
+	delta, ok := parsed["delta"].(map[string]any)
+	if !ok {
+		return event
+	}
+	delta["partial_json"] = newPartial
+	newData, err := json.Marshal(parsed)
+	if err != nil {
+		return event
+	}
+	// Rebuild: "event: ...\ndata: <new json>"
+	var lines []string
+	for _, line := range strings.Split(event, "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			lines = append(lines, "data: "+string(newData))
+		} else {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 // scrubRequestBody removes sensitive/bulky fields from the API request body
 // before saving to the cassette. The full body is still sent to the upstream

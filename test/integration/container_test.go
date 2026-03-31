@@ -1109,6 +1109,78 @@ func Add(a, b int) int {
 	Screenshot(t, page, "queue_edit_complete")
 }
 
+func TestPlanMode(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "plan_mode.jsonl", testMode())
+
+	// Create a file for Claude to plan around.
+	f.WriteFile(containerWorkdir+"/main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`)
+
+	page := f.Page()
+
+	// Create session.
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	// Send a prompt that triggers plan mode. Tell Claude not to implement
+	// so the turn ends cleanly after ExitPlanMode without further permissions.
+	page.MustElement(`textarea[name="text"]`).MustInput(
+		"I want to add a fibonacci function to main.go. Enter plan mode to plan this, then exit plan mode with your plan. Do not implement without explicit instruction.")
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForText(t, page, ".msg-user", "fibonacci", 30*time.Second)
+
+	// EnterPlanMode executes without permission. Wait for the ExitPlanMode
+	// permission prompt — the CLI sends a can_use_tool with the plan content.
+	WaitForElement(t, page, ".perm-inline", 120*time.Second)
+	// Scroll the Allow button into view so the screenshot captures the full prompt.
+	page.MustElement(`.perm-allow`).MustScrollIntoView()
+	Screenshot(t, page, "plan_mode_exit_permission")
+
+	// Verify the ExitPlanMode tool chip exists and is open (perm-inline auto-opens it).
+	_, err := page.Timeout(5*time.Second).ElementR(".tool-name", "ExitPlanMode")
+	if err != nil {
+		t.Fatalf("ExitPlanMode tool chip not found: %v", err)
+	}
+
+	// Allow the plan.
+	page.MustElement(`.perm-allow`).MustClick()
+
+	// Permission should be resolved.
+	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
+	Screenshot(t, page, "plan_mode_allowed")
+
+	// Wait for turn to complete.
+	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+	Screenshot(t, page, "plan_mode_complete")
+
+	// Dump the session log so we can inspect the raw ExitPlanMode wire format.
+	msgs := f.SessionLog()
+	for _, msg := range msgs {
+		if msg.Tool == "ExitPlanMode" || msg.Tool == "EnterPlanMode" {
+			raw, _ := json.Marshal(msg)
+			t.Logf("WIRE %s: %s", msg.Tool, string(raw))
+			if msg.Input != nil && msg.Input.Raw != nil {
+				t.Logf("WIRE %s input: %s", msg.Tool, string(msg.Input.Raw))
+			}
+		}
+		if msg.Type == "permission_request" && (msg.PermTool == "ExitPlanMode" || msg.PermTool == "EnterPlanMode") {
+			raw, _ := json.Marshal(msg)
+			t.Logf("WIRE perm %s: %s", msg.PermTool, string(raw))
+			if msg.PermInput != nil && msg.PermInput.Raw != nil {
+				t.Logf("WIRE perm %s input: %s", msg.PermTool, string(msg.PermInput.Raw))
+			}
+		}
+	}
+}
+
 func TestRebaseWorkstream(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "tool_use.jsonl", testMode())

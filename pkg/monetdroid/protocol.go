@@ -247,15 +247,16 @@ type ToolInput struct {
 	Raw json.RawMessage
 
 	// Typed variants — at most one is non-nil.
-	Bash  *BashInput
-	Read  *ReadInput
-	Write *WriteInput
-	Edit  *EditInput
-	Grep  *GrepInput
-	Glob  *GlobInput
-	Todo  *TodoInput
-	Ask   *AskInput
-	Agent *AgentInput
+	Bash     *BashInput
+	Read     *ReadInput
+	Write    *WriteInput
+	Edit     *EditInput
+	Grep     *GrepInput
+	Glob     *GlobInput
+	Todo     *TodoInput
+	Ask      *AskInput
+	Agent    *AgentInput
+	PlanMode *PlanModeInput
 }
 
 // MarshalJSON returns the preserved raw JSON so unknown fields survive round-trips.
@@ -301,6 +302,9 @@ func ParseToolInput(tool string, raw json.RawMessage) *ToolInput {
 	case "Agent":
 		t.Agent = &AgentInput{}
 		json.Unmarshal(raw, t.Agent)
+	case "ExitPlanMode":
+		t.PlanMode = &PlanModeInput{}
+		json.Unmarshal(raw, t.PlanMode)
 	}
 	return t
 }
@@ -369,6 +373,11 @@ type AgentInput struct {
 	Prompt       string `json:"prompt,omitempty"`
 	SubagentType string `json:"subagent_type,omitempty"`
 	Model        string `json:"model,omitempty"`
+}
+
+type PlanModeInput struct {
+	Plan         string `json:"plan,omitempty"`
+	PlanFilePath string `json:"planFilePath,omitempty"`
 }
 
 // --- Permission suggestion types ---

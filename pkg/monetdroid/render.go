@@ -93,6 +93,8 @@ func ToolChipSummary(tool string, input *ToolInput) string {
 			parts = append(parts, input.Agent.Description)
 		}
 		return strings.Join(parts, ": ")
+	case input.PlanMode != nil:
+		return "ExitPlanMode"
 	}
 	return tool
 }
@@ -134,6 +136,8 @@ func FormatToolInput(tool string, input *ToolInput) string {
 		if input.Glob.Pattern != "" {
 			return input.Glob.Pattern
 		}
+	case input.PlanMode != nil:
+		return input.PlanMode.Plan
 	}
 	// Fallback: pretty-print raw JSON (works for unknown tools)
 	if input.Raw != nil {

@@ -296,14 +296,23 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
 		if s != nil && s.IsTopLevelTool(msg.ToolUseID) {
 			parts = append(parts, OobSwap("perm-slot-"+msg.ToolUseID, "innerHTML", RenderInlinePermission(msg)))
-			// Upgrade the tool chip's detail with richer permission detail
-			if msg.PermTool == "Edit" || msg.PermTool == "FileEdit" {
+			// Upgrade the tool chip's detail with richer permission detail.
+			upgraded := false
+			switch msg.PermTool {
+			case "Edit", "FileEdit":
 				if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
 					if diffHTML := RenderEditDiffHTML(fp, old, new_); diffHTML != "" {
 						parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", diffHTML))
+						upgraded = true
 					}
 				}
-			} else {
+			case "ExitPlanMode":
+				if msg.PermInput != nil && msg.PermInput.PlanMode != nil && msg.PermInput.PlanMode.Plan != "" {
+					parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", RenderMarkdown(msg.PermInput.PlanMode.Plan)))
+					upgraded = true
+				}
+			}
+			if !upgraded {
 				permDetail := FormatPermDetail(msg.PermTool, msg.PermInput)
 				if permDetail != "" {
 					parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", Esc(permDetail)))
