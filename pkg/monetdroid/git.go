@@ -264,9 +264,13 @@ type PrunePlan struct {
 }
 
 // BuildPrunePlan scans archived workstreams and classifies branches.
-func BuildPrunePlan(t *GitTrace) PrunePlan {
+// If repo is non-empty, only workstreams from that repo are included.
+func BuildPrunePlan(t *GitTrace, repo string) PrunePlan {
 	var plan PrunePlan
-	for _, panel := range AllWorkstreams(t) {
+	for name, panel := range AllWorkstreams(t) {
+		if repo != "" && name != repo {
+			continue
+		}
 		for _, ws := range panel.Workstreams {
 			if !ws.Archived {
 				continue

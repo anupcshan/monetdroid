@@ -1454,6 +1454,7 @@ func TestPruneWorkstream(t *testing.T) {
 	initGitRepo(t, f, containerWorkdir)
 	initSecondRepo(t, f)
 	wsPath := "/root/.monetdroid/worktrees/work/test-prune"
+	work2WsPath := "/root/.monetdroid/worktrees/work2/other-feature"
 	for _, args := range [][]string{
 		{"git", "-C", containerWorkdir, "branch", "test-prune"},
 		{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-prune"},
@@ -1464,24 +1465,35 @@ func TestPruneWorkstream(t *testing.T) {
 		}
 	}
 
-	// Navigate to landing page, verify workstream visible.
+	// Navigate to landing page, verify both workstreams visible.
 	page := f.Page()
 	WaitForElement(t, page, "[id^=\"ws-panel-\"]", 5*time.Second)
 	WaitForText(t, page, "#ws-panel-work .ws-child .ws-branch-name", "test-prune", 5*time.Second)
+	WaitForText(t, page, "#ws-panel-work2 .ws-child .ws-branch-name", "other-feature", 5*time.Second)
 
-	// Archive the workstream.
+	// Archive both repos' workstreams via UI.
 	page.MustElement(`#ws-panel-work .ws-archive-btn`).MustClick()
 	WaitForText(t, page, "#ws-panel-work .ws-archived-list .ws-branch-name", "test-prune", 5*time.Second)
+	page.MustElement(`#ws-panel-work2 .ws-archive-btn`).MustClick()
+	WaitForText(t, page, "#ws-panel-work2 .ws-archived-list .ws-branch-name", "other-feature", 5*time.Second)
 	Screenshot(t, page, "prune_archived")
 
-	// Click Prune button — should show confirmation.
+	// Click Prune button on the work panel — should only show work repo's workstreams.
 	btn := WaitForElement(t, page, `#ws-panel-work button.btn-sm[hx-get^="/prune"]`, 5*time.Second)
 	btn.MustClick()
-	WaitForElement(t, page, ".ws-prune-confirm", 5*time.Second)
+	WaitForElement(t, page, "#ws-panel-work .ws-prune-confirm", 5*time.Second)
 	Screenshot(t, page, "prune_confirm")
 
 	// Verify the confirmation shows test-prune as safe to delete (0 ahead).
 	WaitForText(t, page, "#ws-panel-work .ws-prune-safe", "delete", 5*time.Second)
+
+	// Verify the confirmation does NOT include the second repo's workstream.
+	pruneNames := page.MustElements("#ws-panel-work .ws-prune-ws-name")
+	for _, el := range pruneNames {
+		if el.MustText() == "other-feature" {
+			t.Fatal("prune confirmation should not include workstreams from other repos")
+		}
+	}
 
 	// Click Confirm prune.
 	page.MustElement(`#ws-panel-work .ws-prune-btn`).MustClick()
@@ -1490,13 +1502,13 @@ func TestPruneWorkstream(t *testing.T) {
 	WaitForText(t, page, "#ws-panel-work .ws-cmd-ok", "done", 10*time.Second)
 	Screenshot(t, page, "prune_done")
 
-	// Verify the worktree directory is gone.
+	// Verify the work repo's worktree directory is gone.
 	out, err := f.DockerExec("test", "-d", wsPath)
 	if err == nil {
 		t.Fatalf("worktree directory should be deleted, but still exists: %s", out)
 	}
 
-	// Verify the branch is deleted.
+	// Verify the work repo's branch is deleted.
 	out, err = f.DockerExec("git", "-C", containerWorkdir, "branch", "--list", "test-prune")
 	if err != nil {
 		t.Fatalf("git branch --list: %v\n%s", err, out)
@@ -1505,7 +1517,7 @@ func TestPruneWorkstream(t *testing.T) {
 		t.Fatalf("branch test-prune should be deleted, but still exists: %s", out)
 	}
 
-	// Verify the workstream is no longer in the branch list.
+	// Verify the workstream is no longer in the work panel.
 	activeRows := page.MustElements("#ws-panel-work .ws-child .ws-branch-name")
 	for _, row := range activeRows {
 		if row.MustText() == "test-prune" {
@@ -1518,6 +1530,12 @@ func TestPruneWorkstream(t *testing.T) {
 			t.Fatal("workstream should not be in archived list after pruning")
 		}
 	}
+
+	// Verify the second repo's workstream was NOT pruned.
+	if _, err = f.DockerExec("test", "-d", work2WsPath); err != nil {
+		t.Fatalf("work2 worktree should still exist after pruning work repo, but it's gone")
+	}
+	WaitForText(t, page, "#ws-panel-work2 .ws-archived-list .ws-branch-name", "other-feature", 5*time.Second)
 }
 
 func TestBranchTree(t *testing.T) {

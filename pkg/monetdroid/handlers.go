@@ -1164,7 +1164,7 @@ func (h *Hub) handlePrune(w http.ResponseWriter, r *http.Request) {
 	t := NewGitTrace("prune-plan")
 	defer t.Log()
 	repo := r.URL.Query().Get("repo")
-	plan := BuildPrunePlan(t)
+	plan := BuildPrunePlan(t, repo)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, RenderPruneConfirmation(plan, repo))
 }
