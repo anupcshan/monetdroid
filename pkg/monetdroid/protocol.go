@@ -119,6 +119,29 @@ type permDenyResponse struct {
 	Message  string `json:"message"`
 }
 
+// --- Raw streaming events (--include-partial-messages) ---
+
+// rawStreamEvent wraps an inner Anthropic SSE event forwarded by the CLI.
+// The outer envelope has type "stream_event"; the inner event carries deltas.
+type rawStreamEvent struct {
+	Type            string  `json:"type"` // "stream_event"
+	SessionID       string  `json:"session_id,omitempty"`
+	ParentToolUseID *string `json:"parent_tool_use_id"`
+	Event           struct {
+		Type         string `json:"type"` // "content_block_start", "content_block_delta", "content_block_stop", ...
+		Index        int    `json:"index"`
+		ContentBlock struct {
+			Type string `json:"type"` // "text", "thinking", "tool_use"
+		} `json:"content_block"`
+		Delta struct {
+			Type        string `json:"type"` // "text_delta", "thinking_delta", "input_json_delta"
+			Text        string `json:"text"`
+			Thinking    string `json:"thinking"`
+			PartialJSON string `json:"partial_json"`
+		} `json:"delta"`
+	} `json:"event"`
+}
+
 // --- Stream events (CLI stdout, non-control) ---
 
 // streamEvent is the top-level envelope for all non-control events.

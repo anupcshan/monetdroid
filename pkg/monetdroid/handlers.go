@@ -257,7 +257,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			chromeParts = append(chromeParts, OobSwap("session-label-value", "outerHTML",
 				fmt.Sprintf(`<input type="hidden" name="label" id="session-label-value" value="%s">`, Esc(label))))
 			chromeParts = append(chromeParts, CwdCopyButton(cwd))
-			chromeParts = append(chromeParts, OobSwap("messages", "innerHTML", ""))
+			chromeParts = append(chromeParts, OobSwap("msg-content", "innerHTML", ""))
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
 		} else {

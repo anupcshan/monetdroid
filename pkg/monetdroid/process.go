@@ -65,6 +65,7 @@ func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg)
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
+		"--include-partial-messages",
 		"--permission-prompt-tool", "stdio",
 		"--permission-mode", "default",
 	)
@@ -189,6 +190,25 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLab
 				continue
 			}
 			go p.handleControlRequest(req, broadcast)
+
+		case "stream_event":
+			var raw rawStreamEvent
+			if err := json.Unmarshal(line, &raw); err != nil {
+				log.Printf("[parse error][%s] stream_event: %s", logLabel, err)
+				continue
+			}
+			if raw.SessionID != "" {
+				select {
+				case p.sessionIDCh <- raw.SessionID:
+				default:
+				}
+			}
+			select {
+			case <-p.ready:
+			case <-p.killing:
+				continue
+			}
+			handleRawStreamEvent(p.sess, &raw, broadcast)
 
 		default:
 			var event streamEvent

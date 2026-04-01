@@ -50,6 +50,9 @@
            hx-on:scroll="if(this.scrollTop===0){window._ab=true}else{var ab=this.scrollHeight-this.scrollTop-this.clientHeight<200;window._ab=ab;document.getElementById('scroll-btn').style.display=ab?'none':'flex'}"
            hx-on:htmx:before-swap="if(event.detail.target.id==='load-older'){this._sh=this.scrollHeight}"
            hx-on:htmx:after-swap="if(this._sh){this.scrollTop+=this.scrollHeight-this._sh;delete this._sh}">
+        <div id="msg-content"></div>
+        <div id="thinking"></div>
+        <div id="streaming"></div>
       </div>
       <button id="scroll-btn" class="scroll-btn" onclick="var m=document.getElementById('messages');m.scrollTop=m.scrollHeight;this.style.display='none';window._ab=true">↓</button>
     </div>

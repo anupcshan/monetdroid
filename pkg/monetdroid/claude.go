@@ -18,6 +18,31 @@ func parentID(event *streamEvent) string {
 	return ""
 }
 
+// handleRawStreamEvent processes raw streaming deltas (--include-partial-messages)
+// and broadcasts text/thinking deltas for live display. Sub-agent deltas are ignored
+// (their content is buffered by the final assistant event).
+func handleRawStreamEvent(s *Session, raw *rawStreamEvent, broadcast func(ServerMsg)) {
+	// Skip sub-agent streaming — too noisy, and the buffered view handles it.
+	if raw.ParentToolUseID != nil {
+		return
+	}
+
+	inner := raw.Event
+	if inner.Type != "content_block_delta" {
+		return
+	}
+	switch inner.Delta.Type {
+	case "text_delta":
+		if inner.Delta.Text != "" {
+			broadcast(ServerMsg{Type: "text_delta", SessionID: s.ID, Text: inner.Delta.Text})
+		}
+	case "thinking_delta":
+		if inner.Delta.Thinking != "" {
+			broadcast(ServerMsg{Type: "thinking_delta", SessionID: s.ID, Text: inner.Delta.Thinking})
+		}
+	}
+}
+
 // handleStreamEvent processes non-control messages from the CLI and broadcasts them.
 func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)) {
 	pid := parentID(event)

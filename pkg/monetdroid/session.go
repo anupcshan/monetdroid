@@ -32,6 +32,8 @@ type Session struct {
 	AgentEvents       map[string][]ServerMsg   // buffered sub-agent events per parent Agent tool_use ID
 	AgentStats        map[string]*AgentStat    // live stats per Agent tool_use ID
 	AgentStops        map[string]chan struct{} // stop channels for agent detail streams
+	StreamingText     string                   // accumulated text from text_delta events
+	StreamingThinking string                   // accumulated text from thinking_delta events
 	proc              *ClaudeProcess
 	mu                sync.Mutex
 }
@@ -197,6 +199,32 @@ func (s *Session) SetRunning(v bool) {
 func (s *Session) SetProc(proc *ClaudeProcess) {
 	s.mu.Lock()
 	s.proc = proc
+	s.mu.Unlock()
+}
+
+// AppendStreamingText appends a text delta and returns the accumulated text.
+func (s *Session) AppendStreamingText(delta string) string {
+	s.mu.Lock()
+	s.StreamingText += delta
+	result := s.StreamingText
+	s.mu.Unlock()
+	return result
+}
+
+// AppendStreamingThinking appends a thinking delta and returns the accumulated text.
+func (s *Session) AppendStreamingThinking(delta string) string {
+	s.mu.Lock()
+	s.StreamingThinking += delta
+	result := s.StreamingThinking
+	s.mu.Unlock()
+	return result
+}
+
+// ClearStreaming resets the streaming accumulators.
+func (s *Session) ClearStreaming() {
+	s.mu.Lock()
+	s.StreamingText = ""
+	s.StreamingThinking = ""
 	s.mu.Unlock()
 }
 

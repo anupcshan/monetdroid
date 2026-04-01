@@ -267,10 +267,40 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}()
 	}
 
-	thinkingHTML := `<div class="thinking-indicator" id="thinking"><span></span><span></span><span></span></div>`
-	emptyThinking := OobSwap("thinking", "outerHTML", `<div id="thinking"></div>`)
+	thinkingDots := `<span></span><span></span><span></span>`
+	clearThinking := OobSwap("thinking", "innerHTML", "")
+	clearStreaming := OobSwap("streaming", "innerHTML", "")
 
 	stopBtnHTML := `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`
+
+	// --- Streaming deltas (text_delta, thinking_delta) ---
+	if msg.Type == "text_delta" && s != nil {
+		accumulated := s.AppendStreamingText(msg.Text)
+		parts = append(parts, clearThinking)
+		parts = append(parts, OobSwap("streaming", "innerHTML",
+			fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble streaming-text">%s</div></div>`, Esc(accumulated))))
+		event := FormatSSE("htmx", strings.Join(parts, "\n"))
+		h.BroadcastToSession(sessionID, event)
+		return
+	}
+	if msg.Type == "thinking_delta" && s != nil {
+		accumulated := s.AppendStreamingThinking(msg.Text)
+		parts = append(parts, clearThinking)
+		preview := accumulated
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		parts = append(parts, OobSwap("streaming", "innerHTML",
+			fmt.Sprintf(`<div class="msg msg-thinking"><details class="thinking-chip" open><summary class="thinking-summary">%s</summary><div class="thinking-detail">%s</div></details></div>`, Esc(preview), Esc(accumulated))))
+		event := FormatSSE("htmx", strings.Join(parts, "\n"))
+		h.BroadcastToSession(sessionID, event)
+		return
+	}
+
+	// When a final text/thinking message arrives, clear the streaming accumulator
+	if (msg.Type == "text" || msg.Type == "thinking") && s != nil {
+		s.ClearStreaming()
+	}
 
 	// Push to notification clients (Android app)
 	if msg.Type == "permission_request" && s != nil {
@@ -345,6 +375,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 
 	if msg.Type == "running" {
 		if s != nil {
+			s.ClearStreaming()
 			info := s.GetTrackerInfo()
 			h.Tracker.Track(TrackedSession{
 				ClaudeID:  s.ID,
@@ -357,12 +388,13 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
 		parts = append(parts, OobSwap("stop-btn", "outerHTML", stopBtnHTML))
-		parts = append(parts, OobSwap("messages", "beforeend", thinkingHTML))
+		parts = append(parts, OobSwap("thinking", "innerHTML", thinkingDots))
 	}
 	if msg.Type == "done" {
 		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
 		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
-		parts = append(parts, emptyThinking)
+		parts = append(parts, clearThinking)
+		parts = append(parts, clearStreaming)
 		// Refresh git diff stat
 		if s != nil {
 			cwd := s.GetCwd()
@@ -415,10 +447,11 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 
 	if msgHTML != "" {
-		parts = append(parts, OobSwap("messages", "beforeend", msgHTML))
-		parts = append(parts, OobSwap("thinking", "outerHTML", ""))
+		parts = append(parts, clearStreaming)
+		parts = append(parts, OobSwap("msg-content", "beforeend", msgHTML))
+		parts = append(parts, clearThinking)
 		if msg.Type == "tool_use" || msg.Type == "tool_result" {
-			parts = append(parts, OobSwap("messages", "beforeend", thinkingHTML))
+			parts = append(parts, OobSwap("thinking", "innerHTML", thinkingDots))
 		}
 	}
 
@@ -462,7 +495,10 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 	// Ensure process is alive
 	if proc == nil || proc.IsDead() {
 		logBroadcast := func(msg ServerMsg) {
-			s.Append(msg)
+			// Streaming deltas are ephemeral — don't persist in the session log.
+			if msg.Type != "text_delta" && msg.Type != "thinking_delta" {
+				s.Append(msg)
+			}
 			h.Broadcast(msg)
 		}
 		var err error
@@ -679,6 +715,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
 		chromeParts = append(chromeParts, OobSwap("stop-btn", "outerHTML",
 			`<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`))
+		chromeParts = append(chromeParts, OobSwap("thinking", "innerHTML", `<span></span><span></span><span></span>`))
 	} else {
 		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
 		chromeParts = append(chromeParts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
@@ -728,7 +765,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 	}
 	msgsHTML.WriteString(renderMessages(snap.Log, start, len(snap.Log), rc, s.ID))
 
-	s.EventLog.Append(FormatSSE("htmx", OobSwap("messages", "innerHTML", msgsHTML.String())))
+	s.EventLog.Append(FormatSSE("htmx", OobSwap("msg-content", "innerHTML", msgsHTML.String())))
 }
 
 // BuildReplay writes all stored SSE events for the session directly to w
