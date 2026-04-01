@@ -4,6 +4,9 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/anupcshan/monetdroid/pkg/claude"
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
 type Session struct {
@@ -20,13 +23,13 @@ type Session struct {
 	Log               []ServerMsg
 	QueuedText        string
 	CostAccum         CostInfo
-	Todos             []Todo
+	Todos             []protocol.Todo
 	SuppressedToolIDs map[string]string        // tool_use id → tool name, for suppressing results
 	BgTaskStops       map[string]chan struct{} // tool_use id → stop channel for bg tailers
 	BgTaskPaths       map[string]string        // tool_use id → output file path
 	DiffStat          DiffStat
 	EventLog          EventLog
-	PermChans         map[string]chan PermResponse
+	PermChans         map[string]chan protocol.PermResponse
 	AgentDepth        int                      // nesting depth of active sub-agents
 	AgentToolIDs      map[string]bool          // active Agent tool_use IDs
 	AgentEvents       map[string][]ServerMsg   // buffered sub-agent events per parent Agent tool_use ID
@@ -34,7 +37,7 @@ type Session struct {
 	AgentStops        map[string]chan struct{} // stop channels for agent detail streams
 	StreamingText     string                   // accumulated text from text_delta events
 	StreamingThinking string                   // accumulated text from thinking_delta events
-	proc              *ClaudeProcess
+	proc              *claude.ClaudeProcess
 	mu                sync.Mutex
 }
 
@@ -117,15 +120,15 @@ func (s *Session) Stats() (msgCount, ctxUsed, ctxWindow int) {
 	return len(s.Log), s.CostAccum.ContextUsed, s.CostAccum.ContextWindow
 }
 
-func (s *Session) GetTodosCopy() []Todo {
+func (s *Session) GetTodosCopy() []protocol.Todo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Todo, len(s.Todos))
+	out := make([]protocol.Todo, len(s.Todos))
 	copy(out, s.Todos)
 	return out
 }
 
-func (s *Session) GetPermChan(id string) (chan PermResponse, bool) {
+func (s *Session) GetPermChan(id string) (chan protocol.PermResponse, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ch, ok := s.PermChans[id]
@@ -138,7 +141,7 @@ func (s *Session) HasPendingPerms() bool {
 	return len(s.PermChans) > 0
 }
 
-func (s *Session) GetProc() *ClaudeProcess {
+func (s *Session) GetProc() *claude.ClaudeProcess {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.proc
@@ -177,7 +180,7 @@ func (s *Session) FindPermToolUseID(permID string) string {
 	return ""
 }
 
-func (s *Session) FindPermInput(permID string) *ToolInput {
+func (s *Session) FindPermInput(permID string) *protocol.ToolInput {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, m := range s.Log {
@@ -196,7 +199,7 @@ func (s *Session) SetRunning(v bool) {
 	s.mu.Unlock()
 }
 
-func (s *Session) SetProc(proc *ClaudeProcess) {
+func (s *Session) SetProc(proc *claude.ClaudeProcess) {
 	s.mu.Lock()
 	s.proc = proc
 	s.mu.Unlock()
@@ -234,7 +237,7 @@ func (s *Session) SetDiffStat(ds DiffStat) {
 	s.mu.Unlock()
 }
 
-func (s *Session) SetTodos(todos []Todo) {
+func (s *Session) SetTodos(todos []protocol.Todo) {
 	s.mu.Lock()
 	s.Todos = todos
 	s.mu.Unlock()
@@ -260,8 +263,8 @@ func (s *Session) GetQueuedText() string {
 
 // --- Map operations ---
 
-func (s *Session) RegisterPermChan(id string) chan PermResponse {
-	ch := make(chan PermResponse, 1)
+func (s *Session) RegisterPermChan(id string) chan protocol.PermResponse {
+	ch := make(chan protocol.PermResponse, 1)
 	s.mu.Lock()
 	s.PermChans[id] = ch
 	s.mu.Unlock()
@@ -272,6 +275,27 @@ func (s *Session) DeletePermChan(id string) {
 	s.mu.Lock()
 	delete(s.PermChans, id)
 	s.mu.Unlock()
+}
+
+// HandlePermission registers a permission channel, broadcasts the request,
+// and blocks until the user responds via the web UI.
+func (s *Session) HandlePermission(req protocol.PermissionRequest, broadcast func(ServerMsg)) protocol.PermResponse {
+	ch := s.RegisterPermChan(req.RequestID)
+	msg := ServerMsg{
+		Type:            "permission_request",
+		SessionID:       s.ID,
+		ToolUseID:       req.ToolUseID,
+		PermID:          req.RequestID,
+		PermTool:        req.ToolName,
+		PermInput:       req.Input,
+		PermReason:      req.DecisionReason,
+		PermSuggestions: req.Suggestions,
+	}
+	s.Append(msg)
+	broadcast(msg)
+	resp := <-ch
+	s.DeletePermChan(req.RequestID)
+	return resp
 }
 
 func (s *Session) RegisterBgStop(id string, ch chan struct{}) {
@@ -371,7 +395,7 @@ func (s *Session) FinishAgent(toolUseID string) {
 }
 
 // UpdateAgentStat updates the live stats for an agent from a task_progress event.
-func (s *Session) UpdateAgentStat(toolUseID string, usage *taskUsage, description, lastTool string) {
+func (s *Session) UpdateAgentStat(toolUseID string, usage *protocol.TaskUsage, description, lastTool string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	stat := s.AgentStats[toolUseID]
@@ -459,7 +483,7 @@ func (s *Session) InitFromHistory(label, jsonlPath string, branches []string, co
 	s.mu.Unlock()
 }
 
-func (s *Session) InitLive(label string, autoLabel, running bool, proc *ClaudeProcess) {
+func (s *Session) InitLive(label string, autoLabel, running bool, proc *claude.ClaudeProcess) {
 	s.mu.Lock()
 	s.Label = label
 	s.AutoLabel = autoLabel
@@ -493,7 +517,7 @@ func (s *Session) TryAutoLabel(text string) {
 	s.mu.Unlock()
 }
 
-func (s *Session) SetPermModeAndGetProc(mode string) *ClaudeProcess {
+func (s *Session) SetPermModeAndGetProc(mode string) *claude.ClaudeProcess {
 	s.mu.Lock()
 	s.PermissionMode = mode
 	proc := s.proc
@@ -501,7 +525,7 @@ func (s *Session) SetPermModeAndGetProc(mode string) *ClaudeProcess {
 	return proc
 }
 
-func (s *Session) InterruptAndGetProc() *ClaudeProcess {
+func (s *Session) InterruptAndGetProc() *claude.ClaudeProcess {
 	s.mu.Lock()
 	s.Interrupted = true
 	proc := s.proc
@@ -509,7 +533,7 @@ func (s *Session) InterruptAndGetProc() *ClaudeProcess {
 	return proc
 }
 
-func (s *Session) ResetInterruptAndGetProc() *ClaudeProcess {
+func (s *Session) ResetInterruptAndGetProc() *claude.ClaudeProcess {
 	s.mu.Lock()
 	s.Interrupted = false
 	proc := s.proc
@@ -590,7 +614,7 @@ func (sm *SessionManager) Create(id, cwd string) *Session {
 		CreatedAt:         time.Now(),
 		SuppressedToolIDs: make(map[string]string),
 		BgTaskStops:       make(map[string]chan struct{}),
-		PermChans:         make(map[string]chan PermResponse),
+		PermChans:         make(map[string]chan protocol.PermResponse),
 	}
 	sm.sessions[id] = s
 	return s

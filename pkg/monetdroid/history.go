@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
 // JSONL schema types — minimal subset of fields we need from Claude session files.
@@ -89,9 +91,9 @@ type contentBlock struct {
 // blockContent handles the polymorphic tool_result content: plain string or
 // array of content blocks (which may include text and image blocks).
 type blockContent struct {
-	Text   string      // set when content is a plain string or concatenated text blocks
-	Images []ImageData // set when content array includes image blocks
-	Raw    string      // JSON string fallback for non-string, non-array content
+	Text   string               // set when content is a plain string or concatenated text blocks
+	Images []protocol.ImageData // set when content array includes image blocks
+	Raw    string               // JSON string fallback for non-string, non-array content
 }
 
 func (c *blockContent) UnmarshalJSON(data []byte) error {
@@ -114,7 +116,7 @@ func (c *blockContent) UnmarshalJSON(data []byte) error {
 				}
 			case "image":
 				if b.Source != nil && b.Source.MediaType != "" && b.Source.Data != "" {
-					c.Images = append(c.Images, ImageData{
+					c.Images = append(c.Images, protocol.ImageData{
 						MediaType: b.Source.MediaType,
 						Data:      b.Source.Data,
 					})
@@ -390,7 +392,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 				continue
 			}
 			var userText string
-			var userImages []ImageData
+			var userImages []protocol.ImageData
 			for _, b := range c.Blocks {
 				switch b.Type {
 				case "text":
@@ -399,7 +401,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					}
 				case "image":
 					if b.Source != nil && b.Source.MediaType != "" && b.Source.Data != "" {
-						userImages = append(userImages, ImageData{MediaType: b.Source.MediaType, Data: b.Source.Data})
+						userImages = append(userImages, protocol.ImageData{MediaType: b.Source.MediaType, Data: b.Source.Data})
 					}
 				case "tool_result":
 					toolName := toolNames[b.ToolUseID]
@@ -437,7 +439,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					if b.ID != "" {
 						toolNames[b.ID] = b.Name
 					}
-					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: b.Name, ToolUseID: b.ID, Input: ParseToolInput(b.Name, b.RawInput)})
+					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput)})
 				}
 			}
 		case "result":

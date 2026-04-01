@@ -2,6 +2,7 @@ package monetdroid
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
@@ -16,7 +17,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/anupcshan/monetdroid/pkg/claude"
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
 //go:embed index.html
@@ -341,7 +346,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 	r.ParseMultipartForm(10 << 20)
 	text := r.FormValue("text")
 
-	var images []ImageData
+	var images []protocol.ImageData
 	if r.MultipartForm != nil {
 		for _, fh := range r.MultipartForm.File["images"] {
 			f, err := fh.Open()
@@ -357,7 +362,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			if mediaType == "" {
 				mediaType = "image/jpeg"
 			}
-			images = append(images, ImageData{
+			images = append(images, protocol.ImageData{
 				MediaType: mediaType,
 				Data:      base64.StdEncoding.EncodeToString(data),
 			})
@@ -381,13 +386,53 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		label := r.FormValue("label")
 
-		// The broadcast closure captures `s` by reference. It's safe because
-		// scan waits on p.ready (which is closed after s is set and BindSession is called).
-		logBroadcast := func(msg ServerMsg) {
-			s.Append(msg)
+		// Events arrive from the scan goroutine before the Session
+		// exists (we need the ClaudeID from the stream to create it).
+		// Buffer them and replay once the session is bound.
+		var (
+			mu       sync.Mutex
+			sess     *Session
+			buffered []protocol.StreamEvent
+		)
+		broadcast := func(msg ServerMsg) {
+			// Streaming deltas are ephemeral — don't persist in the session log.
+			if msg.Type != "text_delta" && msg.Type != "thinking_delta" {
+				sess.Append(msg)
+			}
 			h.Broadcast(msg)
 		}
-		proc, err := StartProcess(nil, cwd, logBroadcast, "")
+		onEvent := func(event protocol.StreamEvent) {
+			mu.Lock()
+			if sess == nil {
+				buffered = append(buffered, event)
+				mu.Unlock()
+				return
+			}
+			mu.Unlock()
+			handleStreamEvent(sess, &event, broadcast)
+		}
+		permHandler := func(req protocol.PermissionRequest) protocol.PermResponse {
+			mu.Lock()
+			ss := sess
+			mu.Unlock()
+			if ss == nil {
+				log.Printf("[send] permission request before session bound, denying")
+				return protocol.PermResponse{}
+			}
+			return ss.HandlePermission(req, func(msg ServerMsg) { h.Broadcast(msg) })
+		}
+		onRawEvent := func(raw protocol.RawStreamEvent) {
+			mu.Lock()
+			ss := sess
+			mu.Unlock()
+			if ss != nil {
+				handleRawStreamEvent(ss, &raw, broadcast)
+			}
+		}
+		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
+			PermissionHandler: permHandler,
+			OnRawEvent:        onRawEvent,
+		})
 		if err != nil {
 			log.Printf("[send] start process failed: %s", err)
 			w.WriteHeader(500)
@@ -403,22 +448,25 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Wait for the ClaudeID from the stream
-		var claudeID string
-		select {
-		case claudeID = <-proc.sessionIDCh:
-		case <-proc.dead:
-			log.Printf("[send] process died before session ID")
-			w.WriteHeader(500)
-			return
-		case <-time.After(30 * time.Second):
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		claudeID, err := proc.WaitForSessionID(ctx)
+		if err != nil {
 			proc.Kill()
-			log.Printf("[send] timeout waiting for session ID")
+			log.Printf("[send] waiting for session ID: %s", err)
 			w.WriteHeader(500)
 			return
 		}
 
-		// Create the session with the real ClaudeID
+		// Create the session and replay buffered events
 		s = h.Sessions.Create(claudeID, cwd)
+		mu.Lock()
+		sess = s
+		for i := range buffered {
+			handleStreamEvent(s, &buffered[i], broadcast)
+		}
+		buffered = nil
+		mu.Unlock()
 		autoLabel := label == ""
 		if autoLabel {
 			label = text
@@ -465,9 +513,6 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
-		// Unblock scan goroutine to start broadcasting stream events
-		proc.BindSession(s)
-
 		// Wait for turn completion and drain queue in background
 		go func() {
 			h.waitAndDrainLoop(s, proc)
@@ -511,18 +556,18 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	ch, ok := s.GetPermChan(permID)
 
 	if ok {
-		var perms []PermSuggestion
+		var perms []protocol.PermSuggestion
 		if suggestionJSON != "" {
-			var suggestion PermSuggestion
+			var suggestion protocol.PermSuggestion
 			if err := json.Unmarshal([]byte(suggestionJSON), &suggestion); err == nil {
-				perms = []PermSuggestion{suggestion}
+				perms = []protocol.PermSuggestion{suggestion}
 				if suggestion.Type == "setMode" && suggestion.Mode != "" {
 					s.SetPermissionMode(suggestion.Mode)
 					h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: suggestion.Mode})
 				}
 			}
 		}
-		ch <- PermResponse{Allow: allow, Permissions: perms}
+		ch <- protocol.PermResponse{Allow: allow, Permissions: perms}
 	}
 
 	// Look up the ToolUseID before removing the permission from the log
@@ -607,7 +652,7 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ch <- PermResponse{Allow: true, UpdatedInput: buildAskUserResponse(permInput, answers)}
+	ch <- protocol.PermResponse{Allow: true, UpdatedInput: buildAskUserResponse(permInput, answers)}
 
 	// Replace the entire ask-user form with a compact answered summary
 	var summaryHTML strings.Builder

@@ -1,5 +1,7 @@
 package monetdroid
 
+import "github.com/anupcshan/monetdroid/pkg/claude/protocol"
+
 // suppressResultTools lists tools whose tool_result output should not be
 // shown to the user (the tool_use chip is still rendered).
 var suppressResultTools = map[string]bool{
@@ -11,7 +13,7 @@ var suppressResultTools = map[string]bool{
 }
 
 // parentID extracts the parent tool_use ID from a stream event, or "" if none.
-func parentID(event *streamEvent) string {
+func parentID(event *protocol.StreamEvent) string {
 	if event.ParentToolUseID != nil {
 		return *event.ParentToolUseID
 	}
@@ -21,7 +23,7 @@ func parentID(event *streamEvent) string {
 // handleRawStreamEvent processes raw streaming deltas (--include-partial-messages)
 // and broadcasts text/thinking deltas for live display. Sub-agent deltas are ignored
 // (their content is buffered by the final assistant event).
-func handleRawStreamEvent(s *Session, raw *rawStreamEvent, broadcast func(ServerMsg)) {
+func handleRawStreamEvent(s *Session, raw *protocol.RawStreamEvent, broadcast func(ServerMsg)) {
 	// Skip sub-agent streaming — too noisy, and the buffered view handles it.
 	if raw.ParentToolUseID != nil {
 		return
@@ -44,7 +46,7 @@ func handleRawStreamEvent(s *Session, raw *rawStreamEvent, broadcast func(Server
 }
 
 // handleStreamEvent processes non-control messages from the CLI and broadcasts them.
-func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)) {
+func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(ServerMsg)) {
 	pid := parentID(event)
 
 	switch event.Type {
@@ -86,7 +88,7 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 					if b.Name == "AskUserQuestion" {
 						continue
 					}
-					s.BufferAgentEvent(pid, ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: ParseToolInput(b.Name, b.RawInput), ParentToolUseID: pid})
+					s.BufferAgentEvent(pid, ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput), ParentToolUseID: pid})
 				case "text":
 					if b.Text != "" {
 						s.BufferAgentEvent(pid, ServerMsg{Type: "text", SessionID: s.ID, Text: b.Text, ParentToolUseID: pid})
@@ -119,7 +121,7 @@ func handleStreamEvent(s *Session, event *streamEvent, broadcast func(ServerMsg)
 				if b.Name == "AskUserQuestion" {
 					continue // rendered by the permission prompt UI
 				}
-				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: ParseToolInput(b.Name, b.RawInput)})
+				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput)})
 			}
 		}
 		if u := event.Message.Usage; u != nil {

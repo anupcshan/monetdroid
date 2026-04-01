@@ -1,6 +1,7 @@
 package monetdroid
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/anupcshan/monetdroid/pkg/claude"
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
 // SSEEvent is a rendered SSE event string tagged with a monotonic sequence number.
@@ -480,21 +484,12 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	h.BroadcastToSession(sessionID, event)
 }
 
-func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
+func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 	proc := s.ResetInterruptAndGetProc()
-
-	// Drain any stale turnDone from previously untracked turns
-	// (e.g. messages injected during permission-blocked state).
-	if proc != nil {
-		select {
-		case <-proc.turnDone:
-		default:
-		}
-	}
 
 	// Ensure process is alive
 	if proc == nil || proc.IsDead() {
-		logBroadcast := func(msg ServerMsg) {
+		broadcast := func(msg ServerMsg) {
 			// Streaming deltas are ephemeral — don't persist in the session log.
 			if msg.Type != "text_delta" && msg.Type != "thinking_delta" {
 				s.Append(msg)
@@ -502,13 +497,26 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 			h.Broadcast(msg)
 		}
 		var err error
-		proc, err = StartProcess(s, s.GetCwd(), logBroadcast, s.ID)
+		proc, err = claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
+			handleStreamEvent(s, &event, broadcast)
+		}, s.ID, &claude.ProcessConfig{
+			PermissionHandler: func(req protocol.PermissionRequest) protocol.PermResponse {
+				return s.HandlePermission(req, func(msg ServerMsg) { h.Broadcast(msg) })
+			},
+			OnRawEvent: func(raw protocol.RawStreamEvent) {
+				handleRawStreamEvent(s, &raw, broadcast)
+			},
+		})
 		if err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return
 		}
 		s.SetProc(proc)
 	}
+
+	// Drain stale turnDone from previously untracked turns
+	// (e.g. messages injected during permission-blocked state).
+	proc.DrainTurnDone()
 
 	// Auto-label from first user message
 	s.TryAutoLabel(text)
@@ -531,12 +539,9 @@ func (h *Hub) StartTurn(s *Session, text string, images []ImageData) {
 // waitAndDrainLoop waits for the current turn to complete, then drains
 // any queued messages, sending each as a new turn. Loops until the queue
 // is empty or the session is interrupted.
-func (h *Hub) waitAndDrainLoop(s *Session, proc *ClaudeProcess) {
+func (h *Hub) waitAndDrainLoop(s *Session, proc *claude.ClaudeProcess) {
 	for {
-		select {
-		case <-proc.turnDone:
-		case <-proc.dead:
-		}
+		proc.WaitForTurnDone(context.Background())
 
 		s.SetRunning(false)
 		h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
@@ -683,7 +688,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 	}
 
 	// Rebuild todos from the last TodoWrite in the log
-	var todos []Todo
+	var todos []protocol.Todo
 	for _, msg := range snap.Log {
 		if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
 			if t := ParseTodos(msg.Input); t != nil {

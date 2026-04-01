@@ -1,42 +1,42 @@
-package monetdroid_test
+package claude_test
 
 import (
 	"testing"
 
-	"github.com/anupcshan/monetdroid/pkg/monetdroid"
+	"github.com/anupcshan/monetdroid/pkg/claude"
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
 // Compile-time check that StartProcessWithConfig is callable with the expected signature.
-var _ func(*monetdroid.Session, string, func(monetdroid.ServerMsg), string, *monetdroid.ProcessConfig) (*monetdroid.ClaudeProcess, error) = monetdroid.StartProcessWithConfig
+var _ func(string, func(protocol.StreamEvent), string, *claude.ProcessConfig) (*claude.ClaudeProcess, error) = claude.StartProcessWithConfig
 
 // TestPermissionHandlerAPI verifies that PermissionRequest, PermissionHandler,
 // PermResponse, and ProcessConfig compose correctly from an external package —
 // ensuring the library's public API surface stays usable without importing
-// internal wire types.
+// internal wire protocol.
 func TestPermissionHandlerAPI(t *testing.T) {
-	handler := func(req monetdroid.PermissionRequest) monetdroid.PermResponse {
+	handler := func(req protocol.PermissionRequest) protocol.PermResponse {
 		if req.ToolName == "mcp__assistant__send_message" {
-			return monetdroid.PermResponse{Allow: true}
+			return protocol.PermResponse{Allow: true}
 		}
-		return monetdroid.PermResponse{Allow: false}
+		return protocol.PermResponse{Allow: false}
 	}
 
-	cfg := &monetdroid.ProcessConfig{
+	cfg := &claude.ProcessConfig{
 		PermissionHandler:  handler,
 		AppendSystemPrompt: "You are a helpful assistant.",
 		AllowedTools:       "mcp__assistant__*",
 		MaxTurns:           10,
 	}
 
-	// Verify the handler is callable with the config.
-	resp := cfg.PermissionHandler(monetdroid.PermissionRequest{
+	resp := cfg.PermissionHandler(protocol.PermissionRequest{
 		ToolName: "mcp__assistant__send_message",
 	})
 	if !resp.Allow {
 		t.Fatal("expected allow for MCP tool")
 	}
 
-	resp = cfg.PermissionHandler(monetdroid.PermissionRequest{
+	resp = cfg.PermissionHandler(protocol.PermissionRequest{
 		ToolName: "Bash",
 	})
 	if resp.Allow {
@@ -45,7 +45,7 @@ func TestPermissionHandlerAPI(t *testing.T) {
 }
 
 func TestCommandAndExtraArgs(t *testing.T) {
-	cfg := &monetdroid.ProcessConfig{
+	cfg := &claude.ProcessConfig{
 		Command:   []string{"podman", "run", "-i", "--rm", "container", "claude"},
 		ExtraArgs: []string{"--mcp-config", `{"assistant":{"type":"http"}}`, "--strict-mcp-config"},
 	}

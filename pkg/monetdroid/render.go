@@ -21,6 +21,8 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	gmhtml "github.com/yuin/goldmark/renderer/html"
+
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
 var md = goldmark.New(
@@ -41,7 +43,7 @@ func RenderMarkdown(text string) string {
 }
 
 // ToolChipSummary returns a compact one-line summary for the tool chip header.
-func ToolChipSummary(tool string, input *ToolInput) string {
+func ToolChipSummary(tool string, input *protocol.ToolInput) string {
 	if input == nil {
 		return tool
 	}
@@ -99,7 +101,7 @@ func ToolChipSummary(tool string, input *ToolInput) string {
 	return tool
 }
 
-func FormatToolInput(tool string, input *ToolInput) string {
+func FormatToolInput(tool string, input *protocol.ToolInput) string {
 	if input == nil {
 		return ""
 	}
@@ -148,7 +150,7 @@ func FormatToolInput(tool string, input *ToolInput) string {
 	return ""
 }
 
-func FormatPermDetail(tool string, input *ToolInput) string {
+func FormatPermDetail(tool string, input *protocol.ToolInput) string {
 	if input == nil {
 		return ""
 	}
@@ -265,7 +267,7 @@ func splitDiffByFile(fullDiff string) []string {
 	return chunks
 }
 
-func editDiffFromInput(input *ToolInput) (filePath, oldStr, newStr string, ok bool) {
+func editDiffFromInput(input *protocol.ToolInput) (filePath, oldStr, newStr string, ok bool) {
 	if input == nil || input.Edit == nil {
 		return
 	}
@@ -550,7 +552,7 @@ func RenderAskUser(msg ServerMsg) string {
 }
 
 // RenderAskUserStatic renders a read-only Q&A summary for history/replay.
-func RenderAskUserStatic(input *ToolInput) string {
+func RenderAskUserStatic(input *protocol.ToolInput) string {
 	if input == nil || input.Ask == nil || len(input.Ask.Questions) == 0 {
 		return ""
 	}
@@ -666,14 +668,14 @@ func FormatTokens(used, window int) string {
 	return fmtK(used)
 }
 
-func ParseTodos(input *ToolInput) []Todo {
+func ParseTodos(input *protocol.ToolInput) []protocol.Todo {
 	if input == nil || input.Todo == nil {
 		return nil
 	}
 	return input.Todo.Todos
 }
 
-func RenderTodosSummary(todos []Todo) string {
+func RenderTodosSummary(todos []protocol.Todo) string {
 	if len(todos) == 0 {
 		return ""
 	}
@@ -700,7 +702,7 @@ func RenderTodosSummary(todos []Todo) string {
 	return summary
 }
 
-func RenderTodosBody(todos []Todo) string {
+func RenderTodosBody(todos []protocol.Todo) string {
 	if len(todos) == 0 {
 		return ""
 	}

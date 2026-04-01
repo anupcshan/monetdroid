@@ -1,33 +1,31 @@
 package monetdroid
 
-import "time"
+import (
+	"time"
 
-// ImageData holds a base64-encoded image for the Messages API content blocks.
-type ImageData struct {
-	MediaType string `json:"media_type"` // e.g. "image/jpeg"
-	Data      string `json:"data"`       // base64-encoded
-}
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
+)
 
 // ServerMsg is the internal message type stored in session logs.
 type ServerMsg struct {
-	Type            string           `json:"type"`
-	SessionID       string           `json:"session_id,omitempty"`
-	Text            string           `json:"text,omitempty"`
-	Images          []ImageData      `json:"images,omitempty"`
-	Tool            string           `json:"tool,omitempty"`
-	ToolUseID       string           `json:"tool_use_id,omitempty"`
-	Input           *ToolInput       `json:"input,omitempty"`
-	Output          string           `json:"output,omitempty"`
-	Error           string           `json:"error,omitempty"`
-	Cost            *CostInfo        `json:"cost,omitempty"`
-	ParentToolUseID string           `json:"parent_tool_use_id,omitempty"`
-	AgentStat       *AgentStat       `json:"agent_stat,omitempty"`
-	PermID          string           `json:"perm_id,omitempty"`
-	PermTool        string           `json:"perm_tool,omitempty"`
-	PermInput       *ToolInput       `json:"perm_input,omitempty"`
-	PermReason      string           `json:"perm_reason,omitempty"`
-	PermSuggestions []PermSuggestion `json:"perm_suggestions,omitempty"`
-	PermMode        string           `json:"perm_mode,omitempty"`
+	Type            string                    `json:"type"`
+	SessionID       string                    `json:"session_id,omitempty"`
+	Text            string                    `json:"text,omitempty"`
+	Images          []protocol.ImageData      `json:"images,omitempty"`
+	Tool            string                    `json:"tool,omitempty"`
+	ToolUseID       string                    `json:"tool_use_id,omitempty"`
+	Input           *protocol.ToolInput       `json:"input,omitempty"`
+	Output          string                    `json:"output,omitempty"`
+	Error           string                    `json:"error,omitempty"`
+	Cost            *CostInfo                 `json:"cost,omitempty"`
+	ParentToolUseID string                    `json:"parent_tool_use_id,omitempty"`
+	AgentStat       *AgentStat                `json:"agent_stat,omitempty"`
+	PermID          string                    `json:"perm_id,omitempty"`
+	PermTool        string                    `json:"perm_tool,omitempty"`
+	PermInput       *protocol.ToolInput       `json:"perm_input,omitempty"`
+	PermReason      string                    `json:"perm_reason,omitempty"`
+	PermSuggestions []protocol.PermSuggestion `json:"perm_suggestions,omitempty"`
+	PermMode        string                    `json:"perm_mode,omitempty"`
 }
 
 // AgentStat tracks live stats for a sub-agent invocation.
@@ -63,72 +61,17 @@ type HistorySession struct {
 }
 
 type HistoryMessage struct {
-	Type      string      `json:"type"`
-	Text      string      `json:"text,omitempty"`
-	Images    []ImageData `json:"images,omitempty"`
-	Tool      string      `json:"tool,omitempty"`
-	ToolUseID string      `json:"tool_use_id,omitempty"`
-	Input     *ToolInput  `json:"input,omitempty"`
-	Output    string      `json:"output,omitempty"`
+	Type      string               `json:"type"`
+	Text      string               `json:"text,omitempty"`
+	Images    []protocol.ImageData `json:"images,omitempty"`
+	Tool      string               `json:"tool,omitempty"`
+	ToolUseID string               `json:"tool_use_id,omitempty"`
+	Input     *protocol.ToolInput  `json:"input,omitempty"`
+	Output    string               `json:"output,omitempty"`
 }
 
 type SessionUsage struct {
 	TotalCostUSD  float64
 	ContextUsed   int
 	ContextWindow int
-}
-
-type Todo struct {
-	Content    string `json:"content"`
-	ActiveForm string `json:"activeForm"`
-	Status     string `json:"status"` // pending, in_progress, completed
-}
-
-type PermResponse struct {
-	Allow        bool
-	Permissions  []PermSuggestion
-	UpdatedInput *ToolInput // non-nil for AskUserQuestion answers
-}
-
-// PermissionRequest is the exported view of an incoming can_use_tool request.
-// It exposes only the fields needed for policy decisions, keeping the wire
-// protocol types private.
-type PermissionRequest struct {
-	ToolName       string
-	ToolUseID      string
-	Input          *ToolInput
-	DecisionReason string
-}
-
-// PermissionHandler handles permission requests directly, bypassing the
-// broadcast-and-wait-on-channel flow. Called synchronously in the
-// handleControlRequest goroutine. Return a PermResponse indicating
-// allow/deny.
-type PermissionHandler func(req PermissionRequest) PermResponse
-
-// ProcessConfig holds optional configuration for StartProcessWithConfig.
-// All fields are optional; zero values preserve the default behavior.
-type ProcessConfig struct {
-	// PermissionHandler, when set, handles can_use_tool requests directly
-	// instead of broadcasting and waiting on the session's permission channel.
-	PermissionHandler PermissionHandler
-
-	// AppendSystemPrompt is passed as --append-system-prompt to the CLI.
-	AppendSystemPrompt string
-
-	// AllowedTools is passed as --allowedTools to the CLI (glob pattern).
-	AllowedTools string
-
-	// MaxTurns is passed as --max-turns to the CLI.
-	MaxTurns int
-
-	// Command replaces the default "claude" binary. Command[0] is the
-	// executable and Command[1:] are prepended before monetdroid's own flags.
-	// When nil/empty, defaults to ["claude"].
-	// Example: ["podman", "run", "-i", "--rm", "my-container", "claude"]
-	Command []string
-
-	// ExtraArgs are additional flags appended after monetdroid's own flags.
-	// Example: ["--mcp-config", "{...}", "--strict-mcp-config"]
-	ExtraArgs []string
 }

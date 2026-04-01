@@ -1,8 +1,10 @@
-package monetdroid
+package claude
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,14 +12,52 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
+// ErrProcessDead is returned by WaitForSessionID and WaitForTurnDone when the
+// process exits before the awaited event occurs.
+var ErrProcessDead = errors.New("process exited")
+
+// PermissionHandler handles permission requests from the CLI. Called
+// synchronously in a separate goroutine — the caller blocks until it returns.
+type PermissionHandler func(req protocol.PermissionRequest) protocol.PermResponse
+
+// ProcessConfig holds optional configuration for StartProcessWithConfig.
+// All fields are optional; zero values preserve the default behavior.
+type ProcessConfig struct {
+	// PermissionHandler handles can_use_tool requests from the CLI.
+	// When nil, all permission requests are denied.
+	PermissionHandler PermissionHandler
+
+	// AppendSystemPrompt is passed as --append-system-prompt to the CLI.
+	AppendSystemPrompt string
+
+	// AllowedTools is passed as --allowedTools to the CLI (glob pattern).
+	AllowedTools string
+
+	// MaxTurns is passed as --max-turns to the CLI.
+	MaxTurns int
+
+	// Command replaces the default "claude" binary. Command[0] is the
+	// executable and Command[1:] are prepended before the process's own flags.
+	// When nil/empty, defaults to ["claude"].
+	Command []string
+
+	// ExtraArgs are additional flags appended after the process's own flags.
+	ExtraArgs []string
+
+	// OnRawEvent, when set, is called for raw streaming deltas
+	// (--include-partial-messages). Used for live text/thinking display.
+	OnRawEvent func(protocol.RawStreamEvent)
+}
+
 // ClaudeProcess owns a long-running claude CLI subprocess.
-// It persists across multiple turns in a session.
+// It is a pure subprocess + protocol wrapper with no session or UI concerns.
 type ClaudeProcess struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
-	sess  *Session
 
 	mu      sync.Mutex // protects reqSeq and pending
 	reqSeq  int
@@ -28,31 +68,20 @@ type ClaudeProcess struct {
 	turnDone    chan struct{} // sent (not closed) when a result event arrives
 	dead        chan struct{} // closed when process exits (by scan goroutine)
 	sessionIDCh chan string   // receives the ClaudeID from the first system event
-	ready       chan struct{} // closed when session is bound and broadcasting can begin
 
-	// killing is closed by Kill() to unblock goroutines waiting on ready.
-	// This is a workaround for a design flaw: ClaudeProcess holds a *Session
-	// and gates access to it via the ready channel. When Kill() is called
-	// before BindSession (e.g. library consumers that never bind a session),
-	// scan blocks on <-ready forever, which blocks <-dead, which blocks Kill().
-	// Closing killing breaks that deadlock. The right fix is to decouple
-	// ClaudeProcess from Session entirely — this is a stopgap.
-	killing chan struct{}
-
-	permHandler PermissionHandler // optional; short-circuits broadcast-and-wait when set
+	permHandler PermissionHandler
+	onEvent     func(protocol.StreamEvent)
+	onRawEvent  func(protocol.RawStreamEvent)
 }
 
 // StartProcess starts a new claude CLI subprocess with default configuration.
-// sess may be nil for new sessions (before the ClaudeID is known).
-// If resume is non-empty, passes --resume to restore conversation state.
-func StartProcess(sess *Session, cwd string, broadcast func(ServerMsg), resume string) (*ClaudeProcess, error) {
-	return StartProcessWithConfig(sess, cwd, broadcast, resume, nil)
+func StartProcess(cwd string, onEvent func(protocol.StreamEvent), resume string) (*ClaudeProcess, error) {
+	return StartProcessWithConfig(cwd, onEvent, resume, nil)
 }
 
 // StartProcessWithConfig starts a new claude CLI subprocess with optional
 // configuration. When cfg is nil, behaves identically to StartProcess.
-func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg), resume string, cfg *ProcessConfig) (*ClaudeProcess, error) {
-	// Build the base command: cfg.Command or default ["claude"].
+func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resume string, cfg *ProcessConfig) (*ClaudeProcess, error) {
 	binCmd := []string{"claude"}
 	if cfg != nil && len(cfg.Command) > 0 {
 		binCmd = cfg.Command
@@ -107,24 +136,22 @@ func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg)
 	}
 
 	var permHandler PermissionHandler
+	var onRawEvent func(protocol.RawStreamEvent)
 	if cfg != nil {
 		permHandler = cfg.PermissionHandler
+		onRawEvent = cfg.OnRawEvent
 	}
 
 	p := &ClaudeProcess{
 		cmd:         cmd,
 		stdin:       stdin,
-		sess:        sess,
 		pending:     make(map[string]chan ctlRespPayload),
 		turnDone:    make(chan struct{}, 1),
 		dead:        make(chan struct{}),
 		sessionIDCh: make(chan string, 1),
-		ready:       make(chan struct{}),
-		killing:     make(chan struct{}),
 		permHandler: permHandler,
-	}
-	if sess != nil {
-		close(p.ready) // session already bound, no need to wait
+		onEvent:     onEvent,
+		onRawEvent:  onRawEvent,
 	}
 
 	logLabel := cwd
@@ -132,7 +159,6 @@ func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg)
 		logLabel = resume
 	}
 
-	// Drain stderr in background
 	go func() {
 		sc := bufio.NewScanner(stderr)
 		for sc.Scan() {
@@ -140,10 +166,8 @@ func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg)
 		}
 	}()
 
-	// Start stdout scanner
-	go p.scan(stdout, broadcast, logLabel)
+	go p.scan(stdout, logLabel)
 
-	// Send initialize and wait for response
 	if err := p.sendControlRequest(ctlInitRequest{Subtype: "initialize"}); err != nil {
 		p.Kill()
 		return nil, fmt.Errorf("initialize failed: %w", err)
@@ -154,8 +178,7 @@ func StartProcessWithConfig(sess *Session, cwd string, broadcast func(ServerMsg)
 }
 
 // scan reads stdout line-by-line and routes events.
-// Runs until the process exits (EOF).
-func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLabel string) {
+func (p *ClaudeProcess) scan(stdout io.Reader, logLabel string) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -165,7 +188,6 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLab
 			continue
 		}
 
-		// Peek at the type to route appropriately
 		var envelope struct {
 			Type string `json:"type"`
 		}
@@ -189,10 +211,10 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLab
 				log.Printf("[parse error][%s] control_request: %s", logLabel, err)
 				continue
 			}
-			go p.handleControlRequest(req, broadcast)
+			go p.handleControlRequest(req)
 
 		case "stream_event":
-			var raw rawStreamEvent
+			var raw protocol.RawStreamEvent
 			if err := json.Unmarshal(line, &raw); err != nil {
 				log.Printf("[parse error][%s] stream_event: %s", logLabel, err)
 				continue
@@ -203,35 +225,25 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLab
 				default:
 				}
 			}
-			select {
-			case <-p.ready:
-			case <-p.killing:
-				continue
+			if p.onRawEvent != nil {
+				p.onRawEvent(raw)
 			}
-			handleRawStreamEvent(p.sess, &raw, broadcast)
 
 		default:
-			var event streamEvent
+			var event protocol.StreamEvent
 			if err := json.Unmarshal(line, &event); err != nil {
 				log.Printf("[parse error][%s] stream event: %s", logLabel, err)
 				continue
 			}
-			// Signal the ClaudeID from the first system/result event that carries it
 			if event.SessionID != "" {
 				select {
 				case p.sessionIDCh <- event.SessionID:
 				default:
 				}
 			}
-			// Wait for session to be bound before broadcasting.
-			// Also select on killing so Kill() can unblock us if the
-			// session is never bound (see killing field comment).
-			select {
-			case <-p.ready:
-			case <-p.killing:
-				continue
+			if p.onEvent != nil {
+				p.onEvent(event)
 			}
-			handleStreamEvent(p.sess, &event, broadcast)
 			if envelope.Type == "result" {
 				select {
 				case p.turnDone <- struct{}{}:
@@ -241,12 +253,10 @@ func (p *ClaudeProcess) scan(stdout io.Reader, broadcast func(ServerMsg), logLab
 		}
 	}
 
-	// Process exited
 	log.Printf("[claude exit][%s] scanner ended", logLabel)
 	close(p.dead)
 }
 
-// handleControlResponse routes responses to our control requests (initialize, interrupt, etc).
 func (p *ClaudeProcess) handleControlResponse(resp ctlRespPayload) {
 	p.mu.Lock()
 	ch, ok := p.pending[resp.RequestID]
@@ -257,58 +267,32 @@ func (p *ClaudeProcess) handleControlResponse(resp ctlRespPayload) {
 		select {
 		case ch <- resp:
 		case <-time.After(5 * time.Second):
-			sessID := "<unbound>"
-			if p.sess != nil {
-				sessID = p.sess.ID
-			}
-			log.Printf("[claude process][%s] response timeout for %s", sessID, resp.RequestID)
+			log.Printf("[claude process] response timeout for %s", resp.RequestID)
 		}
 	}
 }
 
-// handleControlRequest handles permission prompts from the CLI.
-// Runs in a separate goroutine so the scanner is never blocked.
-func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest, broadcast func(ServerMsg)) {
+func (p *ClaudeProcess) handleControlRequest(req ctlIncomingRequest) {
 	if req.Subtype != "can_use_tool" {
 		return
 	}
 
-	// When a custom permission handler is set, call it directly
-	// instead of broadcasting and waiting on the session's channel.
+	var resp protocol.PermResponse
 	if p.permHandler != nil {
-		resp := p.permHandler(PermissionRequest{
+		resp = p.permHandler(protocol.PermissionRequest{
+			RequestID:      req.RequestID,
 			ToolName:       req.ToolName,
 			ToolUseID:      req.ToolUseID,
 			Input:          req.Input,
 			DecisionReason: req.DecisionReason,
+			Suggestions:    req.PermissionSuggestions,
 		})
-		p.sendPermResponse(req.RequestID, req.Input, resp)
-		return
 	}
-
-	select {
-	case <-p.ready:
-	case <-p.killing:
-		return
-	}
-	ch := p.sess.RegisterPermChan(req.RequestID)
-
-	broadcast(ServerMsg{
-		Type: "permission_request", SessionID: p.sess.ID,
-		ToolUseID: req.ToolUseID,
-		PermID:    req.RequestID, PermTool: req.ToolName, PermInput: req.Input,
-		PermReason: req.DecisionReason, PermSuggestions: req.PermissionSuggestions,
-	})
-
-	resp := <-ch
-
-	p.sess.DeletePermChan(req.RequestID)
-
+	// When no handler is set, resp is zero value: Allow=false → deny.
 	p.sendPermResponse(req.RequestID, req.Input, resp)
 }
 
-// sendPermResponse sends an allow or deny control response for a permission request.
-func (p *ClaudeProcess) sendPermResponse(requestID string, originalInput *ToolInput, resp PermResponse) {
+func (p *ClaudeProcess) sendPermResponse(requestID string, originalInput *protocol.ToolInput, resp protocol.PermResponse) {
 	if resp.Allow {
 		input := originalInput
 		if resp.UpdatedInput != nil {
@@ -329,15 +313,12 @@ func (p *ClaudeProcess) sendPermResponse(requestID string, originalInput *ToolIn
 	}
 }
 
-// writeStdin serializes a JSON message to stdin.
-// All writes to the CLI process MUST go through this method.
 func (p *ClaudeProcess) writeStdin(data []byte) (int, error) {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	return p.stdin.Write(append(data, '\n'))
 }
 
-// sendControlRequest sends a control request and waits for the response.
 func (p *ClaudeProcess) sendControlRequest(request any) error {
 	p.mu.Lock()
 	p.reqSeq++
@@ -378,7 +359,6 @@ func (p *ClaudeProcess) sendControlRequest(request any) error {
 	}
 }
 
-// sendControlResponse sends a control response (e.g. permission grant/deny).
 func (p *ClaudeProcess) sendControlResponse(requestID string, response any) {
 	msg := ctlOutgoingResponse{
 		Type: "control_response",
@@ -399,7 +379,7 @@ func (p *ClaudeProcess) sendControlResponse(requestID string, response any) {
 }
 
 // SendUserMessage sends a user message to start a turn.
-func (p *ClaudeProcess) SendUserMessage(text string, images []ImageData) error {
+func (p *ClaudeProcess) SendUserMessage(text string, images []protocol.ImageData) error {
 	var content any
 	if len(images) > 0 {
 		var blocks []any
@@ -422,9 +402,8 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []ImageData) error {
 	}
 
 	msg := userMessageEnvelope{
-		Type:      "user",
-		SessionID: "",
-		Message:   userMessage{Role: "user", Content: content},
+		Type:    "user",
+		Message: userMessage{Role: "user", Content: content},
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -437,13 +416,6 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []ImageData) error {
 // Interrupt sends an interrupt control request to abort the current turn.
 func (p *ClaudeProcess) Interrupt() error {
 	return p.sendControlRequest(ctlInterruptRequest{Subtype: "interrupt"})
-}
-
-// BindSession sets the session on the process and unblocks broadcasting.
-// Must be called exactly once for processes started without a session.
-func (p *ClaudeProcess) BindSession(s *Session) {
-	p.sess = s
-	close(p.ready)
 }
 
 // SetPermissionMode changes the permission mode mid-session.
@@ -461,9 +433,46 @@ func (p *ClaudeProcess) IsDead() bool {
 	}
 }
 
+// WaitForSessionID blocks until the CLI reports a session ID or the context
+// is cancelled. Returns ErrProcessDead if the process exits first.
+func (p *ClaudeProcess) WaitForSessionID(ctx context.Context) (string, error) {
+	select {
+	case id := <-p.sessionIDCh:
+		return id, nil
+	case <-p.dead:
+		return "", ErrProcessDead
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// WaitForTurnDone blocks until the current turn completes (a result event
+// arrives) or the context is cancelled. Returns ErrProcessDead if the
+// process exits first.
+func (p *ClaudeProcess) WaitForTurnDone(ctx context.Context) error {
+	select {
+	case <-p.turnDone:
+		return nil
+	case <-p.dead:
+		return ErrProcessDead
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// DrainTurnDone discards any stale turnDone signal from a previous turn.
+// Call before starting a new turn to prevent WaitForTurnDone from returning
+// immediately on a result event that nobody was waiting for (e.g. a message
+// injected while permission-blocked).
+func (p *ClaudeProcess) DrainTurnDone() {
+	select {
+	case <-p.turnDone:
+	default:
+	}
+}
+
 // Kill terminates the process and waits for exit.
 func (p *ClaudeProcess) Kill() {
-	close(p.killing) // unblock goroutines waiting on ready (see field comment)
 	p.stdin.Close()
 	p.cmd.Process.Kill()
 	p.cmd.Wait()
