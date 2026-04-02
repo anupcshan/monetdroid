@@ -3,6 +3,7 @@ package monetdroid
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -50,9 +51,16 @@ func highlightLines(lexer chroma.Lexer, content string) []string {
 	return result
 }
 
-// RenderWriteDiffTable renders a Write tool's content as an all-additions diff
-// table with syntax highlighting.
+// RenderWriteDiffTable renders a Write tool's content as a diff table. If the
+// file already exists on disk, it shows a real diff (additions and removals).
+// Otherwise it shows all-additions for a new file.
 func RenderWriteDiffTable(filePath, content, sessionID string, reviewEnabled bool) string {
+	// If the file exists, diff against the current content.
+	if original, err := os.ReadFile(filePath); err == nil && string(original) != content {
+		return renderFullFileDiff(filePath, string(original), content, sessionID, reviewEnabled)
+	}
+
+	// New file: render as all-additions.
 	lexer := lexers.Match(filePath)
 	highlighted := highlightLines(lexer, content)
 	lines := strings.Split(content, "\n")
@@ -79,20 +87,72 @@ func RenderWriteDiffTable(filePath, content, sessionID string, reviewEnabled boo
 }
 
 // RenderEditDiffTable renders an Edit tool diff as a table with line numbers
-// and language-specific syntax highlighting.
-func RenderEditDiffTable(filePath, oldStr, newStr, sessionID string, reviewEnabled bool) string {
+// and language-specific syntax highlighting. It reads the file from disk to
+// produce a diff with absolute line numbers.
+func RenderEditDiffTable(filePath, oldStr, newStr string, replaceAll bool, sessionID string, reviewEnabled bool) string {
+	// Try to read the file and produce a full-file diff with correct line numbers.
+	if original, err := os.ReadFile(filePath); err == nil {
+		content := string(original)
+		var modified string
+		if replaceAll {
+			modified = strings.ReplaceAll(content, oldStr, newStr)
+		} else {
+			modified = strings.Replace(content, oldStr, newStr, 1)
+		}
+		if modified != content {
+			return renderFullFileDiff(filePath, content, modified, sessionID, reviewEnabled)
+		}
+	}
+
+	// Fallback: diff just the old/new strings (file not readable or oldStr not found).
 	diffText := runDiff(filePath, oldStr, newStr, 3)
+	if diffText == "" {
+		return ""
+	}
+	return renderParsedDiffOrFallback(filePath, diffText, oldStr, newStr, sessionID, reviewEnabled)
+}
+
+// renderFullFileDiff diffs two full file contents and renders with syntax highlighting.
+func renderFullFileDiff(filePath, original, modified, sessionID string, reviewEnabled bool) string {
+	diffText := runDiff(filePath, original, modified, 3)
 	if diffText == "" {
 		return ""
 	}
 	files := ParseUnifiedDiff(diffText)
 	if len(files) == 0 {
-		// Fallback to old renderer
 		return highlightDiff(diffText)
 	}
 
-	// Highlight old and new content as complete blocks for accurate
-	// multi-line token recognition (block comments, strings, etc.).
+	lexer := lexers.Match(filePath)
+	oldHighlighted := highlightLines(lexer, original)
+	newHighlighted := highlightLines(lexer, modified)
+
+	return renderDiffFiles(files, sessionID, reviewEnabled, func(f *DiffFile, dl DiffLine) string {
+		switch dl.Type {
+		case DiffLineRemove:
+			if dl.OldLine > 0 && dl.OldLine <= len(oldHighlighted) {
+				return oldHighlighted[dl.OldLine-1]
+			}
+		case DiffLineAdd:
+			if dl.NewLine > 0 && dl.NewLine <= len(newHighlighted) {
+				return newHighlighted[dl.NewLine-1]
+			}
+		case DiffLineContext:
+			if dl.OldLine > 0 && dl.OldLine <= len(oldHighlighted) {
+				return oldHighlighted[dl.OldLine-1]
+			}
+		}
+		return Esc(dl.Content)
+	})
+}
+
+// renderParsedDiffOrFallback parses a diff and renders it, or falls back to plain highlighting.
+func renderParsedDiffOrFallback(filePath, diffText, oldStr, newStr, sessionID string, reviewEnabled bool) string {
+	files := ParseUnifiedDiff(diffText)
+	if len(files) == 0 {
+		return highlightDiff(diffText)
+	}
+
 	lexer := lexers.Match(filePath)
 	oldHighlighted := highlightLines(lexer, oldStr)
 	newHighlighted := highlightLines(lexer, newStr)
@@ -213,9 +273,8 @@ func writeCommentGutter(b *strings.Builder, display, sessionID, filePath string,
 	commentURL := fmt.Sprintf("/review/comment-form?session=%s&amp;file=%s&amp;line=%d&amp;side=new",
 		Esc(sessionID), Esc(filePath), lineNum)
 	fmt.Fprintf(b, `<td class="diff-gutter diff-gutter-new">`+
-		`<span class="diff-line-num" hx-get="%s" hx-target="closest tr" hx-swap="afterend" hx-trigger="click">%s</span>`+
-		`<button class="diff-comment-btn" hx-get="%s" hx-target="closest tr" hx-swap="afterend">+</button></td>`,
-		commentURL, display, commentURL)
+		`<span class="diff-line-num" hx-get="%s" hx-target="closest tr" hx-swap="afterend" hx-trigger="click">%s</span></td>`,
+		commentURL, display)
 }
 
 // makeHunkHighlighter builds a highlighter that reconstructs old/new content

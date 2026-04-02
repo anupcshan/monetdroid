@@ -1337,26 +1337,8 @@ details[open] > .history-group-header::before { content: '▼ '; }
 .diff-del { background: rgba(196, 92, 92, 0.25); }
 .diff-ctx { background: transparent; }
 
-/* Comment button — visible on hover */
-.diff-comment-btn {
-  display: none;
-  position: absolute;
-  left: -4px;
-  top: 1px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--bg);
-  border: none;
-  font-size: 12px;
-  font-weight: bold;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
-  z-index: 1;
-}
-.diff-line:hover .diff-comment-btn { display: block; }
+/* Line numbers are clickable to add review comments */
+.diff-line-num { cursor: pointer; }
 
 /* Review comment form */
 .diff-comment-slot td { padding: 0; }
@@ -1556,8 +1538,6 @@ html.files-page, html.files-page body { overflow: auto; height: auto; }
   .diff-hunk .diff-gutter-new { background: #1e1e24; }
   .diff-table { font-size: 10px; table-layout: auto; width: auto; }
   .diff-code { padding: 0 6px; white-space: pre; }
-  .diff-comment-btn { display: none !important; }
-  .diff-line-num { cursor: pointer; }
   .review-form { padding-left: 12px; }
   .review-comment { padding-left: 12px; }
 }

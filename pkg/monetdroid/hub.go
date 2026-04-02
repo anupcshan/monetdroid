@@ -336,8 +336,8 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			upgraded := false
 			switch msg.PermTool {
 			case "Edit", "FileEdit":
-				if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
-					if diffHTML := RenderEditDiffTable(fp, old, new_, msg.SessionID, true); diffHTML != "" {
+				if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
+					if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
 						parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", diffHTML))
 						upgraded = true
 					}

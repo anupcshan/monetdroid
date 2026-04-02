@@ -31,6 +31,22 @@ func Screenshot(t *testing.T, page *rod.Page, name string) {
 func ScreenshotOnFailure(t *testing.T, page *rod.Page, name string) {
 	t.Helper()
 	Screenshot(t, page, "FAIL_"+name)
+	DumpDOM(t, page, "FAIL_"+name)
+}
+
+// DumpDOM saves the page's HTML to a file for post-mortem debugging.
+func DumpDOM(t *testing.T, page *rod.Page, name string) {
+	t.Helper()
+	dir := filepath.Join(TestdataDir(), "screenshots")
+	os.MkdirAll(dir, 0o755)
+	path := filepath.Join(dir, name+".html")
+	html, err := page.Timeout(10 * time.Second).HTML()
+	if err != nil {
+		t.Logf("DOM dump failed: %v", err)
+		return
+	}
+	os.WriteFile(path, []byte(html), 0o644)
+	t.Logf("DOM dump saved: %s", path)
 }
 
 // WaitForText waits for an element matching selector to contain text.

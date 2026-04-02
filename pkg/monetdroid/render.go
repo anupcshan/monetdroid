@@ -271,8 +271,8 @@ func splitDiffByFile(fullDiff string) []string {
 func renderToolDiff(msg ServerMsg) (string, string) {
 	switch msg.Tool {
 	case "Edit", "FileEdit":
-		if fp, old, new_, ok := editDiffFromInput(msg.Input); ok {
-			if diffHTML := RenderEditDiffTable(fp, old, new_, msg.SessionID, true); diffHTML != "" {
+		if fp, old, new_, replAll, ok := editDiffFromInput(msg.Input); ok {
+			if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
 				return diffHTML, editSummary(fp, old, new_)
 			}
 		}
@@ -287,13 +287,14 @@ func renderToolDiff(msg ServerMsg) (string, string) {
 	return "", ""
 }
 
-func editDiffFromInput(input *protocol.ToolInput) (filePath, oldStr, newStr string, ok bool) {
+func editDiffFromInput(input *protocol.ToolInput) (filePath, oldStr, newStr string, replaceAll, ok bool) {
 	if input == nil || input.Edit == nil {
 		return
 	}
 	filePath = input.Edit.FilePath
 	oldStr = input.Edit.OldString
 	newStr = input.Edit.NewString
+	replaceAll = input.Edit.ReplaceAll != nil && *input.Edit.ReplaceAll
 	ok = true
 	return
 }
@@ -429,8 +430,8 @@ func RenderPermission(msg ServerMsg) string {
 	}
 	var detailHTML string
 	if msg.PermTool == "Edit" || msg.PermTool == "FileEdit" {
-		if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
-			detailHTML = RenderEditDiffTable(fp, old, new_, msg.SessionID, true)
+		if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
+			detailHTML = RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true)
 		}
 	}
 	if msg.PermTool == "Write" || msg.PermTool == "FileWrite" {
