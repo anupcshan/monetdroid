@@ -267,6 +267,26 @@ func splitDiffByFile(fullDiff string) []string {
 	return chunks
 }
 
+// renderToolDiff returns (diffHTML, summary) for Edit and Write tools, or ("", "") if not applicable.
+func renderToolDiff(msg ServerMsg) (string, string) {
+	switch msg.Tool {
+	case "Edit", "FileEdit":
+		if fp, old, new_, ok := editDiffFromInput(msg.Input); ok {
+			if diffHTML := RenderEditDiffTable(fp, old, new_, msg.SessionID, true); diffHTML != "" {
+				return diffHTML, editSummary(fp, old, new_)
+			}
+		}
+	case "Write", "FileWrite":
+		if fp, content, ok := writeDiffFromInput(msg.Input); ok {
+			if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
+				lines := strings.Count(content, "\n") + 1
+				return diffHTML, fmt.Sprintf("Write %s +%d", filepath.Base(fp), lines)
+			}
+		}
+	}
+	return "", ""
+}
+
 func editDiffFromInput(input *protocol.ToolInput) (filePath, oldStr, newStr string, ok bool) {
 	if input == nil || input.Edit == nil {
 		return
@@ -275,6 +295,16 @@ func editDiffFromInput(input *protocol.ToolInput) (filePath, oldStr, newStr stri
 	oldStr = input.Edit.OldString
 	newStr = input.Edit.NewString
 	ok = true
+	return
+}
+
+func writeDiffFromInput(input *protocol.ToolInput) (filePath, content string, ok bool) {
+	if input == nil || input.Write == nil {
+		return
+	}
+	filePath = input.Write.FilePath
+	content = input.Write.Content
+	ok = filePath != "" && content != ""
 	return
 }
 
@@ -341,15 +371,9 @@ func RenderMsg(msg ServerMsg) string {
 		if msg.Tool == "AskUserQuestion" {
 			return RenderAskUserStatic(msg.Input)
 		}
-		if msg.Tool == "Edit" || msg.Tool == "FileEdit" {
-			if fp, old, new_, ok := editDiffFromInput(msg.Input); ok {
-				diffHTML := RenderEditDiffHTML(fp, old, new_)
-				if diffHTML != "" {
-					summary := editSummary(fp, old, new_)
-					return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s<span id="perm-status-%s"></span></summary><div class="tool-detail" id="tool-detail-%s">%s</div><div id="perm-slot-%s"></div></details></div>`,
-						Esc(msg.ToolUseID), Esc(summary), Esc(msg.ToolUseID), Esc(msg.ToolUseID), diffHTML, Esc(msg.ToolUseID))
-				}
-			}
+		if diffHTML, summary := renderToolDiff(msg); diffHTML != "" {
+			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s<span id="perm-status-%s"></span></summary><div class="tool-detail" id="tool-detail-%s">%s</div><div id="perm-slot-%s"></div></details></div>`,
+				Esc(msg.ToolUseID), Esc(summary), Esc(msg.ToolUseID), Esc(msg.ToolUseID), diffHTML, Esc(msg.ToolUseID))
 		}
 		var spinnerHTML string
 		if msg.Tool == "Bash" || msg.Tool == "Agent" {
@@ -406,7 +430,12 @@ func RenderPermission(msg ServerMsg) string {
 	var detailHTML string
 	if msg.PermTool == "Edit" || msg.PermTool == "FileEdit" {
 		if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
-			detailHTML = RenderEditDiffHTML(fp, old, new_)
+			detailHTML = RenderEditDiffTable(fp, old, new_, msg.SessionID, true)
+		}
+	}
+	if msg.PermTool == "Write" || msg.PermTool == "FileWrite" {
+		if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
+			detailHTML = RenderWriteDiffTable(fp, content, msg.SessionID, true)
 		}
 	}
 	if detailHTML == "" {

@@ -57,6 +57,7 @@
       <button id="scroll-btn" class="scroll-btn" onclick="var m=document.getElementById('messages');m.scrollTop=m.scrollHeight;this.style.display='none';window._ab=true">↓</button>
     </div>
 
+    <div class="review-bar" id="review-bar"></div>
     <div class="queue-bar" id="queue-bar"></div>
     <div class="input-area" id="input-area">
       <form hx-post="/send" hx-swap="none" hx-encoding="multipart/form-data" hx-on::after-request="this.reset(); this.querySelector('.badge').classList.add('hidden'); this.querySelector('.badge').textContent = ''">

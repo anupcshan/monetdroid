@@ -70,6 +70,10 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/agent-detail/connect", hub.handleAgentDetailConnect)
 	mux.HandleFunc("/agent-detail/stream", hub.handleAgentDetailStream)
 	mux.HandleFunc("/messages/before", hub.handleMessagesBefore)
+	mux.HandleFunc("/review/comment-form", hub.handleReviewCommentForm)
+	mux.HandleFunc("/review/comment", hub.handleReviewComment)
+	mux.HandleFunc("/review/delete", hub.handleReviewDelete)
+	mux.HandleFunc("/review/send", hub.handleReviewSend)
 	return mux
 }
 

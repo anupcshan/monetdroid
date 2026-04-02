@@ -118,104 +118,14 @@ func (h *Hub) handleFilesUnstage(w http.ResponseWriter, r *http.Request) {
 func renderFilesPage(sessionID, cwd, activeTab, content string) string {
 	var b strings.Builder
 
-	b.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+	b.WriteString(`<!DOCTYPE html><html lang="en" class="files-page"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Files · `)
 	b.WriteString(Esc(ShortPath(cwd)))
 	b.WriteString(`</title>
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap');
-  :root { --bg: #0c0c0e; --surface: #16161a; --surface2: #1e1e24; --border: #2a2a32; --text: #e2e0d8; --text2: #8b8a85; --accent: #d4a053; --tool: #5b8a72; --tool-bg: #1a2e24; --error: #c45c5c; --blue: #5b7a9e; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { color: var(--text); }
-
-  .files-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 10; }
-  .files-header a { font-size: 14px; }
-  .files-header h1 { font-size: 14px; font-weight: 600; color: var(--text); }
-
-  .files-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 41px; z-index: 9; }
-  .files-tab { padding: 8px 20px; font-size: 13px; font-weight: 500; color: var(--text2); text-decoration: none; border-bottom: 2px solid transparent; }
-  .files-tab:hover { color: var(--text); }
-  .files-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-  .files-content { padding: 0; }
-  .files-empty { padding: 40px; text-align: center; color: var(--text2); font-size: 14px; }
-
-  /* Changes tab */
-  .stage-bar { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
-  .stage-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text2); padding: 4px 12px; font-size: 11px; font-family: 'DM Sans', sans-serif; border-radius: 4px; cursor: pointer; }
-  .stage-btn:hover { color: var(--text); border-color: var(--text2); }
-
-  .file-group-header { padding: 10px 16px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); }
-  .file-row { display: flex; align-items: center; gap: 8px; padding: 4px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
-  .file-row:hover { background: var(--surface2); }
-  .file-status { width: 18px; text-align: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
-  .file-status-M { color: var(--accent); }
-  .file-status-A { color: #589819; }
-  .file-status-D { color: var(--error); }
-  .file-status-R { color: var(--blue); }
-  .file-status-U { color: var(--text2); }
-  .file-name { flex: 1; }
-  .file-name a { color: var(--blue); text-decoration: none; }
-  .file-name a:hover { color: var(--text); }
-  .file-action .stage-btn { font-size: 10px; padding: 2px 8px; }
-
-  /* Diff view */
-  .diff-nav { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
-  .diff-nav-back { color: var(--blue); font-size: 12px; }
-  .diff-file-header { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); padding: 12px 16px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
-  .diff-file-header .stage-btn { font-size: 10px; padding: 2px 8px; }
-  .diff-body { padding: 0 16px 24px; }
-  .diff-body pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
-
-  /* Browse tab */
-  .browse-crumbs { padding: 10px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; border-bottom: 1px solid var(--border); background: var(--surface2); }
-  .browse-crumbs a { color: var(--blue); }
-  .browse-crumbs .crumb-sep { color: var(--text2); margin: 0 4px; }
-  .browse-crumbs .crumb-current { color: var(--text); }
-
-  .browse-entry { display: block; padding: 4px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--blue); text-decoration: none; }
-  .browse-entry:hover { background: var(--surface2); color: var(--text); }
-  .browse-entry .entry-icon { color: var(--text2); margin-right: 6px; display: inline-block; width: 16px; text-align: center; }
-
-  .file-view { padding: 0 16px 24px; }
-  .file-view pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
-  .file-view-header { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); padding: 12px 16px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
-
-  /* Search tab */
-  .search-bar { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); display: flex; gap: 8px; }
-  .search-input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; border-radius: 4px; outline: none; }
-  .search-input:focus { border-color: var(--accent); }
-  .search-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text2); padding: 6px 16px; font-size: 12px; font-family: 'DM Sans', sans-serif; border-radius: 4px; cursor: pointer; }
-  .search-btn:hover { color: var(--text); border-color: var(--text2); }
-
-  .search-file-header { padding: 10px 16px 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; }
-  .search-file-header a { color: var(--blue); }
-  .search-line { display: flex; gap: 8px; padding: 2px 16px 2px 32px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
-  .search-line:hover { background: var(--surface2); }
-  .search-line a { color: var(--text2); text-decoration: none; min-width: 40px; text-align: right; }
-  .search-line a:hover { color: var(--accent); }
-  .search-line .match-text { color: var(--text); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
-  .search-count { padding: 12px 16px; font-size: 12px; color: var(--text2); }
-
-  /* Commits tab */
-  .commit-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 16px; font-size: 12px; text-decoration: none; color: var(--text); }
-  .commit-row:hover { background: var(--surface2); }
-  .commit-hash { font-family: 'JetBrains Mono', monospace; font-size: 11px; flex-shrink: 0; color: var(--accent); }
-  .commit-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .commit-time { color: var(--text2); font-size: 11px; flex-shrink: 0; min-width: 80px; text-align: right; }
-  .commit-detail-header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
-  .commit-detail-subject { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-  .commit-detail-meta { font-size: 11px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
-  .commit-detail-files { padding: 8px 16px; border-bottom: 1px solid var(--border); }
-  .commit-detail-files a { display: block; padding: 2px 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--blue); }
-  .commit-detail-files a:hover { color: var(--text); }
-  .diff-section { padding: 0 16px 24px; }
-  .diff-section pre { border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-x: auto; }
-</style></head><body>
+<link rel="stylesheet" href="/assets/styles.css">
+<script src="/assets/htmx-2.0.4.min.js"></script>
+</head><body>
 `)
 
 	// Header
@@ -342,7 +252,7 @@ func renderInlineDiff(b *strings.Builder, sessionID, path, badge, diff, mode str
 	b.WriteString(`</div>`)
 	if diff != "" {
 		b.WriteString(`<div class="diff-body">`)
-		b.WriteString(highlightDiff(diff))
+		b.WriteString(RenderDiffTableFromUnified(diff, sessionID, true))
 		b.WriteString(`</div>`)
 	}
 	b.WriteString(`</div>`)
@@ -621,7 +531,7 @@ func renderCommitDetail(t *GitTrace, sessionID, cwd, hash string) string {
 		fmt.Fprintf(&b, `<div class="diff-section" id="%s">`, Esc(name))
 		fmt.Fprintf(&b, `<div class="diff-file-header">%s</div>`, Esc(name))
 		b.WriteString(`<div class="diff-body">`)
-		b.WriteString(highlightDiff(chunk))
+		b.WriteString(RenderDiffTableFromUnified(chunk, "", false))
 		b.WriteString(`</div></div>`)
 	}
 

@@ -124,6 +124,7 @@ type Hub struct {
 	Sessions      *SessionManager
 	Tracker       *SessionTracker
 	Labels        *LabelStore
+	Reviews       *ReviewStore
 	mu            sync.RWMutex
 }
 
@@ -180,6 +181,7 @@ func NewHubWithDataDir(dataDir string) *Hub {
 		Sessions:      NewSessionManager(),
 		Tracker:       NewSessionTracker(dataDir),
 		Labels:        NewLabelStore(dataDir),
+		Reviews:       NewReviewStore(),
 	}
 }
 
@@ -335,7 +337,14 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			switch msg.PermTool {
 			case "Edit", "FileEdit":
 				if fp, old, new_, ok := editDiffFromInput(msg.PermInput); ok {
-					if diffHTML := RenderEditDiffHTML(fp, old, new_); diffHTML != "" {
+					if diffHTML := RenderEditDiffTable(fp, old, new_, msg.SessionID, true); diffHTML != "" {
+						parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", diffHTML))
+						upgraded = true
+					}
+				}
+			case "Write", "FileWrite":
+				if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
+					if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
 						parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", diffHTML))
 						upgraded = true
 					}
