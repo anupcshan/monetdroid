@@ -410,7 +410,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					} else {
 						output := b.Content.String()
 						if !isBoringResult(output) {
-							msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000)})
+							msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: output})
 						}
 					}
 				}

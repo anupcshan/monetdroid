@@ -2228,3 +2228,47 @@ func getEnv(key, fallback string) string {
 		t.Fatal("expected agent_progress events in session log")
 	}
 }
+
+func TestBashToolForeground(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "bash_foreground.jsonl", testMode())
+
+	// Create a file with >2000 chars so `cat` output exceeds the truncation limit.
+	var big strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&big, "line %03d: this is padding content to make the file large enough to exceed the two thousand char truncation limit\n", i)
+	}
+	f.WriteFile(containerWorkdir+"/bigfile.txt", big.String())
+
+	page := f.Page()
+
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput("Run `cat bigfile.txt` using the Bash tool. Do not use Read.")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for tool result and turn completion.
+	WaitForElement(t, page, ".tool-result-chip", 60*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Expand the tool result.
+	page.MustElement(".tool-result-chip summary").MustClick()
+	Screenshot(t, page, "bash_fg_result_expanded")
+
+	// Full output must be present — not truncated.
+	resultText := page.MustElement(".tool-result-full").MustText()
+	if !strings.Contains(resultText, "line 000") {
+		t.Fatalf("bash output missing first line (line 000)")
+	}
+	if !strings.Contains(resultText, "line 050") {
+		t.Fatalf("bash output missing middle line (line 050)")
+	}
+	if !strings.Contains(resultText, "line 099") {
+		t.Fatalf("bash output missing last line (line 099)")
+	}
+
+	// Scroll to the end of the result for a visible screenshot.
+	page.MustEval(`() => document.querySelector('.tool-result-full').scrollIntoView({block: 'end'})`)
+	Screenshot(t, page, "bash_fg_result_end")
+}

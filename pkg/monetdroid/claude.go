@@ -167,7 +167,7 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 					}
 					output := b.Content.String()
 					if !isBoringResult(output) {
-						s.BufferAgentEvent(pid, ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000), ParentToolUseID: pid})
+						s.BufferAgentEvent(pid, ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output, ParentToolUseID: pid})
 					}
 				}
 			}
@@ -182,7 +182,7 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				// Agent tool_results: buffer into the agent's detail view instead of main stream
 				if s.GetAgentStat(b.ToolUseID) != nil {
 					output := b.Content.String()
-					s.BufferAgentEvent(b.ToolUseID, ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000)})
+					s.BufferAgentEvent(b.ToolUseID, ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
 					continue
 				}
 
@@ -196,7 +196,7 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				}
 				output := b.Content.String()
 				if !isBoringResult(output) {
-					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: Truncate(output, 2000)})
+					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
 				}
 			}
 		}
