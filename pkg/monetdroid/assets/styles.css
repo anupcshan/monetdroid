@@ -1541,3 +1541,28 @@ html.files-page, html.files-page body { overflow: auto; height: auto; }
   .review-form { padding-left: 12px; }
   .review-comment { padding-left: 12px; }
 }
+
+/* KB pages */
+html.kb-page, html.kb-page body { overflow: auto; height: auto; }
+.kb-page body { font-family: var(--sans); }
+.kb-page a { color: var(--accent); text-decoration: none; }
+.kb-page a:hover { color: var(--text); }
+.kb-content { max-width: 720px; margin: 0 auto; padding: 24px 16px; font-size: 14px; line-height: 1.6; color: var(--text); }
+.kb-content h1, .kb-content h2, .kb-content h3, .kb-content h4, .kb-content h5, .kb-content h6 { margin: 20px 0 8px; font-weight: 600; color: var(--text); }
+.kb-content h1 { font-size: 22px; }
+.kb-content h2 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.kb-content h3 { font-size: 16px; }
+.kb-content h4, .kb-content h5, .kb-content h6 { font-size: 14px; }
+.kb-content p { margin: 8px 0; }
+.kb-content ul, .kb-content ol { margin: 8px 0; padding-left: 24px; }
+.kb-content li { margin: 4px 0; }
+.kb-content pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 8px 0; overflow-x: auto; font-family: var(--mono); font-size: 12px; }
+.kb-content code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 2px 5px; border-radius: 4px; }
+.kb-content pre code { background: none; padding: 0; }
+.kb-content a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent2); }
+.kb-content blockquote { border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--text2); }
+.kb-content hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.kb-content table { border-collapse: collapse; margin: 8px 0; font-size: 13px; width: 100%; }
+.kb-content th, .kb-content td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.kb-content th { background: var(--bg); font-weight: 600; }
+.kb-content input[type="checkbox"] { margin-right: 6px; }

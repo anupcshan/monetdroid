@@ -12,14 +12,20 @@ type KB struct {
 	Path string
 }
 
-func Resolve() (*KB, error) {
+func Resolve(dir ...string) (*KB, error) {
 	if p := os.Getenv("KB_PATH"); p != "" {
 		return &KB{Path: p}, nil
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("getwd: %w", err)
+	var cwd string
+	if len(dir) > 0 && dir[0] != "" {
+		cwd = dir[0]
+	} else {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("getwd: %w", err)
+		}
 	}
 
 	cmd := exec.Command("git", "rev-parse", "--git-common-dir")

@@ -74,6 +74,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/review/comment", hub.handleReviewComment)
 	mux.HandleFunc("/review/delete", hub.handleReviewDelete)
 	mux.HandleFunc("/review/send", hub.handleReviewSend)
+	mux.HandleFunc("/kb/", hub.handleKB)
 	return mux
 }
 

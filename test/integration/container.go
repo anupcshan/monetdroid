@@ -102,6 +102,32 @@ func (f *ContainerFixture) DockerExec(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// KB runs a kb CLI command inside the container with the given working directory.
+func (f *ContainerFixture) KB(cwd string, args ...string) string {
+	f.T.Helper()
+	cmdArgs := []string{"exec", "-e", "KB_CLI_MODE=kb", "-w", cwd, f.containerID, "/test"}
+	cmdArgs = append(cmdArgs, args...)
+	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	if err != nil {
+		f.T.Fatalf("kb %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// KBWithStdin runs a kb CLI command with stdin piped.
+func (f *ContainerFixture) KBWithStdin(cwd, stdin string, args ...string) string {
+	f.T.Helper()
+	cmdArgs := []string{"exec", "-i", "-e", "KB_CLI_MODE=kb", "-w", cwd, f.containerID, "/test"}
+	cmdArgs = append(cmdArgs, args...)
+	cmd := exec.Command("docker", cmdArgs...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		f.T.Fatalf("kb %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // SetupWithContainer starts a docker container running the monetdroid server
 // (the test binary itself in server mode) with claude available as a subprocess,
 // and an API replayer intercepting Anthropic API calls.
@@ -212,6 +238,13 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 	}
 	if !ready {
 		t.Fatalf("server not ready after 10s (check container output above)")
+	}
+
+	if out, err := exec.Command("docker", "exec", containerID, "git", "config", "--global", "user.email", "test@test.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.email: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("docker", "exec", containerID, "git", "config", "--global", "user.name", "Test").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.name: %v\n%s", err, out)
 	}
 
 	// Launch headless browser

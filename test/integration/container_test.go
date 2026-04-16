@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anupcshan/monetdroid/pkg/kbadmin"
+	"github.com/anupcshan/monetdroid/pkg/kbcli"
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 	"github.com/go-rod/rod"
 )
@@ -27,6 +30,20 @@ func testMode() string {
 }
 
 func TestMain(m *testing.M) {
+	switch os.Getenv("KB_CLI_MODE") {
+	case "kb":
+		if err := kbcli.NewApp().Run(context.Background(), os.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "kbadmin":
+		if err := kbadmin.NewApp().Run(context.Background(), os.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
 		// Inside the container: run the monetdroid server.
 		os.MkdirAll(containerWorkdir, 0o755)
@@ -2271,4 +2288,46 @@ func TestBashToolForeground(t *testing.T) {
 	// Scroll to the end of the result for a visible screenshot.
 	page.MustEval(`() => document.querySelector('.tool-result-full').scrollIntoView({block: 'end'})`)
 	Screenshot(t, page, "bash_fg_result_end")
+}
+
+func TestKBWebView(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+
+	// KB needs a git repo (for git-common-dir resolution) with at least one commit (for git grep).
+	f.DockerExec("git", "init", containerWorkdir)
+	f.DockerExec("git", "-C", containerWorkdir, "commit", "--allow-empty", "-m", "init")
+	f.KBWithStdin(containerWorkdir, "# Test KB\n\n- [Details](details.md)\n- [External](https://example.com)\n", "write", "index.md")
+	f.KBWithStdin(containerWorkdir, "# Details Page\n\nSome details here.\n", "write", "details.md")
+
+	// Start a session and send a message so the cost bar populates (includes KB link).
+	page := f.Page()
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+	page.MustElement(`textarea[name="text"]`).MustInput("hello")
+	page.MustElement(`.send-btn`).MustClick()
+
+	kbLink := WaitForElement(t, page, `a[href*="/kb/"]`, 30*time.Second)
+	kbLink.MustClick()
+	page.MustWaitStable()
+
+	WaitForText(t, page, ".kb-content", "Test KB", 5*time.Second)
+	Screenshot(t, page, "kb_index")
+
+	// Click an internal link — should navigate within the KB.
+	detailsLink := WaitForElement(t, page, `.kb-content a[href*="details.md"]`, 5*time.Second)
+	detailsLink.MustClick()
+	page.MustWaitStable()
+
+	WaitForText(t, page, ".kb-content", "Details Page", 5*time.Second)
+	Screenshot(t, page, "kb_details")
+
+	// Go back to index and verify external link has target=_blank.
+	page.MustNavigateBack()
+	page.MustWaitStable()
+	extLink := WaitForElement(t, page, `.kb-content a[href="https://example.com"]`, 5*time.Second)
+	target, err := extLink.Attribute("target")
+	if err != nil || target == nil || *target != "_blank" {
+		t.Fatalf("external link should have target=_blank")
+	}
 }

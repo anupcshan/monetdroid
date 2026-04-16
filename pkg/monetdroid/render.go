@@ -619,6 +619,7 @@ func RenderCostBar(s *Session) string {
 		parts = append(parts, fmt.Sprintf("context %s", FmtK(c.ContextUsed)))
 	}
 	parts = append(parts, RenderDiffStat(sid, ds))
+	parts = append(parts, fmt.Sprintf(`<a href="/kb/?cwd=%s" class="diff-stat-link" style="color:var(--text2)">KB</a>`, Esc(s.GetCwd())))
 	return strings.Join(parts, " · ")
 }
 
