@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 
@@ -33,7 +34,7 @@ func (h *Hub) handleKB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rendered := renderKBMarkdown(content, cwd)
+	rendered := renderKBMarkdown(content, cwd, path)
 
 	title := path
 
@@ -44,7 +45,7 @@ func (h *Hub) handleKB(w http.ResponseWriter, r *http.Request) {
 var relLinkRe = regexp.MustCompile(`<a href="([^":#][^"]*\.md(?:#[^"]*)?)"`)
 var extLinkRe = regexp.MustCompile(`<a href="https?://`)
 
-func renderKBMarkdown(text, cwd string) string {
+func renderKBMarkdown(text, cwd, currentPath string) string {
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(text), &buf); err != nil {
 		return Esc(text)
@@ -55,10 +56,13 @@ func renderKBMarkdown(text, cwd string) string {
 		cwdParam = "?cwd=" + Esc(cwd)
 	}
 
+	dir := path.Dir(currentPath)
+
 	result := buf.String()
 	result = relLinkRe.ReplaceAllStringFunc(result, func(match string) string {
 		sub := relLinkRe.FindStringSubmatch(match)
-		return `<a href="/kb/` + sub[1] + cwdParam + `"`
+		resolved := path.Clean(path.Join(dir, sub[1]))
+		return `<a href="/kb/` + resolved + cwdParam + `"`
 	})
 	result = extLinkRe.ReplaceAllStringFunc(result, func(match string) string {
 		return strings.Replace(match, "<a ", `<a target="_blank" rel="noopener" `, 1)
