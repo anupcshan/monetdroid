@@ -5,7 +5,9 @@ go 1.26
 require (
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/go-rod/rod v0.116.2
+	github.com/urfave/cli/v3 v3.8.0
 	github.com/yuin/goldmark v1.7.16
+	golang.org/x/tools v0.42.0
 )
 
 require (
@@ -212,7 +214,6 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/tools v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
