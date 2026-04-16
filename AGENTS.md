@@ -1,3 +1,8 @@
+## Coding Conventions
+
+- **Zero custom JavaScript** — use HTMX attributes, SSE, and server-side rendering. Only add JS as a last resort.
+- **Never use `map[string]any` for JSON parsing** — always define typed structs, even minimal ones. Use custom `UnmarshalJSON` for polymorphic fields.
+
 ## KB (Knowledge Base)
 
 This project has a persistent knowledge base accessible via the `kb` CLI.
