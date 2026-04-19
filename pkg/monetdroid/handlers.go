@@ -382,6 +382,22 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.FormValue("session_id")
 	s := h.Sessions.Get(sessionID)
 
+	// /clear is handled client-side by the Claude CLI in stream-json mode
+	// but doesn't actually reset the conversation the LLM sees. Intercept
+	// it here: redirect to a fresh session in the same cwd.
+	if strings.TrimSpace(text) == "/clear" {
+		cwd := r.FormValue("cwd")
+		if s != nil {
+			cwd = s.GetCwd()
+		}
+		if cwd == "" {
+			w.WriteHeader(204)
+			return
+		}
+		w.Header().Set("HX-Redirect", "/?cwd="+url.QueryEscape(cwd))
+		return
+	}
+
 	if s == nil {
 		// New session: start process, wait for ClaudeID, create session
 		cwd := r.FormValue("cwd")

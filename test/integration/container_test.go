@@ -114,6 +114,75 @@ func TestCreateSession(t *testing.T) {
 	Screenshot(t, page, "session_created")
 }
 
+// TestClearCommand verifies that /clear redirects to a fresh session.
+// The Claude CLI's stream-json mode swallows /clear without actually
+// resetting the conversation, so monetdroid intercepts it server-side
+// and redirects to /?cwd=<cwd>.
+func TestClearCommand(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "clear_command.jsonl", testMode())
+	page := f.Page()
+
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	// Turn 1: ask an arithmetic question with a distinctive answer.
+	page.MustElement(`textarea[name="text"]`).MustInput("What is 347 + 219? Just give me the number, nothing else.")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	url1 := page.MustEval(`() => window.location.href`).String()
+	if !strings.Contains(url1, "session=") {
+		t.Fatalf("expected session= in URL after first turn, got: %s", url1)
+	}
+	sessionID1 := url1[strings.Index(url1, "session=")+len("session="):]
+	if i := strings.IndexAny(sessionID1, "&#"); i >= 0 {
+		sessionID1 = sessionID1[:i]
+	}
+	Screenshot(t, page, "clear_turn1")
+
+	// Turn 2: /clear should redirect to a fresh session at ?cwd=.
+	page.MustElement(`textarea[name="text"]`).MustInput("/clear")
+	page.MustElement(`.send-btn`).MustClick()
+	if err := page.Timeout(10 * time.Second).Wait(rod.Eval(
+		`() => window.location.search.includes('cwd=') && !window.location.search.includes('session=')`,
+	)); err != nil {
+		t.Fatalf("expected URL to become ?cwd=... after /clear: %v", err)
+	}
+	Screenshot(t, page, "clear_after_slash")
+
+	// Turn 3: fresh session — ask about the prior arithmetic.
+	page.MustElement(`textarea[name="text"]`).MustInput("What was the result of the last addition I asked about?")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+	Screenshot(t, page, "clear_turn3")
+
+	// Fresh session has no prior context, so the answer should NOT include 566.
+	msgs := page.MustElements(".msg-assistant")
+	if len(msgs) == 0 {
+		t.Fatalf("no assistant messages found")
+	}
+	lastReply := msgs[len(msgs)-1].MustText()
+	if strings.Contains(lastReply, "566") {
+		t.Fatalf("after /clear, assistant still remembered prior sum (566): %q", lastReply)
+	}
+
+	// The new session should have a different id than the pre-/clear one.
+	url3 := page.MustEval(`() => window.location.href`).String()
+	if !strings.Contains(url3, "session=") {
+		t.Fatalf("expected session= in URL after turn 3, got: %s", url3)
+	}
+	sessionID3 := url3[strings.Index(url3, "session=")+len("session="):]
+	if i := strings.IndexAny(sessionID3, "&#"); i >= 0 {
+		sessionID3 = sessionID3[:i]
+	}
+	if sessionID3 == sessionID1 {
+		t.Fatalf("session id did not change after /clear: %s", sessionID1)
+	}
+}
+
 func TestMultiTurn(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
