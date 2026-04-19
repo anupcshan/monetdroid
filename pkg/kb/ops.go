@@ -1,7 +1,6 @@
 package kb
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,19 +54,50 @@ func (kb *KB) Read(path string, offset, limit int) (string, error) {
 }
 
 type EditInput struct {
-	Old string `json:"old"`
-	New string `json:"new"`
+	Old string
+	New string
 }
 
+// ParseEditInput parses stdin in the format:
+//
+//	<separator>
+//	<old content>
+//	<separator>
+//	<new content>
+//
+// The first line is the separator, chosen by the caller to be any literal
+// string that does not appear on a line by itself within the content.
+// A single trailing newline (the heredoc artifact) is stripped from stdin
+// before parsing.
 func ParseEditInput(data []byte) (EditInput, error) {
-	var input EditInput
-	if err := json.Unmarshal(data, &input); err != nil {
-		return input, fmt.Errorf("parsing JSON: %w", err)
+	s := strings.TrimSuffix(string(data), "\n")
+	if s == "" {
+		return EditInput{}, fmt.Errorf("empty input")
 	}
-	if input.Old == "" {
-		return input, fmt.Errorf("\"old\" field is required")
+
+	lines := strings.Split(s, "\n")
+	sep := lines[0]
+	if sep == "" {
+		return EditInput{}, fmt.Errorf("first line must be a non-empty separator")
 	}
-	return input, nil
+
+	secondIdx := -1
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == sep {
+			secondIdx = i
+			break
+		}
+	}
+	if secondIdx == -1 {
+		return EditInput{}, fmt.Errorf("separator %q not found after first line", sep)
+	}
+
+	old := strings.Join(lines[1:secondIdx], "\n")
+	if old == "" {
+		return EditInput{}, fmt.Errorf("old content is empty")
+	}
+	newContent := strings.Join(lines[secondIdx+1:], "\n")
+	return EditInput{Old: old, New: newContent}, nil
 }
 
 func (kb *KB) Edit(path string, input EditInput, all bool) error {

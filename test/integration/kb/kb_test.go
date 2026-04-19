@@ -52,7 +52,12 @@ func TestEdit(t *testing.T) {
 
 	f.KBWithStdin("Hello World\n", "write", "test.md")
 
-	_, err := f.KBWithStdin(`{"old": "World", "new": "KB"}`, "edit", "test.md")
+	stdin := `|
+World
+|
+KB
+`
+	_, err := f.KBWithStdin(stdin, "edit", "test.md")
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
@@ -71,7 +76,12 @@ func TestEditAll(t *testing.T) {
 
 	f.KBWithStdin("foo bar foo baz foo\n", "write", "test.md")
 
-	_, err := f.KBWithStdin(`{"old": "foo", "new": "qux"}`, "edit", "--all", "test.md")
+	stdin := `|
+foo
+|
+qux
+`
+	_, err := f.KBWithStdin(stdin, "edit", "--all", "test.md")
 	if err != nil {
 		t.Fatalf("edit --all: %v", err)
 	}
@@ -90,9 +100,73 @@ func TestEditNotUnique(t *testing.T) {
 
 	f.KBWithStdin("foo bar foo\n", "write", "test.md")
 
-	_, err := f.KBWithStdin(`{"old": "foo", "new": "qux"}`, "edit", "test.md")
+	stdin := `|
+foo
+|
+qux
+`
+	_, err := f.KBWithStdin(stdin, "edit", "test.md")
 	if err == nil {
 		t.Fatal("expected error for non-unique edit")
+	}
+}
+
+func TestEditMultiline(t *testing.T) {
+	f := Setup(t)
+
+	original := `alpha
+beta
+gamma
+delta
+`
+	f.KBWithStdin(original, "write", "test.md")
+
+	stdin := `===
+beta
+gamma
+===
+BETA
+GAMMA
+`
+	_, err := f.KBWithStdin(stdin, "edit", "test.md")
+	if err != nil {
+		t.Fatalf("edit multiline: %v", err)
+	}
+
+	out, err := f.KB("read", "test.md")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	expected := `alpha
+BETA
+GAMMA
+delta`
+	if out != expected {
+		t.Fatalf("unexpected content: %q", out)
+	}
+}
+
+func TestEditWithSpecialChars(t *testing.T) {
+	f := Setup(t)
+
+	f.KBWithStdin(`{"name": "old", "value": 1}`+"\n", "write", "test.md")
+
+	stdin := `---
+{"name": "old", "value": 1}
+---
+{"name": "new", "value": 2}
+`
+	_, err := f.KBWithStdin(stdin, "edit", "test.md")
+	if err != nil {
+		t.Fatalf("edit special chars: %v", err)
+	}
+
+	out, err := f.KB("read", "test.md")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if out != `{"name": "new", "value": 2}` {
+		t.Fatalf("unexpected content: %q", out)
 	}
 }
 

@@ -15,28 +15,83 @@ func NewApp() *cli.Command {
 	return &cli.Command{
 		Name:  "kb",
 		Usage: "Per-repo knowledge base for Claude sessions",
+		Description: `A persistent, per-repo store shared across Claude sessions working in this
+repo. Holds plain-text files. No tags, metadata, or structured fields.
+Subdirectories are supported and created automatically on write.
+
+EXAMPLES:
+  List files:                    kb list
+  Read a file:                   kb read foo.md
+  Read a line range:             kb read foo.md --offset 10 --limit 20
+  Search contents:               kb search "some phrase"
+  Write (creates parent dirs):   echo 'content' | kb write topic/foo.md
+  Append (content on stdin):     echo 'more' | kb append topic/foo.md
+  Delete a file:                 kb rm topic/foo.md
+  Move/rename:                   kb mv topic/foo.md topic/bar.md
+
+  Edit a file. First stdin line is the separator (any string not appearing
+  on a line by itself in your content); old and new content follow:
+
+      kb edit topic/foo.md <<'EOF'
+      ===
+      func Foo() {
+          return 1
+      }
+      ===
+      func Foo() {
+          return 2
+      }
+      EOF
+`,
 		Commands: []*cli.Command{
 			{
 				Name:  "list",
-				Usage: "List files in this repo's KB",
+				Usage: "List all tracked files (no filter; use 'search' to find content)",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdList(cmd)
 				},
 			},
 			{
-				Name:  "read",
-				Usage: "Read a file",
+				Name:      "read",
+				Usage:     "Read a file (optionally --offset N --limit M for a line range)",
+				ArgsUsage: "<path>",
 				Flags: []cli.Flag{
-					&cli.IntFlag{Name: "offset", Usage: "Starting line number"},
-					&cli.IntFlag{Name: "limit", Usage: "Number of lines to read"},
+					&cli.IntFlag{Name: "offset", Usage: "Starting line number, 0-indexed"},
+					&cli.IntFlag{Name: "limit", Usage: "Number of lines to read, 0 = to end"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdRead(cmd)
 				},
 			},
 			{
-				Name:  "edit",
-				Usage: `Edit a file (stdin: {"old": "...", "new": "..."}, --all to replace all occurrences)`,
+				Name:      "edit",
+				Usage:     "Edit a file (stdin: separator, old, separator, new; fails if old is not unique unless --all)",
+				ArgsUsage: "<path>",
+				Description: `Replaces a literal string in a file. Input on stdin:
+
+    <separator>
+    <old content>
+    <separator>
+    <new content>
+
+The first line is the separator, chosen by the caller to be any literal
+string that does not appear on a line by itself in your content. No
+escaping is needed. A single trailing newline from the heredoc is
+stripped automatically.
+
+By default the edit fails if <old content> does not appear exactly once
+in the file. Pass --all to replace every occurrence.
+
+Example:
+
+    kb edit topic/foo.md <<'EOF'
+    ===
+    old text
+    possibly spanning lines
+    ===
+    replacement text
+    EOF
+`,
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "all", Usage: "Replace all occurrences"},
 				},
@@ -45,36 +100,41 @@ func NewApp() *cli.Command {
 				},
 			},
 			{
-				Name:  "write",
-				Usage: "Write a file (content on stdin, creates/overwrites)",
+				Name:      "write",
+				Usage:     "Write a file (content on stdin; creates parent dirs, overwrites)",
+				ArgsUsage: "<path>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdWrite(cmd)
 				},
 			},
 			{
-				Name:  "append",
-				Usage: "Append to a file (content on stdin, creates if needed)",
+				Name:      "append",
+				Usage:     "Append to a file (content on stdin; creates file and parent dirs if needed)",
+				ArgsUsage: "<path>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdAppend(cmd)
 				},
 			},
 			{
-				Name:  "rm",
-				Usage: "Delete a file",
+				Name:      "rm",
+				Usage:     "Delete a file",
+				ArgsUsage: "<path>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdRemove(cmd)
 				},
 			},
 			{
-				Name:  "mv",
-				Usage: "Move/rename a file",
+				Name:      "mv",
+				Usage:     "Move/rename a file",
+				ArgsUsage: "<old> <new>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdMove(cmd)
 				},
 			},
 			{
-				Name:  "search",
-				Usage: "Search across KB",
+				Name:      "search",
+				Usage:     "Search file contents with git grep (basic regex; filenames not matched)",
+				ArgsUsage: "<query>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdSearch(cmd)
 				},
