@@ -89,13 +89,17 @@ func TestMain(m *testing.M) {
 		}
 		return
 	}
-	flag.Set("test.parallel", fmt.Sprintf("%d", runtime.NumCPU()/2))
+	p := runtime.NumCPU() / 2
+	if p > 2 {
+		p = 2
+	}
+	flag.Set("test.parallel", fmt.Sprintf("%d", p))
 	os.Exit(m.Run())
 }
 
 func TestEmptyState(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 	page := f.Page()
 
 	WaitForText(t, page, ".empty-state", "No active workstreams", 5*time.Second)
@@ -104,7 +108,7 @@ func TestEmptyState(t *testing.T) {
 
 func TestCreateSession(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 	page := f.Page()
 
 	CreatePlainSession(t, page, containerWorkdir)
@@ -185,7 +189,7 @@ func TestClearCommand(t *testing.T) {
 
 func TestMultiTurn(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "multi_turn.jsonl", testMode())
 
 	// Write files for claude to explore
 	f.WriteFile(containerWorkdir+"/main.go", `package main
@@ -685,7 +689,7 @@ func TestDrawer(t *testing.T) {
 
 func TestCloseSession(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "drawer.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "drawer.jsonl", testMode())
 
 	// Create subdirectories via WriteFile (it creates parent dirs).
 	f.WriteFile(containerWorkdir+"/project-alpha/.keep", "")
@@ -933,7 +937,7 @@ func initSecondRepo(t *testing.T, f *ContainerFixture) {
 
 func TestDrawerNewWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "drawer.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "drawer.jsonl", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
 
@@ -1269,7 +1273,7 @@ func main() {
 
 func TestRebaseWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 
 	// Set up git repo with a main branch.
 	initGitRepo(t, f, containerWorkdir)
@@ -1336,7 +1340,7 @@ func TestRebaseWorkstream(t *testing.T) {
 
 func TestPullMain(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 
 	// Set up git repo with a remote.
 	initGitRepo(t, f, containerWorkdir)
@@ -1399,7 +1403,7 @@ func TestPullMain(t *testing.T) {
 
 func TestMassSync(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
 	initSecondRepo(t, f)
@@ -1479,7 +1483,7 @@ func TestMassSync(t *testing.T) {
 
 func TestArchiveWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 
 	// Set up git repo with a workstream.
 	initGitRepo(t, f, containerWorkdir)
@@ -1534,7 +1538,7 @@ func TestArchiveWorkstream(t *testing.T) {
 
 func TestPruneWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 
 	// Set up git repo with a workstream.
 	initGitRepo(t, f, containerWorkdir)
@@ -1626,7 +1630,7 @@ func TestPruneWorkstream(t *testing.T) {
 
 func TestBranchTree(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
 	initSecondRepo(t, f)
@@ -2221,7 +2225,7 @@ func getEnv(key, fallback string) string {
 
 	// Send a prompt that explicitly requests Agent tool usage for parallel investigation
 	page.MustElement(`textarea[name="text"]`).MustInput(
-		"Use agents to investigate three things in parallel: 1) Find all SQL queries and check for injection vulnerabilities, 2) Search for hardcoded secrets or credentials, 3) Check HTTP handlers for input validation issues. Launch three separate agents and report combined findings.")
+		"Launch three parallel agents (Read/Grep/Glob only, no Bash) to investigate: 1) SQL injection vulnerabilities, 2) hardcoded secrets or credentials, 3) HTTP handler input validation. Report combined findings.")
 	page.MustElement(`.send-btn`).MustClick()
 
 	// Wait for first tool chip (agent is working)
@@ -2232,8 +2236,8 @@ func getEnv(key, fallback string) string {
 	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
 	Screenshot(t, page, "agent_first_text")
 
-	// Wait for turn to complete (generous timeout — agent usage involves multiple API calls)
-	WaitForElement(t, page, "#stop-btn:empty", 300*time.Second)
+	// Wait for turn to complete
+	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
 	Screenshot(t, page, "agent_complete")
 
 	// Scroll to top and click open the first Agent chip to inspect its detail
@@ -2361,7 +2365,7 @@ func TestBashToolForeground(t *testing.T) {
 
 func TestKBWebView(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
 
 	// KB needs a git repo (for git-common-dir resolution) with at least one commit (for git grep).
 	f.DockerExec("git", "init", containerWorkdir)

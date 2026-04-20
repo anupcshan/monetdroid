@@ -31,6 +31,22 @@ const containerTimeout = 300 // seconds
 var buildOnce sync.Once
 var buildErr error
 
+var (
+	cassetteClaimsMu sync.Mutex
+	cassetteClaims   = map[string]string{} // cassette filename → owning test name
+)
+
+// SetupWithSharedCassette is for tests that share a cassette owned by another
+// test. In record mode, the test skips so the owner's recording isn't
+// clobbered. In replay mode, it behaves identically to SetupWithContainer.
+func SetupWithSharedCassette(t *testing.T, cassetteName, mode string) *ContainerFixture {
+	t.Helper()
+	if mode == "record" {
+		t.Skipf("cassette %s is owned by another test; skipping during record", cassetteName)
+	}
+	return SetupWithContainer(t, cassetteName, mode)
+}
+
 // buildDockerImage builds the docker image once per test run.
 func buildDockerImage(t *testing.T) {
 	t.Helper()
@@ -154,6 +170,19 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		if _, err := os.Stat(cassettePath); err != nil {
 			t.Fatalf("cassette %s not found — record it first with -record flag", cassetteName)
 		}
+	}
+
+	// In record mode, guard against two tests claiming the same cassette in
+	// one run — otherwise the later test's os.Create overwrites the earlier
+	// test's recording. Non-owners should use SetupWithSharedCassette.
+	if mode == "record" {
+		cassetteClaimsMu.Lock()
+		if owner, taken := cassetteClaims[cassetteName]; taken && owner != t.Name() {
+			cassetteClaimsMu.Unlock()
+			t.Fatalf("cassette %s already claimed by %s in this run; use SetupWithSharedCassette if this test doesn't own the recording", cassetteName, owner)
+		}
+		cassetteClaims[cassetteName] = t.Name()
+		cassetteClaimsMu.Unlock()
 	}
 
 	// Start replayer on the host
