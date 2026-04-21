@@ -270,7 +270,7 @@ func TestOverwriteReviewComment(t *testing.T) {
 
 	// Ask Claude to overwrite the file.
 	page.MustElement(`textarea[name="text"]`).MustInput(
-		"Overwrite calculator.go to add a Modulo method and godoc comments on all exported types and methods. Rewrite the entire file using the Write tool.")
+		"Rewrite calculator.go using the Write tool. The new file must: (1) keep the existing Add, Subtract, Multiply, Divide methods unchanged, (2) add a Modulo(a, b int) int method on Calculator that returns a % b, (3) add a one-line godoc comment on each exported type and method.")
 	page.MustElement(`.send-btn`).MustClick()
 
 	// Wait for permission with diff. An overwrite of an existing file should
@@ -292,7 +292,7 @@ func TestOverwriteReviewComment(t *testing.T) {
 
 	// Fill review comment.
 	WaitForElement(t, page, ".review-form", 5*time.Second)
-	page.MustElement(".review-textarea").MustInput("The Modulo method should also check for division by zero")
+	page.MustElement(".review-textarea").MustInput("Change the Modulo signature to return (int, error) and return an error on division by zero, matching the Divide pattern.")
 	page.MustElement(".review-submit").MustClick()
 
 	// Verify comment chip and review bar.
@@ -317,13 +317,26 @@ func TestOverwriteReviewComment(t *testing.T) {
 	}
 	Screenshot(t, page, "overwrite_review_sent")
 
-	// Wait for Claude's response.
-	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+	// Claude acts on the review (adds a division-by-zero check to Modulo).
+	// Accept Edits so all follow-up permissions are auto-approved.
+	acceptBtn, err := page.Timeout(120*time.Second).ElementR(".perm-allow", "Accept Edits")
+	if err != nil {
+		Screenshot(t, page, "overwrite_review_followup_fail")
+		t.Fatalf("follow-up permission never appeared: %v", err)
+	}
+	acceptBtn.MustClick()
+
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 	Screenshot(t, page, "overwrite_review_response")
 
-	// Verify the file was overwritten.
+	// Verify the Write in turn 1 actually reached disk.
 	content := f.ReadFile(containerWorkdir + "/calculator.go")
 	if !strings.Contains(content, "Modulo") {
-		t.Fatalf("calculator.go should contain Modulo after overwrite, got: %.200s", content)
+		t.Fatalf("Write did not reach disk: %.500s", content)
+	}
+	// Verify the follow-up Edit added the division-by-zero check.
+	// Divide already had one in the starting file, so count should be >= 2.
+	if strings.Count(content, "b == 0") < 2 {
+		t.Fatalf("Modulo should have division-by-zero check after review, got: %.500s", content)
 	}
 }

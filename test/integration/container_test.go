@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,27 @@ func testMode() string {
 		return "record"
 	}
 	return "replay"
+}
+
+// ensureDummyCredentials writes a dummy Claude subscription credential at the
+// well-known path if nothing is already there. Record mode bind-mounts the
+// real credentials file before the container starts, so this is a no-op then.
+// In replay mode the file is absent and this provides it, keeping the CLI on
+// the subscription code path (user:mcp_servers scope → same tools array as
+// record mode) so recorded and live request bodies match.
+func ensureDummyCredentials() {
+	const path = "/root/.claude/.credentials.json"
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		log.Fatalf("ensureDummyCredentials mkdir: %v", err)
+	}
+	expiresAt := time.Now().Add(7 * 24 * time.Hour).UnixMilli()
+	creds := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"dummy-replay-access-token","refreshToken":"dummy-replay-refresh-token","expiresAt":%d,"scopes":["user:file_upload","user:inference","user:mcp_servers","user:profile","user:sessions:claude_code"],"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}`, expiresAt)
+	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
+		log.Fatalf("ensureDummyCredentials write: %v", err)
+	}
 }
 
 func TestMain(m *testing.M) {
@@ -47,6 +69,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
 		// Inside the container: run the monetdroid server.
 		os.MkdirAll(containerWorkdir, 0o755)
+		ensureDummyCredentials()
 		hub := monetdroid.NewHub()
 		mux := monetdroid.RegisterRoutes(hub)
 
@@ -230,7 +253,7 @@ func Add(a, b int) int {
 	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
 
 	// Second turn: follow-up question referencing the first turn's context
-	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go use the Add function from util.go? Show me how")
+	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go call the Add function from util.go? Just explain — don't modify any files.")
 	page.MustElement(`.send-btn`).MustClick()
 
 	// Wait for second user message to render
@@ -551,7 +574,7 @@ func Add(a, b int) int {
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
 	// Second turn
-	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go use the Add function from util.go? Show me how")
+	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go call the Add function from util.go? Just explain — don't modify any files.")
 	page.MustElement(`.send-btn`).MustClick()
 	if _, err := page.Timeout(120*time.Second).ElementR(".msg-assistant", "Add"); err != nil {
 		t.Fatalf("second assistant response never appeared: %v", err)
@@ -937,7 +960,7 @@ func initSecondRepo(t *testing.T, f *ContainerFixture) {
 
 func TestDrawerNewWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "drawer.jsonl", testMode())
+	f := SetupWithContainer(t, "drawer_new_workstream.jsonl", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
 
@@ -1222,7 +1245,7 @@ func main() {
 	// Send a prompt that triggers plan mode. Tell Claude not to implement
 	// so the turn ends cleanly after ExitPlanMode without further permissions.
 	page.MustElement(`textarea[name="text"]`).MustInput(
-		"I want to add a fibonacci function to main.go. Enter plan mode to plan this, then exit plan mode with your plan. Do not implement without explicit instruction.")
+		"I want to add a fibonacci function to main.go. Enter plan mode, make a brief plan, then call ExitPlanMode with it. Do not ask any questions. Do not use AskUserQuestion. Do not implement without explicit instruction.")
 	page.MustElement(`.send-btn`).MustClick()
 
 	WaitForText(t, page, ".msg-user", "fibonacci", 30*time.Second)
@@ -2206,14 +2229,28 @@ func getEnv(key, fallback string) string {
 `,
 	}
 
-	for path, content := range files {
-		f.WriteFile(containerWorkdir+path, content)
+	// Write files in a deterministic order — record and replay need identical
+	// filesystem directory entry layouts so Glob inside the subagents returns
+	// the same list. Go map iteration is randomized, which leaks directly
+	// into the filesystem's readdir order.
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		f.WriteFile(containerWorkdir+path, files[path])
 	}
 
-	// Init git repo so claude has full context
-	f.DockerExec("git", "init", containerWorkdir)
-	f.DockerExec("git", "-C", containerWorkdir, "add", ".")
-	f.DockerExec("git", "-C", containerWorkdir, "commit", "-m", "initial")
+	// Pin mtimes so any ls-la-style output the model solicits shows the same
+	// timestamps between record and replay. Subagents in this test sometimes
+	// reach for Bash's `ls -la` despite the "no Bash" prompt instruction.
+	f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+
+	// No git init — this test's subagents scan source files; a .git
+	// directory adds non-deterministic Glob results (object creation order
+	// varies across runs even with a pinned commit SHA) without contributing
+	// anything the test's assertions depend on.
 
 	page := f.Page()
 
@@ -2365,7 +2402,7 @@ func TestBashToolForeground(t *testing.T) {
 
 func TestKBWebView(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithContainer(t, "kb_web_view.jsonl", testMode())
 
 	// KB needs a git repo (for git-common-dir resolution) with at least one commit (for git grep).
 	f.DockerExec("git", "init", containerWorkdir)

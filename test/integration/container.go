@@ -204,6 +204,9 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		"-e", "MONETDROID_IN_CONTAINER=1",
 		"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
 		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// Pin the model so record and replay send identical request bodies
+		// regardless of the auth type the Claude CLI sees.
+		"-e", "ANTHROPIC_MODEL=claude-opus-4-7",
 	}
 
 	if mode == "record" {
@@ -216,9 +219,10 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		} else {
 			t.Logf("warning: credentials file %s not found, recording may fail", credsFile)
 		}
-	} else {
-		dockerArgs = append(dockerArgs, "-e", "ANTHROPIC_API_KEY=dummy-replay-key")
 	}
+	// Replay mode: no credentials are mounted; the test binary's TestMain
+	// writes a dummy subscription credential inside the container before the
+	// server starts (see container_test.go).
 
 	dockerArgs = append(dockerArgs, dockerImage,
 		"timeout", fmt.Sprintf("%d", containerTimeout), "/test",
