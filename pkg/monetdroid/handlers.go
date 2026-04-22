@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1160,8 +1161,14 @@ func (h *Hub) renderLanding() string {
 	t := NewGitTrace("landing")
 	defer t.Log()
 	var landingHTML string
-	for _, panel := range AllWorkstreams(t) {
-		landingHTML += RenderWorkstreamStatus(panel)
+	panels := AllWorkstreams(t)
+	names := make([]string, 0, len(panels))
+	for name := range panels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		landingHTML += RenderWorkstreamStatus(panels[name])
 	}
 	if sessHTML := RenderTrackedSessions(t, h.Tracker.List()); sessHTML != "" {
 		landingHTML += `<div class="queue-header">Sessions</div>` + sessHTML
@@ -1179,8 +1186,13 @@ func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, RenderBranchList(panel))
 		return
 	}
-	for _, panel := range panels {
-		fmt.Fprint(w, RenderBranchList(panel))
+	names := make([]string, 0, len(panels))
+	for name := range panels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprint(w, RenderBranchList(panels[name]))
 	}
 }
 
