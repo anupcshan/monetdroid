@@ -9,3 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN curl -fSL "$GCS_BUCKET/$CLAUDE_VERSION/linux-x64/claude" -o /usr/local/bin/claude \
     && chmod +x /usr/local/bin/claude
+
+RUN printf '#!/bin/sh\nexec env KB_CLI_MODE=kb /test "$@"\n' > /usr/local/bin/kb \
+    && printf '#!/bin/sh\nexec env KB_CLI_MODE=kbadmin /test "$@"\n' > /usr/local/bin/kbadmin \
+    && chmod +x /usr/local/bin/kb /usr/local/bin/kbadmin

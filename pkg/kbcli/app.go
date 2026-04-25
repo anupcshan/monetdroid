@@ -24,10 +24,21 @@ EXAMPLES:
   Read a file:                   kb read foo.md
   Read a line range:             kb read foo.md --offset 10 --limit 20
   Search contents:               kb search "some phrase"
-  Write (creates parent dirs):   echo 'content' | kb write topic/foo.md
-  Append (content on stdin):     echo 'more' | kb append topic/foo.md
   Delete a file:                 kb rm topic/foo.md
   Move/rename:                   kb mv topic/foo.md topic/bar.md
+
+  Write (creates parent dirs). Content on stdin via heredoc:
+
+      kb write topic/foo.md <<'EOF'
+      first line
+      second line
+      EOF
+
+  Append (creates file if missing). Content on stdin via heredoc:
+
+      kb append topic/foo.md <<'EOF'
+      another line
+      EOF
 
   Edit a file. First stdin line is the separator (any string not appearing
   on a line by itself in your content); old and new content follow:

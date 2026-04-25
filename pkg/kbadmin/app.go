@@ -13,7 +13,27 @@ import (
 
 const installSnippet = "## KB (Knowledge Base)\n\n" +
 	"This project has a persistent knowledge base accessible via the `kb` CLI.\n" +
-	"Run `kb --help` for usage.\n"
+	"Run `kb --help` for usage.\n" +
+	"\n" +
+	"### When to use it\n" +
+	"\n" +
+	"- **Resuming work.** If the user refers to a project by name, first\n" +
+	"  `kb search` or `kb list` to find an existing entry under\n" +
+	"  `projects/<slug>.md`, then `kb read` it to recover context before\n" +
+	"  doing anything else.\n" +
+	"- **Starting new work.** When the user asks you to plan or build\n" +
+	"  something new, create `projects/<slug>.md` with a short plan and\n" +
+	"  current status. Checkpoint meaningful progress with `kb append`\n" +
+	"  or `kb edit` (enough detail that a future session can resume).\n" +
+	"\n" +
+	"### Conventions\n" +
+	"\n" +
+	"- One file per project at `projects/<slug>.md`.\n" +
+	"- Entries should include a *Status* section listing what's done and\n" +
+	"  what's next, so \"resume\" calls can pick up where work left off.\n" +
+	"- Use kb to record project plans and progress. Do not use Claude\n" +
+	"  Code's built-in plan mode (EnterPlanMode / ExitPlanMode) for\n" +
+	"  project tracking; write the plan directly to `projects/<slug>.md`.\n"
 
 const includeLine = "@kb.md"
 
