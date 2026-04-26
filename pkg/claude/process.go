@@ -116,7 +116,18 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 
 	cmd := exec.Command(binCmd[0], args...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+	cmd.Env = append(os.Environ(),
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// Tasks are on by default in interactive mode; we run Claude with -p
+		// (non-interactive), so we need this opt-in to keep them.
+		"CLAUDE_CODE_ENABLE_TASKS=1",
+		// Strip the built-in git status snapshot and commit/PR workflow
+		// instructions from the system prompt. The snapshot is captured once
+		// at process start, so it goes stale the moment anything changes git
+		// state outside Claude (branch switch, shell edits). Claude can run
+		// `git` directly when it needs current state.
+		"CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1",
+	)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

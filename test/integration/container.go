@@ -187,6 +187,9 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 
 	// Start replayer on the host
 	upstream := "https://api.anthropic.com"
+	if envAnthropicBase := os.Getenv("ANTHROPIC_BASE_URL"); envAnthropicBase != "" {
+		upstream = envAnthropicBase
+	}
 	replayer := NewReplayer(t, cassettePath, mode, upstream)
 	replayerURL := replayer.Start()
 
