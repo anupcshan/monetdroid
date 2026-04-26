@@ -1547,7 +1547,7 @@ html.kb-page, html.kb-page body { overflow: auto; height: auto; }
 .kb-page body { font-family: var(--sans); }
 .kb-page a { color: var(--accent); text-decoration: none; }
 .kb-page a:hover { color: var(--text); }
-.kb-content { max-width: 720px; margin: 0 auto; padding: 24px 16px; font-size: 14px; line-height: 1.6; color: var(--text); }
+.kb-content { padding: 24px 16px; font-size: 14px; line-height: 1.6; color: var(--text); }
 .kb-content h1, .kb-content h2, .kb-content h3, .kb-content h4, .kb-content h5, .kb-content h6 { margin: 20px 0 8px; font-weight: 600; color: var(--text); }
 .kb-content h1 { font-size: 22px; }
 .kb-content h2 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
