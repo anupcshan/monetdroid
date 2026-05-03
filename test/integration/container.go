@@ -149,7 +149,7 @@ func (f *ContainerFixture) KBWithStdin(cwd, stdin string, args ...string) string
 // and an API replayer intercepting Anthropic API calls.
 //
 // mode is "record" or "replay".
-// cassetteName is the filename under testdata/cassettes/ (e.g. "tool_use.jsonl").
+// cassetteName is the filename under testdata/cassettes/ (e.g. "tool_use.jsonl.zst").
 func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixture {
 	t.Helper()
 

@@ -1,0 +1,6 @@
+# Tell `git diff` to decompress *.jsonl.zst before diffing. Requires
+# a one-time local config per clone:
+#
+#   git config diff.zstd.textconv 'zstd -dc'
+#
+*.jsonl.zst diff=zstd

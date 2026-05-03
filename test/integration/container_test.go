@@ -122,7 +122,7 @@ func TestMain(m *testing.M) {
 
 func TestEmptyState(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 	page := f.Page()
 
 	WaitForText(t, page, ".empty-state", "No active workstreams", 5*time.Second)
@@ -131,7 +131,7 @@ func TestEmptyState(t *testing.T) {
 
 func TestCreateSession(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 	page := f.Page()
 
 	CreatePlainSession(t, page, containerWorkdir)
@@ -147,7 +147,7 @@ func TestCreateSession(t *testing.T) {
 // and redirects to /?cwd=<cwd>.
 func TestClearCommand(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "clear_command.jsonl", testMode())
+	f := SetupWithContainer(t, "clear_command.jsonl.zst", testMode())
 	page := f.Page()
 
 	CreatePlainSession(t, page, containerWorkdir)
@@ -212,7 +212,7 @@ func TestClearCommand(t *testing.T) {
 
 func TestMultiTurn(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "multi_turn.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "multi_turn.jsonl.zst", testMode())
 
 	// Write files for claude to explore
 	f.WriteFile(containerWorkdir+"/main.go", `package main
@@ -272,7 +272,7 @@ func Add(a, b int) int {
 
 func TestToolUse(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "tool_use.jsonl", testMode())
+	f := SetupWithContainer(t, "tool_use.jsonl.zst", testMode())
 
 	// Write some files into workdir for claude to explore
 	f.WriteFile(containerWorkdir+"/main.go", `package main
@@ -321,7 +321,7 @@ const Version = "1.0.0"
 
 func TestPermissionFlow(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "permission_flow.jsonl", testMode())
+	f := SetupWithContainer(t, "permission_flow.jsonl.zst", testMode())
 	page := f.Page()
 
 	// Create session
@@ -362,7 +362,7 @@ func TestPermissionFlow(t *testing.T) {
 
 func TestAskUserQuestion(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "ask_user.jsonl", testMode())
+	f := SetupWithContainer(t, "ask_user.jsonl.zst", testMode())
 	page := f.Page()
 
 	// Create session
@@ -403,7 +403,7 @@ func TestAskUserQuestion(t *testing.T) {
 
 func TestEditDiff(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "edit_diff.jsonl", testMode())
+	f := SetupWithContainer(t, "edit_diff.jsonl.zst", testMode())
 
 	// Create a file for claude to edit
 	f.WriteFile(containerWorkdir+"/greeting.go", `package main
@@ -439,7 +439,7 @@ func main() {
 
 func TestAcceptEdits(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "accept_edits.jsonl", testMode())
+	f := SetupWithContainer(t, "accept_edits.jsonl.zst", testMode())
 
 	// Create files for claude to edit
 	f.WriteFile(containerWorkdir+"/greeting.go", `package main
@@ -542,7 +542,7 @@ func main() {
 
 func TestSessionReload(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "multi_turn.jsonl", testMode())
+	f := SetupWithContainer(t, "multi_turn.jsonl.zst", testMode())
 
 	// Write files (same as TestMultiTurn — needed for tool execution)
 	f.WriteFile(containerWorkdir+"/main.go", `package main
@@ -615,7 +615,7 @@ func Add(a, b int) int {
 
 func TestDrawer(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "drawer.jsonl", testMode())
+	f := SetupWithContainer(t, "drawer.jsonl.zst", testMode())
 
 	// Two distinct work directories so they appear as separate history groups.
 	// Create subdirectories via WriteFile (it creates parent dirs).
@@ -712,7 +712,7 @@ func TestDrawer(t *testing.T) {
 
 func TestCloseSession(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "drawer.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "drawer.jsonl.zst", testMode())
 
 	// Create subdirectories via WriteFile (it creates parent dirs).
 	f.WriteFile(containerWorkdir+"/project-alpha/.keep", "")
@@ -777,7 +777,7 @@ func TestCloseSession(t *testing.T) {
 
 func TestBashSpinner(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "bash_spinner.jsonl", testMode())
+	f := SetupWithContainer(t, "bash_spinner.jsonl.zst", testMode())
 	page := f.Page()
 
 	// Create session
@@ -873,7 +873,7 @@ func TestBashSpinner(t *testing.T) {
 
 func TestReadImage(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "read_image.jsonl", testMode())
+	f := SetupWithContainer(t, "read_image.jsonl.zst", testMode())
 
 	// Create a minimal 1x1 red PNG (base64) inside the container.
 	// This is a valid 67-byte PNG.
@@ -960,7 +960,7 @@ func initSecondRepo(t *testing.T, f *ContainerFixture) {
 
 func TestDrawerNewWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "drawer_new_workstream.jsonl", testMode())
+	f := SetupWithContainer(t, "drawer_new_workstream.jsonl.zst", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
 
@@ -1064,7 +1064,7 @@ func TestDrawerNewWorkstream(t *testing.T) {
 
 func TestQueueDuringStreaming(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "queue_streaming.jsonl", testMode())
+	f := SetupWithContainer(t, "queue_streaming.jsonl.zst", testMode())
 
 	f.WriteFile(containerWorkdir+"/main.go", `package main
 
@@ -1144,7 +1144,7 @@ func Add(a, b int) int {
 
 func TestQueueEdit(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "queue_edit.jsonl", testMode())
+	f := SetupWithContainer(t, "queue_edit.jsonl.zst", testMode())
 
 	f.WriteFile(containerWorkdir+"/main.go", `package main
 
@@ -1224,7 +1224,7 @@ func Add(a, b int) int {
 
 func TestPlanMode(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "plan_mode.jsonl", testMode())
+	f := SetupWithContainer(t, "plan_mode.jsonl.zst", testMode())
 
 	// Create a file for Claude to plan around.
 	f.WriteFile(containerWorkdir+"/main.go", `package main
@@ -1296,7 +1296,7 @@ func main() {
 
 func TestRebaseWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 
 	// Set up git repo with a main branch.
 	initGitRepo(t, f, containerWorkdir)
@@ -1363,7 +1363,7 @@ func TestRebaseWorkstream(t *testing.T) {
 
 func TestPullMain(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 
 	// Set up git repo with a remote.
 	initGitRepo(t, f, containerWorkdir)
@@ -1426,7 +1426,7 @@ func TestPullMain(t *testing.T) {
 
 func TestMassSync(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
 	initSecondRepo(t, f)
@@ -1506,7 +1506,7 @@ func TestMassSync(t *testing.T) {
 
 func TestArchiveWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 
 	// Set up git repo with a workstream.
 	initGitRepo(t, f, containerWorkdir)
@@ -1561,7 +1561,7 @@ func TestArchiveWorkstream(t *testing.T) {
 
 func TestPruneWorkstream(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 
 	// Set up git repo with a workstream.
 	initGitRepo(t, f, containerWorkdir)
@@ -1653,7 +1653,7 @@ func TestPruneWorkstream(t *testing.T) {
 
 func TestBranchTree(t *testing.T) {
 	t.Parallel()
-	f := SetupWithSharedCassette(t, "tool_use.jsonl", testMode())
+	f := SetupWithSharedCassette(t, "tool_use.jsonl.zst", testMode())
 
 	initGitRepo(t, f, containerWorkdir)
 	initSecondRepo(t, f)
@@ -1775,7 +1775,7 @@ func TestBranchTree(t *testing.T) {
 
 func TestAgentSubagent(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "agent_subagent.jsonl", testMode())
+	f := SetupWithContainer(t, "agent_subagent.jsonl.zst", testMode())
 
 	// Create a multi-directory codebase large enough to trigger Agent tool usage.
 	files := map[string]string{
@@ -2245,7 +2245,10 @@ func getEnv(key, fallback string) string {
 	// Pin mtimes so any ls-la-style output the model solicits shows the same
 	// timestamps between record and replay. Subagents in this test sometimes
 	// reach for Bash's `ls -la` despite the "no Bash" prompt instruction.
+	// `ls -la /work` includes a `..` entry showing the parent directory's
+	// mtime — pin `/` too so that line is stable across runs.
 	f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+	f.DockerExec("touch", "-d", "2020-01-01T00:00:00Z", "/")
 
 	// No git init — this test's subagents scan source files; a .git
 	// directory adds non-deterministic Glob results (object creation order
@@ -2358,7 +2361,7 @@ func getEnv(key, fallback string) string {
 
 func TestBashToolForeground(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "bash_foreground.jsonl", testMode())
+	f := SetupWithContainer(t, "bash_foreground.jsonl.zst", testMode())
 
 	// Create a file with >2000 chars so `cat` output exceeds the truncation limit.
 	var big strings.Builder
@@ -2402,7 +2405,7 @@ func TestBashToolForeground(t *testing.T) {
 
 func TestKBWebView(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "kb_web_view.jsonl", testMode())
+	f := SetupWithContainer(t, "kb_web_view.jsonl.zst", testMode())
 
 	// KB needs a git repo (for git-common-dir resolution) with at least one commit (for git grep).
 	f.DockerExec("git", "init", containerWorkdir)

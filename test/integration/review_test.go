@@ -56,7 +56,7 @@ func main() {
 
 func TestEditReviewComment(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "edit_review.jsonl", testMode())
+	f := SetupWithContainer(t, "edit_review.jsonl.zst", testMode())
 
 	f.WriteFile(containerWorkdir+"/server.go", serverFile)
 
@@ -135,7 +135,7 @@ func TestEditReviewComment(t *testing.T) {
 
 func TestWriteReviewComment(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "write_review.jsonl", testMode())
+	f := SetupWithContainer(t, "write_review.jsonl.zst", testMode())
 
 	page := f.Page()
 
@@ -258,7 +258,7 @@ func main() {
 
 func TestOverwriteReviewComment(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "overwrite_review.jsonl", testMode())
+	f := SetupWithContainer(t, "overwrite_review.jsonl.zst", testMode())
 
 	f.WriteFile(containerWorkdir+"/calculator.go", calculatorFile)
 

@@ -69,7 +69,7 @@ kb entry, and note any open questions inside the entry itself.
 // the assistant text references a token only present in the seeded entry.
 func TestKBResumeProject(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "kb_resume_project.jsonl", testMode())
+	f := SetupWithContainer(t, "kb_resume_project.jsonl.zst", testMode())
 
 	f.WriteFile(containerWorkdir+"/main.go", `package main
 
@@ -138,7 +138,7 @@ func main() {
 // asks for a plan; checkpointing applies during implementation.
 func TestKBNewProject(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "kb_new_project.jsonl", testMode())
+	f := SetupWithContainer(t, "kb_new_project.jsonl.zst", testMode())
 
 	f.WriteFile(containerWorkdir+"/go.mod", "module calc\n\ngo 1.23\n")
 	f.WriteFile(containerWorkdir+"/.claude/settings.json", kbAllowSettings)

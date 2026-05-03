@@ -17,7 +17,59 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
+
+// Replayer design
+//
+// The replayer is an HTTP server that records and replays Anthropic API
+// interactions for integration tests. -record proxies live requests to
+// the real API and writes a cassette; default replay loads the cassette
+// and serves recorded responses without network egress.
+//
+// Cassette format (JSONL, one Interaction per line):
+//
+//	request:  {method, path, body}
+//	response: {status, headers, body}
+//
+// Match path: at load time each cassette body is normalized (see
+// normalizeRequestBody) and sha256-hashed to build an in-memory index.
+// At replay each live request is normalized and hashed the same way;
+// hit serves the recorded response, miss fails the test and dumps live
+// and recorded bodies to /tmp/replayer-nomatch-*/ for diff diagnosis.
+//
+// The cassette's `body` field stores the raw request body after a
+// privacy scrub (see allowedRequestKeys / deniedRequestKeys), NOT a
+// normalized form. Two reasons:
+//
+//  1. Cross-turn ID substitution at replay. The CLI emits per-run
+//     randoms (bash background task IDs, /tmp/claude-*/ session UUIDs)
+//     and embeds them in tool_result text. The model's recorded
+//     responses reference those IDs in follow-up tool_use inputs.
+//     learnIDMappings pairs recorded↔live IDs from matched request
+//     bodies; substituteSSEDeltas rewrites recorded IDs to live values
+//     before serving. A normalized stored body would have stripped or
+//     genericized those IDs and lost the pairing.
+//
+//  2. Normalizer iteration without re-recording. The hash is re-derived
+//     from the cassette body on every load, so a normalizer change
+//     just produces new hashes from existing bodies — no re-record.
+//
+// Scrub policy is privacy only. Only sensitive fields (user_id,
+// account IDs in metadata) are stripped from the cassette. Bulk fields
+// (system prompt, tool definitions) are kept — stripping them would
+// hide real input changes like CLI version bumps that reword the
+// system prompt or change tool schemas, which is exactly what the
+// drift mechanism exists to surface. Invariant: every key in
+// deniedRequestKeys must also be stripped by the normalizer, otherwise
+// sha256(normalize(stored)) != sha256(normalize(live)) and matching
+// breaks.
+//
+// A hash mismatch means a real input change since recording (new tool,
+// reworded prompt, different model) and requires re-recording with
+// -record. The dump function leaves live + recorded normalized bodies
+// in the temp dir for diff-based diagnosis.
 
 // Interaction is a single recorded HTTP request/response pair.
 type Interaction struct {
@@ -30,10 +82,6 @@ type RecordedRequest struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Body   string `json:"body"`
-	// BodyHash is a normalized hash of the full (pre-scrub) request body.
-	// At replay time, the incoming body is hashed the same way and compared.
-	// Mismatch means the model's inputs have drifted since recording.
-	BodyHash string `json:"body_hash,omitempty"`
 }
 
 // RecordedResponse stores the response for a cassette entry.
@@ -75,6 +123,29 @@ type Replayer struct {
 	pauseMu sync.Mutex
 }
 
+// Cassette files are zstd-compressed JSONL on disk. The system prompt
+// and tool definitions are repeated in nearly every interaction, so the
+// raw text compresses ~20-30x. Reading and writing goes through these
+// shared, concurrency-safe encoder/decoder instances (per the
+// klauspost/compress/zstd docs: EncodeAll / DecodeAll are safe for
+// concurrent use on a single instance).
+var (
+	zstdEnc *zstd.Encoder
+	zstdDec *zstd.Decoder
+)
+
+func init() {
+	var err error
+	zstdEnc, err = zstd.NewWriter(nil)
+	if err != nil {
+		panic(fmt.Sprintf("zstd encoder init: %v", err))
+	}
+	zstdDec, err = zstd.NewReader(nil)
+	if err != nil {
+		panic(fmt.Sprintf("zstd decoder init: %v", err))
+	}
+}
+
 // Pause blocks all future API requests until Unpause is called.
 func (r *Replayer) Pause() { r.pauseMu.Lock() }
 
@@ -97,9 +168,13 @@ func NewReplayer(t *testing.T, cassettePath, mode, upstream string) *Replayer {
 }
 
 func (r *Replayer) loadCassette() {
-	data, err := os.ReadFile(r.cassettePath)
+	compressed, err := os.ReadFile(r.cassettePath)
 	if err != nil {
 		r.t.Fatalf("load cassette %s: %v", r.cassettePath, err)
+	}
+	data, err := zstdDec.DecodeAll(compressed, nil)
+	if err != nil {
+		r.t.Fatalf("zstd decode %s: %v", r.cassettePath, err)
 	}
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
@@ -116,22 +191,25 @@ func (r *Replayer) loadCassette() {
 	r.consumed = make([]bool, len(r.interactions))
 	r.idMap = make(map[string]string)
 	for i, ix := range r.interactions {
-		r.hashIndex[ix.Request.BodyHash] = append(r.hashIndex[ix.Request.BodyHash], i)
+		h := hashRequestBody([]byte(ix.Request.Body))
+		r.hashIndex[h] = append(r.hashIndex[h], i)
 	}
 	r.t.Logf("replayer: loaded %d interactions from %s", len(r.interactions), r.cassettePath)
 }
 
 func (r *Replayer) saveCassette() {
-	f, err := os.Create(r.cassettePath)
-	if err != nil {
-		r.t.Errorf("save cassette: %v", err)
-		return
+	var buf bytes.Buffer
+	for i, interaction := range r.interactions {
+		data, err := json.Marshal(interaction)
+		if err != nil {
+			r.t.Fatalf("save cassette: marshal interaction %d: %v", i, err)
+		}
+		buf.Write(data)
+		buf.WriteByte('\n')
 	}
-	defer f.Close()
-	for _, interaction := range r.interactions {
-		data, _ := json.Marshal(interaction)
-		f.Write(data)
-		f.Write([]byte("\n"))
+	compressed := zstdEnc.EncodeAll(buf.Bytes(), nil)
+	if err := os.WriteFile(r.cassettePath, compressed, 0o644); err != nil {
+		r.t.Fatalf("save cassette: %v", err)
 	}
 	r.t.Logf("replayer: saved %d interactions to %s", len(r.interactions), r.cassettePath)
 }
@@ -300,21 +378,17 @@ func (r *Replayer) handleRecord(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Save interaction with scrubbed request body plus a hash of the full
-	// (pre-scrub) body so replay can detect input drift.
 	scrubbedBody, err := scrubRequestBody(body)
 	if err != nil {
 		r.t.Fatalf("replayer: %v", err)
 	}
-	bodyHash := hashRequestBody(body)
 
 	r.mu.Lock()
 	r.interactions = append(r.interactions, Interaction{
 		Request: RecordedRequest{
-			Method:   req.Method,
-			Path:     req.URL.Path,
-			Body:     scrubbedBody,
-			BodyHash: bodyHash,
+			Method: req.Method,
+			Path:   req.URL.Path,
+			Body:   scrubbedBody,
 		},
 		Response: RecordedResponse{
 			Status:  resp.StatusCode,
@@ -376,13 +450,15 @@ var (
 		"output_config":      true,
 		"temperature":        true,
 		"context_management": true,
+		"system":             true,
+		"tools":              true,
 	}
 
-	// deniedRequestKeys are stripped from the cassette silently.
+	// deniedRequestKeys are stripped from the cassette silently. See file
+	// header for scrub policy. Invariant: every key here must also be
+	// stripped by normalizeRequestBody.
 	deniedRequestKeys = map[string]bool{
-		"system":   true, // CLI system prompt (large, sensitive)
-		"tools":    true, // tool definitions (large, static)
-		"metadata": true, // contains user_id and account IDs
+		"metadata": true, // user_id, account IDs
 	}
 )
 
@@ -579,7 +655,7 @@ func (r *Replayer) learnIDMappings(recorded, live []byte) {
 // dir so a no-match replay failure leaves readable artifacts behind. Also
 // dumps every recorded body (raw + normalized) from the cassette so the
 // user can diff the normalized live body against each recorded normalized
-// body to see exactly what's drifting. TEMP: remove once drift is resolved.
+// body to see exactly what's drifting.
 func (r *Replayer) dumpLiveBody(live []byte) string {
 	dir, err := os.MkdirTemp("", "replayer-nomatch-*")
 	if err != nil {
@@ -930,10 +1006,9 @@ func stripMCPTools(parsed map[string]any) {
 	parsed["tools"] = kept
 }
 
-// scrubRequestBody removes sensitive/bulky fields from the API request body
-// before saving to the cassette. The full body is still sent to the upstream
-// during recording. Returns the scrubbed JSON and an error if unknown keys
-// are encountered.
+// scrubRequestBody applies the cassette scrub policy (see allowedRequestKeys
+// and deniedRequestKeys). Returns the scrubbed JSON and an error if a
+// top-level key is in neither list.
 func scrubRequestBody(body []byte) (string, error) {
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {

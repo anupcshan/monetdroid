@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/go-rod/rod v0.116.2
+	github.com/klauspost/compress v1.18.6
 	github.com/urfave/cli/v3 v3.8.0
 	github.com/yuin/goldmark v1.7.16
 	golang.org/x/tools v0.42.0
