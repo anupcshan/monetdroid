@@ -2,6 +2,7 @@ package monetdroid
 
 import (
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -241,6 +242,47 @@ func (s *Session) SetTodos(todos []protocol.Todo) {
 	s.mu.Lock()
 	s.Todos = todos
 	s.mu.Unlock()
+}
+
+// AppendTaskFromCreate appends a new Todo for a TaskCreate event. The CLI
+// assigns sequential int IDs starting at 1 (observed in result text like
+// "Task #1 created successfully"); we mirror that scheme so TaskUpdate's
+// taskId can find the entry.
+func (s *Session) AppendTaskFromCreate(input *protocol.TaskCreateInput) {
+	if input == nil {
+		return
+	}
+	s.mu.Lock()
+	s.Todos = append(s.Todos, protocol.Todo{
+		ID:         strconv.Itoa(len(s.Todos) + 1),
+		Content:    input.Subject,
+		ActiveForm: input.ActiveForm,
+		Status:     "pending",
+	})
+	s.mu.Unlock()
+}
+
+// UpdateTask applies a TaskUpdate to the matching Todo by ID. status="deleted"
+// removes the entry. Unknown IDs are ignored.
+func (s *Session) UpdateTask(input *protocol.TaskUpdateInput) {
+	if input == nil || input.TaskID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, t := range s.Todos {
+		if t.ID != input.TaskID {
+			continue
+		}
+		if input.Status == "deleted" {
+			s.Todos = append(s.Todos[:i], s.Todos[i+1:]...)
+			return
+		}
+		if input.Status != "" {
+			s.Todos[i].Status = input.Status
+		}
+		return
+	}
 }
 
 func (s *Session) SetPermissionMode(mode string) {

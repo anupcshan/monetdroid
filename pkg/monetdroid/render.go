@@ -366,7 +366,7 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		return fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`, rendered)
 	case "tool_use":
-		if msg.Tool == "TodoWrite" {
+		if msg.Tool == "TodoWrite" || msg.Tool == "TaskCreate" || msg.Tool == "TaskUpdate" {
 			return ""
 		}
 		if msg.Tool == "AskUserQuestion" {

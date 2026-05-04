@@ -2444,3 +2444,69 @@ func TestKBWebView(t *testing.T) {
 		t.Fatalf("external link should have target=_blank")
 	}
 }
+
+// TestTaskPanel drives a deterministic TaskCreate/TaskUpdate sequence and
+// asserts the #todos-body panel rows reflect each task's final state.
+func TestTaskPanel(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "task_panel.jsonl.zst", testMode())
+	page := f.Page()
+
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	page.MustElement(`textarea[name="text"]`).MustInput(
+		`Use ONLY the TaskCreate and TaskUpdate tools. Do not use Bash, Write, Edit, Read, Grep, Glob, or any other tool. ` +
+			`Do exactly these calls in order:
+1. TaskCreate with subject="first task", description="first task", activeForm="first task"
+2. TaskCreate with subject="second task", description="second task", activeForm="second task"
+3. TaskCreate with subject="third task", description="third task", activeForm="third task"
+4. TaskUpdate with taskId="1", status="in_progress"
+5. TaskUpdate with taskId="1", status="completed"
+6. TaskUpdate with taskId="2", status="in_progress"
+After step 6, reply with the single word "done" and stop.`,
+	)
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForElement(t, page, ".msg-assistant", 180*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 180*time.Second)
+	Screenshot(t, page, "task_panel_done")
+
+	// Summary should report 1 of 3 completed.
+	summary := page.MustElement("#todos-summary").MustText()
+	if !strings.Contains(summary, "1/3") {
+		t.Errorf("summary should contain '1/3', got %q", summary)
+	}
+
+	// Open the <details> panel so MustText() can read the rows. Otherwise
+	// rod treats the collapsed body as having no visible text.
+	page.MustElement("#todos-panel").MustEval(`() => this.open = true`)
+
+	// Three rows: completed, in_progress, pending — in that order.
+	items := page.MustElements(".todo-item")
+	if len(items) != 3 {
+		t.Fatalf("expected 3 todo-item rows, got %d", len(items))
+	}
+	expected := []struct {
+		cls   string
+		label string
+	}{
+		{"todo-done", "first task"},
+		{"todo-active", "second task"},
+		{"todo-pending", "third task"},
+	}
+	for i, exp := range expected {
+		clsAttr, _ := items[i].Attribute("class")
+		got := ""
+		if clsAttr != nil {
+			got = *clsAttr
+		}
+		if !strings.Contains(got, exp.cls) {
+			t.Errorf("row %d: class should contain %q, got %q", i, exp.cls, got)
+		}
+		text := items[i].MustText()
+		if !strings.Contains(text, exp.label) {
+			t.Errorf("row %d: text should contain %q, got %q", i, exp.label, text)
+		}
+	}
+}

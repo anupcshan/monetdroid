@@ -6,6 +6,8 @@ import "github.com/anupcshan/monetdroid/pkg/claude/protocol"
 // shown to the user (the tool_use chip is still rendered).
 var suppressResultTools = map[string]bool{
 	"TodoWrite":       true,
+	"TaskCreate":      true,
+	"TaskUpdate":      true,
 	"AskUserQuestion": true,
 	"Read":            true,
 	"FileRead":        true,

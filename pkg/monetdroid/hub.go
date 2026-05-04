@@ -222,10 +222,25 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 	}
 
-	// Update todos from TodoWrite tool_use events
-	if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
-		if todos := ParseTodos(msg.Input); todos != nil {
-			s.SetTodos(todos)
+	// Update todos from TodoWrite/TaskCreate/TaskUpdate tool_use events
+	todosChanged := false
+	if msg.Type == "tool_use" && s != nil {
+		switch msg.Tool {
+		case "TodoWrite":
+			if todos := ParseTodos(msg.Input); todos != nil {
+				s.SetTodos(todos)
+				todosChanged = true
+			}
+		case "TaskCreate":
+			if msg.Input != nil {
+				s.AppendTaskFromCreate(msg.Input.TaskCreate)
+				todosChanged = true
+			}
+		case "TaskUpdate":
+			if msg.Input != nil {
+				s.UpdateTask(msg.Input.TaskUpdate)
+				todosChanged = true
+			}
 		}
 	}
 
@@ -234,7 +249,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	var parts []string
 
 	// OOB-swap the todos panel children (summary + body) to preserve open/closed state
-	if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
+	if todosChanged {
 		todos := s.GetTodosCopy()
 		parts = append(parts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
 		parts = append(parts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
@@ -696,16 +711,29 @@ func (h *Hub) SeedEventLog(s *Session) {
 		}
 	}
 
-	// Rebuild todos from the last TodoWrite in the log
-	var todos []protocol.Todo
+	// Rebuild todos by replaying tool_use events in order. TodoWrite replaces
+	// the list wholesale; TaskCreate appends; TaskUpdate mutates by ID.
+	s.SetTodos(nil)
 	for _, msg := range snap.Log {
-		if msg.Type == "tool_use" && msg.Tool == "TodoWrite" {
+		if msg.Type != "tool_use" {
+			continue
+		}
+		switch msg.Tool {
+		case "TodoWrite":
 			if t := ParseTodos(msg.Input); t != nil {
-				todos = t
+				s.SetTodos(t)
+			}
+		case "TaskCreate":
+			if msg.Input != nil {
+				s.AppendTaskFromCreate(msg.Input.TaskCreate)
+			}
+		case "TaskUpdate":
+			if msg.Input != nil {
+				s.UpdateTask(msg.Input.TaskUpdate)
 			}
 		}
 	}
-	s.SetTodos(todos)
+	todos := s.GetTodosCopy()
 
 	// --- Chrome setup event: session-id, label, running state, cost, mode, todos, queue ---
 	var chromeParts []string

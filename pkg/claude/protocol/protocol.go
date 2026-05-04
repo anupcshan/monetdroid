@@ -173,16 +173,18 @@ type ImageData struct {
 type ToolInput struct {
 	Raw json.RawMessage
 
-	Bash     *BashInput
-	Read     *ReadInput
-	Write    *WriteInput
-	Edit     *EditInput
-	Grep     *GrepInput
-	Glob     *GlobInput
-	Todo     *TodoInput
-	Ask      *AskInput
-	Agent    *AgentInput
-	PlanMode *PlanModeInput
+	Bash       *BashInput
+	Read       *ReadInput
+	Write      *WriteInput
+	Edit       *EditInput
+	Grep       *GrepInput
+	Glob       *GlobInput
+	Todo       *TodoInput
+	TaskCreate *TaskCreateInput
+	TaskUpdate *TaskUpdateInput
+	Ask        *AskInput
+	Agent      *AgentInput
+	PlanMode   *PlanModeInput
 }
 
 func (t ToolInput) MarshalJSON() ([]byte, error) {
@@ -228,6 +230,12 @@ func ParseToolInput(tool string, raw json.RawMessage) *ToolInput {
 	case "TodoWrite":
 		t.Todo = &TodoInput{}
 		json.Unmarshal(raw, t.Todo)
+	case "TaskCreate":
+		t.TaskCreate = &TaskCreateInput{}
+		json.Unmarshal(raw, t.TaskCreate)
+	case "TaskUpdate":
+		t.TaskUpdate = &TaskUpdateInput{}
+		json.Unmarshal(raw, t.TaskUpdate)
 	case "AskUserQuestion":
 		t.Ask = &AskInput{}
 		json.Unmarshal(raw, t.Ask)
@@ -281,6 +289,18 @@ type TodoInput struct {
 	Todos []Todo `json:"todos,omitempty"`
 }
 
+type TaskCreateInput struct {
+	Subject    string `json:"subject,omitempty"`
+	ActiveForm string `json:"activeForm,omitempty"`
+}
+
+type TaskUpdateInput struct {
+	TaskID       string   `json:"taskId,omitempty"`
+	Status       string   `json:"status,omitempty"`
+	AddBlocks    []string `json:"addBlocks,omitempty"`
+	AddBlockedBy []string `json:"addBlockedBy,omitempty"`
+}
+
 type AskInput struct {
 	Questions []AskQuestion     `json:"questions,omitempty"`
 	Answers   map[string]string `json:"answers,omitempty"`
@@ -311,6 +331,9 @@ type PlanModeInput struct {
 }
 
 type Todo struct {
+	// ID is set by the Task* tools (sequential int as a string).
+	// Empty for TodoWrite, which has no per-item identifier.
+	ID         string `json:"id,omitempty"`
 	Content    string `json:"content"`
 	ActiveForm string `json:"activeForm"`
 	Status     string `json:"status"`
