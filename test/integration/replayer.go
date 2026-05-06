@@ -241,10 +241,57 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if idx < 0 {
+		consumedSnap := make([]bool, len(r.consumed))
+		copy(consumedSnap, r.consumed)
 		r.mu.Unlock()
 		dir := r.dumpLiveBody(body)
-		r.t.Errorf("replayer: no recorded interaction matches live request body hash %s for %s %s.\n  dump dir: %s\n  diff e.g.: diff %s/live.norm.json %s/recorded-1.norm.json\nRe-record with -record.",
-			liveHash, req.Method, req.URL.Path, dir, dir, dir)
+		type recSummary struct {
+			idx      int
+			consumed bool
+			msgs     int
+			lastRole string
+			line     string
+		}
+		var recs []recSummary
+		for i, ix := range r.interactions {
+			if ix.Request.Method != "POST" {
+				continue
+			}
+			line, msgs, lastRole := summarizeRequest([]byte(ix.Request.Body))
+			recs = append(recs, recSummary{idx: i, consumed: consumedSnap[i], msgs: msgs, lastRole: lastRole, line: line})
+		}
+		sort.Slice(recs, func(i, j int) bool { return recs[i].msgs < recs[j].msgs })
+		liveLine, liveMsgs, liveLastRole := summarizeRequest(body)
+		var summary strings.Builder
+		fmt.Fprintf(&summary, "\n  live:                  %s", liveLine)
+		for _, rec := range recs {
+			state := "open    "
+			if rec.consumed {
+				state = "consumed"
+			}
+			fmt.Fprintf(&summary, "\n  recorded[%2d %s]: %s", rec.idx, state, rec.line)
+		}
+		// Inline diff against the unique open recorded interaction with the
+		// same (msgs, lastRole). If zero or more than one match, the diff
+		// would either be missing context or ambiguous; re-recording is the
+		// right next step in those cases.
+		var matchIdx = -1
+		matchCount := 0
+		for _, rec := range recs {
+			if rec.consumed || rec.msgs != liveMsgs || rec.lastRole != liveLastRole {
+				continue
+			}
+			matchCount++
+			matchIdx = rec.idx
+		}
+		if matchCount == 1 {
+			diff := computeBodyDiff(body, []byte(r.interactions[matchIdx].Request.Body), 20, 20)
+			if diff != "" {
+				fmt.Fprintf(&summary, "\n  diff vs recorded[%d]:\n%s", matchIdx, diff)
+			}
+		}
+		r.t.Errorf("replayer: no recorded interaction matches live request for %s %s.%s\n  dump dir: %s\nRe-record with -record.",
+			req.Method, req.URL.Path, summary.String(), dir)
 		http.Error(w, "no matching recorded interaction", http.StatusInternalServerError)
 		return
 	}
@@ -593,6 +640,141 @@ func sseReplacePartial(event, newPartial string) string {
 // changes (billing CLI build hash, date injection, tool_use IDs, metadata,
 // plan file paths). Used at record time to pin a cassette's model inputs
 // and at replay time to detect drift.
+// summarizeRequest returns a one-line description of a /v1/messages request
+// body for diagnosing replay mismatches, plus the message count and last
+// message role used to identify a structurally matching candidate.
+func summarizeRequest(body []byte) (line string, msgs int, lastRole string) {
+	var s struct {
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
+	}
+	lastRole = "?"
+	if err := json.Unmarshal(body, &s); err == nil {
+		msgs = len(s.Messages)
+		if msgs > 0 {
+			lastRole = s.Messages[msgs-1].Role
+		}
+	}
+	h := hashRequestBody(body)
+	if len(h) > 12 {
+		h = h[:12]
+	}
+	line = fmt.Sprintf("msgs=%d bytes=%d hash=%s lastRole=%s", msgs, len(body), h, lastRole)
+	return
+}
+
+func commonPrefixLen(a, b string) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
+}
+
+func commonSuffixLen(a, b string) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[len(a)-1-i] != b[len(b)-1-i] {
+			return i
+		}
+	}
+	return n
+}
+
+// formatLineDiff returns "minus" and "plus" lines for a single differing
+// line pair, marking only the changed run with [-...-] / [+...+] and
+// preserving up to ctx characters of surrounding context (with "..."
+// indicating elided unchanged content).
+func formatLineDiff(live, rec string, ctx int) (string, string) {
+	pre := commonPrefixLen(live, rec)
+	suf := commonSuffixLen(live[pre:], rec[pre:])
+
+	lmid := live[pre : len(live)-suf]
+	rmid := rec[pre : len(rec)-suf]
+
+	leftStart := pre - ctx
+	if leftStart < 0 {
+		leftStart = 0
+	}
+	leftCtx := live[leftStart:pre]
+
+	rightEnd := len(live) - suf + ctx
+	if rightEnd > len(live) {
+		rightEnd = len(live)
+	}
+	rightCtx := live[len(live)-suf : rightEnd]
+
+	leftEllipsis := ""
+	if pre > ctx {
+		leftEllipsis = "..."
+	}
+	rightEllipsis := ""
+	if suf > ctx {
+		rightEllipsis = "..."
+	}
+
+	return leftEllipsis + leftCtx + "[-" + lmid + "-]" + rightCtx + rightEllipsis,
+		leftEllipsis + leftCtx + "[+" + rmid + "+]" + rightCtx + rightEllipsis
+}
+
+// computeBodyDiff returns a compact human-readable diff between two
+// /v1/messages request bodies. Both inputs are first normalized (so the
+// diff reflects what hashRequestBody compares) and then pretty-printed to
+// give meaningful per-line granularity. Returns "" if either body fails
+// to normalize.
+func computeBodyDiff(live, recorded []byte, maxLines, ctx int) string {
+	liveNorm, err := normalizeRequestBody(live)
+	if err != nil {
+		return ""
+	}
+	recNorm, err := normalizeRequestBody(recorded)
+	if err != nil {
+		return ""
+	}
+	var lp, rp bytes.Buffer
+	if err := json.Indent(&lp, liveNorm, "", "  "); err != nil {
+		return ""
+	}
+	if err := json.Indent(&rp, recNorm, "", "  "); err != nil {
+		return ""
+	}
+	liveLines := strings.Split(lp.String(), "\n")
+	recLines := strings.Split(rp.String(), "\n")
+
+	n := len(liveLines)
+	if len(recLines) < n {
+		n = len(recLines)
+	}
+
+	var out strings.Builder
+	written := 0
+	for i := 0; i < n; i++ {
+		if liveLines[i] == recLines[i] {
+			continue
+		}
+		if written >= maxLines {
+			fmt.Fprintf(&out, "    ... (more diffs truncated)\n")
+			break
+		}
+		l, r := formatLineDiff(liveLines[i], recLines[i], ctx)
+		fmt.Fprintf(&out, "    -%s\n    +%s\n", l, r)
+		written++
+	}
+	if len(liveLines) != len(recLines) {
+		fmt.Fprintf(&out, "    (line counts differ: live=%d recorded=%d)\n", len(liveLines), len(recLines))
+	}
+	return out.String()
+}
+
 func hashRequestBody(body []byte) string {
 	normalized, err := normalizeRequestBody(body)
 	if err != nil {
@@ -693,7 +875,10 @@ var (
 	//   "/tmp/claude-0/-work/cba6ec33-bc88-4d03-b249-9e293b87a920/..."
 	bgTaskIDPrefixRe = regexp.MustCompile(`(Command running in background with ID: |tasks/|<task-id>)([a-z0-9]{9})`)
 	bgTaskIDSuffixRe = regexp.MustCompile(`([a-z0-9]{9})(\.output|</task-id>)`)
-	sessionUUIDRe    = regexp.MustCompile(`/tmp/claude-\d+/-work/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	// claude 2.1.126 echoes bg task IDs in prose like:
+	//   "Started in background (id `bgf6mq7y2`)".
+	bgTaskIDStartedRe = regexp.MustCompile("Started in background \\(id `[a-z0-9]{9}`\\)")
+	sessionUUIDRe     = regexp.MustCompile(`/tmp/claude-\d+/-work/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	// Plan file paths: the CLI names new plan files with a random
 	// adjective-noun-animal style identifier. The existing planFileRe only
 	// matches the phrasing in the ExitPlanMode tool template ("create your
@@ -726,6 +911,7 @@ func normalizeNoisyText(s string) string {
 	s = planFileRe.ReplaceAllString(s, "create your plan at <PLAN>")
 	s = bgTaskIDPrefixRe.ReplaceAllString(s, "${1}<BGID>")
 	s = bgTaskIDSuffixRe.ReplaceAllString(s, "<BGID>${2}")
+	s = bgTaskIDStartedRe.ReplaceAllString(s, "Started in background (id `<BGID>`)")
 	s = sessionUUIDRe.ReplaceAllString(s, "/tmp/claude-<UID>/-work/<SESSION>")
 	s = planFilePathRe.ReplaceAllString(s, "/root/.claude/plans/<PLANFILE>.md")
 	s = recentCommitsSHARe.ReplaceAllString(s, "${1}<SHA>")

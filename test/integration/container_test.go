@@ -481,15 +481,18 @@ func main() {
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 	Screenshot(t, page, "accept_edits_first_turn")
 
-	// Second turn: another edit — should NOT require permission now
+	// Second turn: another edit. Should NOT require permission now.
+	prevAssistants := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
 	page.MustElement(`textarea[name="text"]`).MustInput("Now change 'goodbye world' to 'greetings world' in greeting.go")
 	page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for second assistant response — should complete without permission prompt
-	_, err = page.Timeout(120*time.Second).ElementR(".msg-assistant", "greetings")
-	if err != nil {
-		t.Fatalf("second assistant response never appeared: %v", err)
-	}
+	// Wait for turn 2 to start rendering before waiting for it to end.
+	// #stop-btn:empty alone matches the leftover empty span between turns
+	// (from turn 1's done event), so we first gate on a new .msg-assistant
+	// appearing, which only happens after the SSE init event has swapped
+	// stop-btn to <button>.
+	page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
+		`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 	Screenshot(t, page, "accept_edits_second_turn")
 
