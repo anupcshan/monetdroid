@@ -207,6 +207,8 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		"-e", "MONETDROID_IN_CONTAINER=1",
 		"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
 		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// Fail fast on replayer 5xx responses; default is 10 retries with backoff.
+		"-e", "CLAUDE_CODE_MAX_RETRIES=0",
 		// Pin the model so record and replay send identical request bodies
 		// regardless of the auth type the Claude CLI sees.
 		"-e", "ANTHROPIC_MODEL=claude-opus-4-7",
