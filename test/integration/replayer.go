@@ -902,6 +902,10 @@ var (
 	// system-reminder context at record time. Replay-side dummy credentials
 	// don't carry an email, so this whole block is absent there.
 	userEmailBlockRe = regexp.MustCompile(`# userEmail\nThe user's email address is [^\n]+\.\n`)
+	// The CLI injects the host kernel version into the system prompt's
+	// Environment block. Containers share the host kernel, so this varies
+	// across developer machines and CI runners.
+	osVersionRe = regexp.MustCompile(`OS Version: [^\n]+`)
 )
 
 func normalizeNoisyText(s string) string {
@@ -918,6 +922,7 @@ func normalizeNoisyText(s string) string {
 	s = agentIDRe.ReplaceAllString(s, "${1}<AGENT_ID>")
 	s = agentDurationRe.ReplaceAllString(s, "duration_ms: <DUR>")
 	s = userEmailBlockRe.ReplaceAllString(s, "")
+	s = osVersionRe.ReplaceAllString(s, "OS Version: <OS>")
 	return s
 }
 
