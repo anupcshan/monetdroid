@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1434,9 +1435,11 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAgentDetailConnect returns the rendered agent detail content.
-// For completed agents, returns static HTML of all buffered events.
-// For running agents, returns an SSE div that streams events as they arrive.
+// handleAgentDetailConnect returns the rendered agent detail content: all
+// events buffered so far as static HTML, followed by an SSE div that picks
+// up exactly where this response stopped. The `from` offset embedded in the
+// SSE URL is the length of the snapshot we just rendered, so the SSE
+// handler cannot drop events that land between the two requests.
 func (h *Hub) handleAgentDetailConnect(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session")
 	toolID := r.URL.Query().Get("tool_id")
@@ -1446,25 +1449,17 @@ func (h *Hub) handleAgentDetailConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stat := s.GetAgentStat(toolID)
 	w.Header().Set("Content-Type", "text/html")
-
-	if stat != nil && stat.Completed {
-		// Agent is done — render all buffered events as static HTML
-		events := s.GetAgentEvents(toolID)
-		fmt.Fprint(w, RenderAgentDetail(events))
-		return
-	}
-
-	// Agent still running — return SSE div for live streaming
-	// First render any events buffered so far, then append SSE div
 	events := s.GetAgentEvents(toolID)
 	fmt.Fprint(w, RenderAgentDetail(events))
-	fmt.Fprint(w, RenderAgentSSEDiv(sessionID, toolID))
+	fmt.Fprint(w, RenderAgentSSEDiv(sessionID, toolID, len(events)))
 }
 
-// handleAgentDetailStream serves buffered agent events as an SSE stream.
-// Sends new events as they arrive until the agent completes.
+// handleAgentDetailStream serves buffered agent events as an SSE stream
+// starting at the offset given by the `from` query parameter. The connect
+// handler passes the length of the snapshot it rendered; this handler
+// resumes from that exact point. Returns 400 if `from` is missing or not
+// a non-negative integer.
 func (h *Hub) handleAgentDetailStream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1474,6 +1469,16 @@ func (h *Hub) handleAgentDetailStream(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := r.URL.Query().Get("session")
 	toolID := r.URL.Query().Get("tool_id")
+	fromStr := r.URL.Query().Get("from")
+	from, err := strconv.Atoi(fromStr)
+	if err != nil {
+		http.Error(w, "invalid from: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if from < 0 {
+		http.Error(w, "from must be non-negative", http.StatusBadRequest)
+		return
+	}
 	s := h.Sessions.Get(sessionID)
 	if s == nil {
 		http.Error(w, "session not found", http.StatusNotFound)
@@ -1487,7 +1492,7 @@ func (h *Hub) handleAgentDetailStream(w http.ResponseWriter, r *http.Request) {
 
 	stopCh := s.GetAgentStop(toolID)
 	ctx := r.Context()
-	offset := len(s.GetAgentEvents(toolID))
+	offset := from
 
 	const pollInterval = 500 * time.Millisecond
 

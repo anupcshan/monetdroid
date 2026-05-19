@@ -397,25 +397,39 @@ func (s *Session) RemoveSuppressed(id string) bool {
 
 // --- Agent operations ---
 
-// StartAgent registers a new sub-agent and increments the nesting depth.
+// StartAgent registers a sub-agent. Idempotent: if called more than once
+// for the same toolUseID (e.g. once at the parent tool_use, then again at
+// the task_started system event), only the first call allocates the stop
+// channel and increments depth; subsequent calls update the description if
+// the existing one is empty. The early call at tool_use is required because
+// the browser's hx-trigger="revealed" on the agent slot fires as soon as
+// the slot lands in the DOM, so /agent-detail/stream can race in before
+// task_started arrives; without a pre-allocated stop channel, the stream
+// handler reads stopCh==nil and exits assuming the agent is already done.
 func (s *Session) StartAgent(toolUseID, description string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.AgentDepth++
 	if s.AgentToolIDs == nil {
 		s.AgentToolIDs = make(map[string]bool)
 	}
-	s.AgentToolIDs[toolUseID] = true
 	if s.AgentStats == nil {
 		s.AgentStats = make(map[string]*AgentStat)
 	}
-	s.AgentStats[toolUseID] = &AgentStat{Description: description}
 	if s.AgentEvents == nil {
 		s.AgentEvents = make(map[string][]ServerMsg)
 	}
 	if s.AgentStops == nil {
 		s.AgentStops = make(map[string]chan struct{})
 	}
+	if s.AgentToolIDs[toolUseID] {
+		if description != "" && s.AgentStats[toolUseID] != nil && s.AgentStats[toolUseID].Description == "" {
+			s.AgentStats[toolUseID].Description = description
+		}
+		return
+	}
+	s.AgentDepth++
+	s.AgentToolIDs[toolUseID] = true
+	s.AgentStats[toolUseID] = &AgentStat{Description: description}
 	s.AgentStops[toolUseID] = make(chan struct{})
 }
 

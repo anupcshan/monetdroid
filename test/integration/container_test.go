@@ -2283,10 +2283,20 @@ func getEnv(key, fallback string) string {
 	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
 	Screenshot(t, page, "agent_complete")
 
-	// Scroll to top and click open the first Agent chip to inspect its detail
+	// Scroll to top and open every Agent tool chip; opening fires the HTMX
+	// revealed trigger on the .agent-detail-slot, which lazy-loads via
+	// /agent-detail/connect.
 	page.MustEval(`() => document.querySelector('#messages').scrollTop = 0`)
-	WaitForElement(t, page, ".tool-chip summary", 5*time.Second).MustClick()
-	WaitForElement(t, page, ".agent-detail-slot:not(:empty)", 10*time.Second)
+	slots := page.MustElements(`.agent-detail-slot`)
+	if len(slots) == 0 {
+		t.Fatal("expected at least one .agent-detail-slot on the page")
+	}
+	for _, slot := range slots {
+		slot.MustEval(`() => {
+			const det = this.closest('details.tool-chip');
+			if (det && !det.open) det.open = true;
+		}`)
+	}
 	Screenshot(t, page, "agent_detail_open")
 
 	// Dump session event log for analysis
@@ -2305,6 +2315,25 @@ func getEnv(key, fallback string) string {
 			line += fmt.Sprintf(" text=%q", text)
 		}
 		t.Logf("%s", line)
+	}
+
+	// Verify each opened detail view contains the sub-agent's internal tool
+	// calls (Read/Grep/Glob), not just the Agent's final summary.
+	for i, slot := range slots {
+		slotID := slot.MustAttribute("id")
+		if slotID == nil || *slotID == "" {
+			t.Fatalf("agent-detail-slot %d has no id", i)
+		}
+		sel := fmt.Sprintf("#%s details.tool-chip", *slotID)
+		if _, err := page.Timeout(10 * time.Second).Element(sel); err != nil {
+			Screenshot(t, page, fmt.Sprintf("agent_detail_no_sub_chips_%d", i))
+			html := slot.MustEval(`() => this.innerHTML`).String()
+			if len(html) > 500 {
+				html = html[:500] + "..."
+			}
+			t.Fatalf("agent %d (slot=%s) detail has no sub-agent tool chips; slot HTML: %s",
+				i, *slotID, html)
+		}
 	}
 
 	// --- Assertions ---

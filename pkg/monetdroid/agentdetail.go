@@ -16,14 +16,18 @@ func RenderAgentSlot(sessionID, toolUseID string) string {
 		Esc(toolUseID), url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
 }
 
-// RenderAgentSSEDiv returns the SSE-connected div that streams agent detail events.
-// Returned by /agent-detail/connect when the lazy-load trigger fires and the agent is still running.
-func RenderAgentSSEDiv(sessionID, toolUseID string) string {
+// RenderAgentSSEDiv returns the SSE-connected div that streams agent detail
+// events starting from the given buffer offset. The connect handler captures
+// the offset of events it has already rendered as static HTML and passes
+// that length here; the stream endpoint resumes from exactly that point so
+// no event falls into the gap between the connect response and the SSE
+// handler starting.
+func RenderAgentSSEDiv(sessionID, toolUseID string, fromOffset int) string {
 	return fmt.Sprintf(
 		`<div hx-ext="sse" `+
-			`sse-connect="/agent-detail/stream?session=%s&tool_id=%s" `+
+			`sse-connect="/agent-detail/stream?session=%s&tool_id=%s&from=%d" `+
 			`sse-swap="event" hx-swap="beforeend" sse-close="done"></div>`,
-		url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
+		url.QueryEscape(sessionID), url.QueryEscape(toolUseID), fromOffset)
 }
 
 // RenderAgentStatHTML returns the inline stats display for an agent chip.

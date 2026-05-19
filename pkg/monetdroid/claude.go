@@ -72,8 +72,21 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				if event.TaskUsage != nil {
 					s.UpdateAgentStat(event.ToolUseID, event.TaskUsage, event.Summary, "")
 				}
-				s.FinishAgent(event.ToolUseID)
-				broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: event.ToolUseID})
+				// For local_agent tasks (tracked via StartAgent at
+				// task_started, so GetAgentStat returns non-nil),
+				// task_notification is not the last word: claude can still
+				// flush the parent's tool_result for this Agent on stdout
+				// afterwards. FinishAgent (which closes the agent's stopCh
+				// and tells the SSE stream that the buffer is final) is
+				// deferred to the "user" branch below, where that
+				// tool_result is buffered. Background Bash tasks aren't
+				// tracked as agents, so they finalize here. TaskType is
+				// only carried on task_started, not task_notification,
+				// which is why we use GetAgentStat as the discriminator.
+				if s.GetAgentStat(event.ToolUseID) == nil {
+					s.FinishAgent(event.ToolUseID)
+					broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: event.ToolUseID})
+				}
 				s.CloseBgStop(event.ToolUseID)
 			}
 		}
@@ -122,6 +135,15 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				}
 				if b.Name == "AskUserQuestion" {
 					continue // rendered by the permission prompt UI
+				}
+				// Register the agent before broadcasting the tool_use so the
+				// agent's stop channel exists by the time the browser swaps
+				// in the slot and the revealed trigger fires
+				// /agent-detail/stream. task_started will fill in the
+				// description later. See Session.StartAgent for the race
+				// this guards against.
+				if b.Name == "Agent" {
+					s.StartAgent(b.ID, "")
 				}
 				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput)})
 			}
@@ -181,10 +203,15 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 			if b.Type == "tool_result" {
 				suppressed := s.RemoveSuppressed(b.ToolUseID)
 
-				// Agent tool_results: buffer into the agent's detail view instead of main stream
+				// Agent tool_results: buffer into the agent's detail view
+				// instead of main stream. This is the deterministic "no
+				// more events for this Agent" point; see task_notification
+				// above for why FinishAgent + task_done are deferred to here.
 				if s.GetAgentStat(b.ToolUseID) != nil {
 					output := b.Content.String()
 					s.BufferAgentEvent(b.ToolUseID, ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
+					s.FinishAgent(b.ToolUseID)
+					broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: b.ToolUseID})
 					continue
 				}
 
