@@ -125,7 +125,10 @@ type Hub struct {
 	Tracker       *SessionTracker
 	Labels        *LabelStore
 	Reviews       *ReviewStore
-	mu            sync.RWMutex
+	// hookBaseURL is the http://host:port that prefixes every hook URL.
+	hookBaseURL string
+	hooks       hookRegistry
+	mu          sync.RWMutex
 }
 
 // Close kills all active claude processes.
@@ -165,11 +168,11 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".monetdroid")
 }
 
-func NewHub() *Hub {
-	return NewHubWithDataDir(defaultDataDir())
+func NewHub(hookBaseURL string) *Hub {
+	return NewHubWithDataDir(hookBaseURL, defaultDataDir())
 }
 
-func NewHubWithDataDir(dataDir string) *Hub {
+func NewHubWithDataDir(hookBaseURL, dataDir string) *Hub {
 	go func() {
 		t := NewGitTrace("warm-cache")
 		defer t.Log()
@@ -182,6 +185,7 @@ func NewHubWithDataDir(dataDir string) *Hub {
 		Tracker:       NewSessionTracker(dataDir),
 		Labels:        NewLabelStore(dataDir),
 		Reviews:       NewReviewStore(),
+		hookBaseURL:   hookBaseURL,
 	}
 }
 
@@ -530,6 +534,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 			OnRawEvent: func(raw protocol.RawStreamEvent) {
 				handleRawStreamEvent(s, &raw, broadcast)
 			},
+			HookRegistry: h,
 		})
 		if err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})

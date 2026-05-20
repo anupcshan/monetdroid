@@ -3,6 +3,8 @@ package claude
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +53,18 @@ type ProcessConfig struct {
 	// OnRawEvent, when set, is called for raw streaming deltas
 	// (--include-partial-messages). Used for live text/thinking display.
 	OnRawEvent func(protocol.RawStreamEvent)
+
+	// HookRegistry, when set, enables Claude Code hooks on this process.
+	// StartProcess generates a routing token, registers a handler with the
+	// registry, and configures the CLI with --settings pointing at the
+	// registry's URL for that token. Hooks are passive observers; the
+	// handler updates internal state and calls OnHookEvent.
+	HookRegistry HookRegistry
+
+	// OnHookEvent, when set, is called for each hook event received via the
+	// HookRegistry. The receiver pre-extracts the event name; Body is the
+	// raw JSON. Requires HookRegistry to be set.
+	OnHookEvent func(HookEvent)
 }
 
 // ClaudeProcess owns a long-running claude CLI subprocess.
@@ -72,6 +86,12 @@ type ClaudeProcess struct {
 	permHandler PermissionHandler
 	onEvent     func(protocol.StreamEvent)
 	onRawEvent  func(protocol.RawStreamEvent)
+	onHookEvent func(HookEvent)
+
+	hookRegistry HookRegistry
+	hookToken    string
+	settingsPath string
+	curlShimPath string
 }
 
 // StartProcess starts a new claude CLI subprocess with default configuration.
@@ -87,6 +107,44 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		binCmd = cfg.Command
 	}
 
+	// Hook setup: write a curl shim that POSTs to the registry's URL for a
+	// per-process token, plus a --settings file pointing every hook event at
+	// that shim. Command-type hooks are used rather than HTTP because HTTP
+	// hooks do not deliver SessionStart or Setup.
+	var hookToken, settingsPath, curlShimPath string
+	if cfg != nil && cfg.HookRegistry != nil {
+		var tokenBytes [16]byte
+		if _, err := rand.Read(tokenBytes[:]); err != nil {
+			return nil, fmt.Errorf("generate hook token: %w", err)
+		}
+		hookToken = hex.EncodeToString(tokenBytes[:])
+		url := cfg.HookRegistry.HookURL(hookToken)
+		var err error
+		settingsPath, curlShimPath, err = writeHookConfig(url, 600)
+		if err != nil {
+			return nil, fmt.Errorf("write hook config: %w", err)
+		}
+	}
+
+	// Any failure path after writeHookConfig succeeds must remove the temp
+	// files and unregister the handler. Kill() handles the same cleanup on
+	// the live-process path; both are idempotent.
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if cfg != nil && cfg.HookRegistry != nil && hookToken != "" {
+			cfg.HookRegistry.UnregisterHookHandler(hookToken)
+		}
+		if settingsPath != "" {
+			os.Remove(settingsPath)
+		}
+		if curlShimPath != "" {
+			os.Remove(curlShimPath)
+		}
+	}()
+
 	var args []string
 	args = append(args, binCmd[1:]...)
 	args = append(args,
@@ -98,6 +156,9 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		"--permission-prompt-tool", "stdio",
 		"--permission-mode", "default",
 	)
+	if settingsPath != "" {
+		args = append(args, "--settings", settingsPath)
+	}
 	if resume != "" {
 		args = append(args, "--resume", resume)
 	}
@@ -142,27 +203,42 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start: %w", err)
-	}
-
 	var permHandler PermissionHandler
 	var onRawEvent func(protocol.RawStreamEvent)
+	var onHookEvent func(HookEvent)
+	var hookRegistry HookRegistry
 	if cfg != nil {
 		permHandler = cfg.PermissionHandler
 		onRawEvent = cfg.OnRawEvent
+		onHookEvent = cfg.OnHookEvent
+		hookRegistry = cfg.HookRegistry
 	}
 
 	p := &ClaudeProcess{
-		cmd:         cmd,
-		stdin:       stdin,
-		pending:     make(map[string]chan ctlRespPayload),
-		turnDone:    make(chan struct{}, 1),
-		dead:        make(chan struct{}),
-		sessionIDCh: make(chan string, 1),
-		permHandler: permHandler,
-		onEvent:     onEvent,
-		onRawEvent:  onRawEvent,
+		cmd:          cmd,
+		stdin:        stdin,
+		pending:      make(map[string]chan ctlRespPayload),
+		turnDone:     make(chan struct{}, 1),
+		dead:         make(chan struct{}),
+		sessionIDCh:  make(chan string, 1),
+		permHandler:  permHandler,
+		onEvent:      onEvent,
+		onRawEvent:   onRawEvent,
+		onHookEvent:  onHookEvent,
+		hookRegistry: hookRegistry,
+		hookToken:    hookToken,
+		settingsPath: settingsPath,
+		curlShimPath: curlShimPath,
+	}
+
+	// Register before cmd.Start so a hook POSTed during claude's startup
+	// reaches a registered handler.
+	if hookRegistry != nil && hookToken != "" {
+		hookRegistry.RegisterHookHandler(hookToken, p.HandleHookEvent)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
 	}
 
 	logLabel := cwd
@@ -185,6 +261,7 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 	}
 	log.Printf("[claude process][%s] initialized", logLabel)
 
+	success = true
 	return p, nil
 }
 
@@ -241,9 +318,22 @@ func (p *ClaudeProcess) scan(stdout io.Reader, logLabel string) {
 			}
 
 		default:
+			// Parent user / assistant messages flow from hook payloads
+			// (see HandleHookEvent). The system branch still carries
+			// sub-agent task lifecycle events (task_started, task_progress,
+			// task_notification); result carries cost data and signals
+			// turnDone. Sub-agent (sidechain) user / assistant events
+			// continue to flow here via stdout: the hook layer suppresses
+			// the equivalent for them in HandleHookEvent so the parent
+			// Agent chip can still receive their tool calls via the
+			// existing pid != "" branches in handleStreamEvent.
 			var event protocol.StreamEvent
 			if err := json.Unmarshal(line, &event); err != nil {
 				log.Printf("[parse error][%s] stream event: %s", logLabel, err)
+				continue
+			}
+			isSidechain := event.ParentToolUseID != nil && *event.ParentToolUseID != ""
+			if envelope.Type != "system" && envelope.Type != "result" && !isSidechain {
 				continue
 			}
 			if event.SessionID != "" {
@@ -488,4 +578,52 @@ func (p *ClaudeProcess) Kill() {
 	p.cmd.Process.Kill()
 	p.cmd.Wait()
 	<-p.dead // wait for scanner to finish
+
+	if p.hookRegistry != nil && p.hookToken != "" {
+		p.hookRegistry.UnregisterHookHandler(p.hookToken)
+	}
+	if p.settingsPath != "" {
+		os.Remove(p.settingsPath)
+	}
+	if p.curlShimPath != "" {
+		os.Remove(p.curlShimPath)
+	}
+}
+
+// HandleHookEvent converts the hook payload into protocol.StreamEvents and
+// dispatches them through onEvent. See hookToStreamEvents for the per-event
+// mapping. Hooks are passive observers; this method never returns a
+// decision body to claude.
+func (p *ClaudeProcess) HandleHookEvent(body []byte) error {
+	var env struct {
+		EventName string `json:"hook_event_name"`
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return fmt.Errorf("parse hook envelope: %w", err)
+	}
+
+	if env.SessionID != "" {
+		select {
+		case p.sessionIDCh <- env.SessionID:
+		default:
+		}
+	}
+
+	// Sub-agent inner hooks (agent_id set) are not synthesized into
+	// StreamEvents here: their content already arrives on stdout as
+	// sidechain user/assistant events (see scan's default branch) and gets
+	// buffered into the parent Agent's slot via handleStreamEvent's
+	// pid != "" branches. Emitting them here too would double-render.
+	if env.AgentID == "" && p.onEvent != nil {
+		for _, ev := range hookToStreamEvents(env.EventName, body) {
+			p.onEvent(ev)
+		}
+	}
+
+	if p.onHookEvent != nil {
+		p.onHookEvent(HookEvent{Name: env.EventName, Body: body})
+	}
+	return nil
 }

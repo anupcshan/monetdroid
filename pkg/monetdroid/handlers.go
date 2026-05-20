@@ -77,6 +77,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/review/delete", hub.handleReviewDelete)
 	mux.HandleFunc("/review/send", hub.handleReviewSend)
 	mux.HandleFunc("/kb/", hub.handleKB)
+	mux.HandleFunc("/hooks/", hub.handleHook)
 	return mux
 }
 
@@ -455,6 +456,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
 			PermissionHandler: permHandler,
 			OnRawEvent:        onRawEvent,
+			HookRegistry:      h,
 		})
 		if err != nil {
 			log.Printf("[send] start process failed: %s", err)
