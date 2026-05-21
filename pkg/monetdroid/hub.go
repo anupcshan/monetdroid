@@ -219,11 +219,8 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 	s := h.Sessions.Get(sessionID)
 
-	// Accumulate cost — skip sub-agent cost events to avoid overwriting parent context
 	if msg.Type == "cost" && msg.Cost != nil && s != nil {
-		if s.GetAgentDepth() == 0 {
-			s.AccumulateCost(msg.Cost)
-		}
+		s.AccumulateCost(msg.Cost)
 	}
 
 	// Update todos from TodoWrite/TaskCreate/TaskUpdate tool_use events
@@ -261,35 +258,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 
 	if msg.Type == "cost" && s != nil {
 		parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
-	}
-
-	// Update agent chip stats via OOB swap
-	if msg.Type == "agent_progress" && msg.AgentStat != nil && msg.ToolUseID != "" {
-		parts = append(parts, OobSwap("agent-stats-"+msg.ToolUseID, "innerHTML", RenderAgentStatHTML(msg.AgentStat)))
-	}
-
-	// Start elapsed timer for Agent tool chips.
-	// agent_started is broadcast by handleStreamEvent when task_started arrives,
-	// which is after StartAgent creates the stop channel.
-	if msg.Type == "agent_started" && msg.ToolUseID != "" && s != nil {
-		toolUseID := msg.ToolUseID
-		go func() {
-			stopCh := s.GetAgentStop(toolUseID)
-			if stopCh == nil {
-				return
-			}
-			started := time.Now()
-			for {
-				select {
-				case <-stopCh:
-					return
-				case <-time.After(1 * time.Second):
-					secs := int(time.Since(started).Seconds())
-					h.BroadcastToSession(sessionID, FormatSSE("htmx",
-						OobSwap("elapsed-"+toolUseID, "innerHTML", fmt.Sprintf("%ds", secs))))
-				}
-			}
-		}()
 	}
 
 	thinkingDots := `<span></span><span></span><span></span>`
@@ -478,6 +446,38 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
 	}
 
+	// Sub-agent inner events (AgentID set) flow into the section body,
+	// not the main timeline. The section element was created at
+	// SubagentStart and lives at #subagent-section-<AgentID>; appending to
+	// #subagent-body-<AgentID> places the chip inside it.
+	if msgHTML != "" && msg.AgentID != "" && (msg.Type == "tool_use" || msg.Type == "tool_result") {
+		parts = append(parts, OobSwap("subagent-body-"+msg.AgentID, "beforeend", msgHTML))
+		msgHTML = ""
+	}
+
+	// subagent_linked updates the section's heading, stats, and final-text
+	// area in place via OOB swaps. The section's outer element is unchanged.
+	if msg.Type == "subagent_linked" && msg.AgentID != "" {
+		heading := linkedSubagentHeading(msg.Description, msg.AgentID)
+		parts = append(parts, OobSwap("subagent-heading-"+msg.AgentID, "innerHTML", heading))
+		stats := renderSubagentStats(msg.TotalTokens, msg.TotalToolUses, msg.DurationMs)
+		parts = append(parts, OobSwap("subagent-stats-"+msg.AgentID, "innerHTML", stats))
+		if msg.Text != "" {
+			finalHTML := fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`,
+				RenderMarkdown(msg.Text))
+			parts = append(parts, OobSwap("subagent-final-"+msg.AgentID, "innerHTML", finalHTML))
+		}
+		parts = append(parts, OobSwap("subagent-spinner-"+msg.AgentID, "outerHTML", ""))
+		msgHTML = ""
+	}
+
+	// subagent_stopped clears the section's spinner without touching the
+	// heading. Link arrives separately and overrides this.
+	if msg.Type == "subagent_stopped" && msg.AgentID != "" {
+		parts = append(parts, OobSwap("subagent-spinner-"+msg.AgentID, "outerHTML", ""))
+		msgHTML = ""
+	}
+
 	if msgHTML != "" {
 		parts = append(parts, clearStreaming)
 		parts = append(parts, OobSwap("msg-content", "beforeend", msgHTML))
@@ -535,6 +535,9 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 				handleRawStreamEvent(s, &raw, broadcast)
 			},
 			HookRegistry: h,
+			OnHookEvent: func(ev claude.HookEvent) {
+				handleHookEvent(s, ev, broadcast)
+			},
 		})
 		if err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
@@ -600,27 +603,37 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc *claude.ClaudeProcess) {
 
 // renderContext holds precomputed metadata for rendering a slice of messages.
 type renderContext struct {
-	lastCompact    int
-	completedTools map[string]bool
-	bgTaskResults  map[string]string    // tool_use id → output file path
-	suppressedIDs  map[string]bool      // tool_use ids for tools whose results are suppressed
-	pendingPerms   map[string]ServerMsg // tool_use id → unresolved inline permission_request
+	lastCompact      int
+	completedTools   map[string]bool
+	bgTaskResults    map[string]string               // tool_use id → output file path
+	suppressedIDs    map[string]bool                 // tool_use ids for tools whose results are suppressed
+	pendingPerms     map[string]ServerMsg            // tool_use id → unresolved inline permission_request
+	subagentSections map[string]*subagentRenderState // agent_id → section state derived from later events
+}
+
+// subagentRenderState holds the inner events and link metadata for one
+// sub-agent section, gathered during the precompute pass and consumed when
+// renderMessages encounters the section's subagent_started entry.
+type subagentRenderState struct {
+	Section     *SubagentSection
+	InnerEvents []ServerMsg
 }
 
 // precomputeRenderContext scans the full log to build rendering metadata.
 func precomputeRenderContext(log []ServerMsg) renderContext {
 	rc := renderContext{
-		lastCompact:    -1,
-		completedTools: make(map[string]bool),
-		bgTaskResults:  make(map[string]string),
-		suppressedIDs:  make(map[string]bool),
-		pendingPerms:   make(map[string]ServerMsg),
+		lastCompact:      -1,
+		completedTools:   make(map[string]bool),
+		bgTaskResults:    make(map[string]string),
+		suppressedIDs:    make(map[string]bool),
+		pendingPerms:     make(map[string]ServerMsg),
+		subagentSections: make(map[string]*subagentRenderState),
 	}
 	for i, msg := range log {
 		if msg.Type == "compact_boundary" {
 			rc.lastCompact = i
 		}
-		if msg.Type == "tool_result" && msg.ToolUseID != "" {
+		if msg.Type == "tool_result" && msg.ToolUseID != "" && msg.AgentID == "" {
 			rc.completedTools[msg.ToolUseID] = true
 			if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
 				rc.bgTaskResults[msg.ToolUseID] = bgPath
@@ -631,6 +644,30 @@ func precomputeRenderContext(log []ServerMsg) renderContext {
 		}
 		if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
 			rc.pendingPerms[msg.ToolUseID] = msg
+		}
+		if msg.AgentID == "" {
+			continue
+		}
+		st := rc.subagentSections[msg.AgentID]
+		if st == nil {
+			st = &subagentRenderState{Section: &SubagentSection{AgentID: msg.AgentID}}
+			rc.subagentSections[msg.AgentID] = st
+		}
+		switch msg.Type {
+		case "subagent_started":
+			st.Section.AgentType = msg.AgentType
+		case "subagent_stopped":
+			st.Section.Stopped = true
+		case "subagent_linked":
+			st.Section.Linked = true
+			st.Section.ParentToolUseID = msg.ParentToolUseID
+			st.Section.Description = msg.Description
+			st.Section.FinalText = msg.Text
+			st.Section.TotalTokens = msg.TotalTokens
+			st.Section.TotalToolUses = msg.TotalToolUses
+			st.Section.DurationMs = msg.DurationMs
+		case "tool_use", "tool_result":
+			st.InnerEvents = append(st.InnerEvents, msg)
 		}
 	}
 	return rc
@@ -652,16 +689,33 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 			b.WriteString(RenderMsg(msg))
 			continue
 		}
+		// Sub-agent inner events (AgentID set on tool_use/tool_result) and
+		// section lifecycle updates (subagent_linked/stopped) are folded
+		// into the section block rendered at the subagent_started event.
+		if msg.AgentID != "" {
+			switch msg.Type {
+			case "subagent_started":
+				st := rc.subagentSections[msg.AgentID]
+				if st == nil {
+					b.WriteString(RenderSubagentSection(msg.AgentID, msg.AgentType, nil))
+				} else {
+					b.WriteString(renderFinalSubagentSection(st))
+				}
+			case "tool_use", "tool_result", "subagent_linked", "subagent_stopped":
+				// Folded into the section block above.
+			}
+			continue
+		}
 		if msg.Type == "tool_result" && rc.suppressedIDs[msg.ToolUseID] {
 			if len(msg.Images) == 0 {
 				continue
 			}
 		}
-		// Suppress bg task tool_results — their output is loaded lazily
+		// Suppress bg task tool_results: their output is loaded lazily.
 		if msg.Type == "tool_result" && rc.bgTaskResults[msg.ToolUseID] != "" {
 			continue
 		}
-		// Skip inline permission_request messages — they're rendered inside tool chips
+		// Skip inline permission_request messages: they're rendered inside tool chips.
 		if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
 			continue
 		}

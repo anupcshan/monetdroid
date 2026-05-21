@@ -318,22 +318,18 @@ func (p *ClaudeProcess) scan(stdout io.Reader, logLabel string) {
 			}
 
 		default:
-			// Parent user / assistant messages flow from hook payloads
-			// (see HandleHookEvent). The system branch still carries
-			// sub-agent task lifecycle events (task_started, task_progress,
-			// task_notification); result carries cost data and signals
-			// turnDone. Sub-agent (sidechain) user / assistant events
-			// continue to flow here via stdout: the hook layer suppresses
-			// the equivalent for them in HandleHookEvent so the parent
-			// Agent chip can still receive their tool calls via the
-			// existing pid != "" branches in handleStreamEvent.
+			// User and assistant messages flow from hook payloads (see
+			// HandleHookEvent). The system branch still carries sub-agent
+			// task lifecycle events (task_started, task_progress,
+			// task_notification). The result branch carries cost data and
+			// signals turnDone. Sub-agent inner events flow only via hooks.
+			// Their stdout sidechain user/assistant events are dropped here.
+			if envelope.Type != "system" && envelope.Type != "result" {
+				continue
+			}
 			var event protocol.StreamEvent
 			if err := json.Unmarshal(line, &event); err != nil {
 				log.Printf("[parse error][%s] stream event: %s", logLabel, err)
-				continue
-			}
-			isSidechain := event.ParentToolUseID != nil && *event.ParentToolUseID != ""
-			if envelope.Type != "system" && envelope.Type != "result" && !isSidechain {
 				continue
 			}
 			if event.SessionID != "" {
@@ -611,11 +607,12 @@ func (p *ClaudeProcess) HandleHookEvent(body []byte) error {
 		}
 	}
 
-	// Sub-agent inner hooks (agent_id set) are not synthesized into
-	// StreamEvents here: their content already arrives on stdout as
-	// sidechain user/assistant events (see scan's default branch) and gets
-	// buffered into the parent Agent's slot via handleStreamEvent's
-	// pid != "" branches. Emitting them here too would double-render.
+	// Inner sub-agent events (agent_id set) skip hookToStreamEvents: their
+	// tool_use blocks must not leak into the parent's main stream. They are
+	// routed only via OnHookEvent, where the monetdroid layer broadcasts a
+	// subagent section keyed by agent_id and renames it at parent
+	// PostToolUse for Agent (the only payload carrying both agent_id and
+	// the parent's tool_use_id).
 	if env.AgentID == "" && p.onEvent != nil {
 		for _, ev := range hookToStreamEvents(env.EventName, body) {
 			p.onEvent(ev)

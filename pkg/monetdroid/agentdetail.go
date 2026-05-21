@@ -2,61 +2,123 @@ package monetdroid
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 )
 
-// RenderAgentSlot returns a lazy-load trigger for agent detail output.
-// The actual content is loaded when the user opens the tool chip's <details>.
-func RenderAgentSlot(sessionID, toolUseID string) string {
-	return fmt.Sprintf(
-		`<div class="agent-detail-slot" id="agent-slot-%s" `+
-			`hx-get="/agent-detail/connect?session=%s&tool_id=%s" `+
-			`hx-trigger="revealed once" hx-swap="innerHTML"></div>`,
-		Esc(toolUseID), url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
-}
-
-// RenderAgentSSEDiv returns the SSE-connected div that streams agent detail
-// events starting from the given buffer offset. The connect handler captures
-// the offset of events it has already rendered as static HTML and passes
-// that length here; the stream endpoint resumes from exactly that point so
-// no event falls into the gap between the connect response and the SSE
-// handler starting.
-func RenderAgentSSEDiv(sessionID, toolUseID string, fromOffset int) string {
-	return fmt.Sprintf(
-		`<div hx-ext="sse" `+
-			`sse-connect="/agent-detail/stream?session=%s&tool_id=%s&from=%d" `+
-			`sse-swap="event" hx-swap="beforeend" sse-close="done"></div>`,
-		url.QueryEscape(sessionID), url.QueryEscape(toolUseID), fromOffset)
-}
-
-// RenderAgentStatHTML returns the inline stats display for an agent chip.
-func RenderAgentStatHTML(stat *AgentStat) string {
-	if stat == nil {
-		return ""
-	}
-	var parts []string
-	if stat.TotalTokens > 0 {
-		parts = append(parts, FmtK(stat.TotalTokens)+" tokens")
-	}
-	if stat.ToolUses > 0 {
-		parts = append(parts, fmt.Sprintf("%d tools", stat.ToolUses))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, " · ")
-}
-
-// RenderAgentDetail renders all buffered events for an agent as HTML.
-// Reuses RenderMsg for each event — no agent-specific rendering.
-func RenderAgentDetail(events []ServerMsg) string {
-	var b strings.Builder
-	for _, msg := range events {
-		rendered := RenderMsg(msg)
-		if rendered != "" {
-			b.WriteString(rendered)
+// RenderSubagentSection renders the outer block for a sub-agent section. It
+// is rendered once at SubagentStart with empty body and spinner running.
+// The body fills in live via OOB swaps as inner tool_use/tool_result events
+// arrive. At link time the heading and stats line update via OOB swaps.
+//
+// section may be nil during the initial live broadcast (no link info yet).
+// On replay, section is populated with whatever final state was reached. The
+// spinner span is omitted entirely once the section is linked or stopped,
+// matching the live OOB swap that sets outerHTML="" on those transitions.
+func RenderSubagentSection(agentID, agentType string, section *SubagentSection) string {
+	heading := defaultSubagentHeading(agentID, agentType)
+	stats := ""
+	finalTextHTML := ""
+	spinnerHTML := fmt.Sprintf(
+		` <span class="tool-spinner" id="subagent-spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span></span>`,
+		Esc(agentID))
+	if section != nil {
+		if section.Linked {
+			heading = linkedSubagentHeading(section.Description, agentID)
+			stats = renderSubagentStats(section.TotalTokens, section.TotalToolUses, section.DurationMs)
+		}
+		if section.FinalText != "" {
+			finalTextHTML = fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`,
+				RenderMarkdown(section.FinalText))
+		}
+		if section.Stopped || section.Linked {
+			spinnerHTML = ""
 		}
 	}
-	return b.String()
+	return fmt.Sprintf(
+		`<div class="msg msg-subagent" id="subagent-section-%s">`+
+			`<details class="tool-chip">`+
+			`<summary class="tool-name">⚙ <span class="subagent-heading" id="subagent-heading-%s">%s</span>%s<span class="agent-stats" id="subagent-stats-%s">%s</span></summary>`+
+			`<div class="tool-detail">`+
+			`<div class="subagent-body" id="subagent-body-%s"></div>`+
+			`<div class="subagent-final" id="subagent-final-%s">%s</div>`+
+			`</div>`+
+			`</details>`+
+			`</div>`,
+		Esc(agentID),
+		Esc(agentID), heading, spinnerHTML,
+		Esc(agentID), stats,
+		Esc(agentID),
+		Esc(agentID), finalTextHTML,
+	)
+}
+
+func defaultSubagentHeading(agentID, agentType string) string {
+	if agentType != "" {
+		return fmt.Sprintf("subagent %s (%s)", Esc(agentType), Esc(agentID))
+	}
+	return fmt.Sprintf("subagent (%s)", Esc(agentID))
+}
+
+func linkedSubagentHeading(description, agentID string) string {
+	if description != "" {
+		return fmt.Sprintf("Agent: %s", Esc(description))
+	}
+	return fmt.Sprintf("Agent (%s)", Esc(agentID))
+}
+
+func renderSubagentStats(tokens, toolUses, durationMs int) string {
+	var parts []string
+	if tokens > 0 {
+		parts = append(parts, FmtK(tokens)+" tokens")
+	}
+	if toolUses > 0 {
+		parts = append(parts, fmt.Sprintf("%d tools", toolUses))
+	}
+	if durationMs > 0 {
+		parts = append(parts, fmt.Sprintf("%ds", (durationMs+500)/1000))
+	}
+	return strings.Join(parts, " . ")
+}
+
+// RenderSubagentChip renders an inner tool_use chip for a sub-agent. The
+// markup is intentionally lightweight: no permission slots, no Bash bg
+// slot, no Agent-specific machinery. These chips render inside the
+// section's body container.
+func RenderSubagentChip(msg ServerMsg) string {
+	if msg.Tool == "TodoWrite" || msg.Tool == "TaskCreate" || msg.Tool == "TaskUpdate" {
+		return ""
+	}
+	summary := ToolChipSummary(msg.Tool, msg.Input)
+	detail := FormatToolInput(msg.Tool, msg.Input)
+	return fmt.Sprintf(
+		`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div></details></div>`,
+		Esc(msg.ToolUseID), Esc(summary), Esc(detail))
+}
+
+// RenderSubagentToolResult renders the tool_result text for an inner
+// sub-agent tool. Mirrors the main-stream tool_result chip.
+func RenderSubagentToolResult(msg ServerMsg) string {
+	if len(msg.Images) > 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		`<div class="msg msg-tool"><details class="tool-result-chip"><summary class="tool-result-summary">result</summary><div class="tool-result-full">%s</div></details></div>`,
+		Esc(msg.Output))
+}
+
+// renderFinalSubagentSection emits the section block with its inner chips
+// inlined and its final state (link, stats, stopped). Used on replay so the
+// initial server-rendered HTML matches what live OOB swaps would have built.
+func renderFinalSubagentSection(st *subagentRenderState) string {
+	base := RenderSubagentSection(st.Section.AgentID, st.Section.AgentType, st.Section)
+	if len(st.InnerEvents) == 0 {
+		return base
+	}
+	var body strings.Builder
+	for _, msg := range st.InnerEvents {
+		body.WriteString(RenderMsg(msg))
+	}
+	emptyBody := fmt.Sprintf(`<div class="subagent-body" id="subagent-body-%s"></div>`, Esc(st.Section.AgentID))
+	filledBody := fmt.Sprintf(`<div class="subagent-body" id="subagent-body-%s">%s</div>`, Esc(st.Section.AgentID), body.String())
+	return strings.Replace(base, emptyBody, filledBody, 1)
 }

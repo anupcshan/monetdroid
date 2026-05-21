@@ -19,6 +19,12 @@ type ServerMsg struct {
 	Error           string                    `json:"error,omitempty"`
 	Cost            *CostInfo                 `json:"cost,omitempty"`
 	ParentToolUseID string                    `json:"parent_tool_use_id,omitempty"`
+	AgentID         string                    `json:"agent_id,omitempty"`
+	AgentType       string                    `json:"agent_type,omitempty"`
+	Description     string                    `json:"description,omitempty"`
+	TotalTokens     int                       `json:"total_tokens,omitempty"`
+	TotalToolUses   int                       `json:"total_tool_uses,omitempty"`
+	DurationMs      int                       `json:"duration_ms,omitempty"`
 	AgentStat       *AgentStat                `json:"agent_stat,omitempty"`
 	PermID          string                    `json:"perm_id,omitempty"`
 	PermTool        string                    `json:"perm_tool,omitempty"`

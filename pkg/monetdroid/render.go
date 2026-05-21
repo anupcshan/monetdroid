@@ -85,16 +85,10 @@ func ToolChipSummary(tool string, input *protocol.ToolInput) string {
 		}
 		return "Bash"
 	case input.Agent != nil:
-		var parts []string
-		if input.Agent.SubagentType != "" {
-			parts = append(parts, fmt.Sprintf("Agent (%s)", strings.ToLower(input.Agent.SubagentType)))
-		} else {
-			parts = append(parts, "Agent")
-		}
 		if input.Agent.Description != "" {
-			parts = append(parts, input.Agent.Description)
+			return "Agent: " + input.Agent.Description
 		}
-		return strings.Join(parts, ": ")
+		return "Agent"
 	case input.PlanMode != nil:
 		return "ExitPlanMode"
 	}
@@ -372,12 +366,15 @@ func RenderMsg(msg ServerMsg) string {
 		if msg.Tool == "AskUserQuestion" {
 			return RenderAskUserStatic(msg.Input)
 		}
+		if msg.AgentID != "" {
+			return RenderSubagentChip(msg)
+		}
 		if diffHTML, summary := renderToolDiff(msg); diffHTML != "" {
 			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s<span id="perm-status-%s"></span></summary><div class="tool-detail" id="tool-detail-%s">%s</div><div id="perm-slot-%s"></div></details></div>`,
 				Esc(msg.ToolUseID), Esc(summary), Esc(msg.ToolUseID), Esc(msg.ToolUseID), diffHTML, Esc(msg.ToolUseID))
 		}
 		var spinnerHTML string
-		if msg.Tool == "Bash" || msg.Tool == "Agent" {
+		if msg.Tool == "Bash" {
 			spinnerHTML = fmt.Sprintf(` <span class="tool-spinner" id="spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span> <span class="tool-elapsed" id="elapsed-%s"></span></span>`, Esc(msg.ToolUseID), Esc(msg.ToolUseID))
 		}
 		summary := ToolChipSummary(msg.Tool, msg.Input)
@@ -388,14 +385,11 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		permSlot := fmt.Sprintf(`<div id="perm-slot-%s"></div>`, Esc(msg.ToolUseID))
 		permStatus := fmt.Sprintf(`<span id="perm-status-%s"></span>`, Esc(msg.ToolUseID))
-		if msg.Tool == "Agent" {
-			statsHTML := fmt.Sprintf(`<span class="agent-stats" id="agent-stats-%s"></span>`, Esc(msg.ToolUseID))
-			agentSlot := RenderAgentSlot(msg.SessionID, msg.ToolUseID)
-			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s %s%s</summary>%s%s</details></div>`,
-				Esc(msg.ToolUseID), Esc(summary), spinnerHTML, statsHTML, permStatus, permSlot, agentSlot)
-		}
 		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s%s</summary><div class="tool-detail" id="tool-detail-%s">%s</div>%s%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, permStatus, Esc(msg.ToolUseID), Esc(detail), permSlot, extraSlot)
 	case "tool_result":
+		if msg.AgentID != "" {
+			return RenderSubagentToolResult(msg)
+		}
 		if len(msg.Images) > 0 {
 			var content strings.Builder
 			for _, img := range msg.Images {
@@ -407,6 +401,12 @@ func RenderMsg(msg ServerMsg) string {
 			return fmt.Sprintf(`<div class="msg msg-tool">%s</div>`, content.String())
 		}
 		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-result-chip"><summary class="tool-result-summary">result</summary><div class="tool-result-full">%s</div></details></div>`, Esc(msg.Output))
+	case "subagent_started":
+		return RenderSubagentSection(msg.AgentID, msg.AgentType, nil)
+	case "subagent_linked":
+		return ""
+	case "subagent_stopped":
+		return ""
 	case "error":
 		return fmt.Sprintf(`<div class="msg"><div class="msg-error">✗ %s</div></div>`, Esc(msg.Error))
 	case "permission_request":

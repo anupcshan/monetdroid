@@ -156,6 +156,14 @@ func hookToStreamEvents(eventName string, body []byte) []protocol.StreamEvent {
 			log.Printf("[hook] PreToolUse parse: %v", err)
 			return nil
 		}
+		// The Agent tool is rendered as a sub-agent section in the main
+		// timeline (see monetdroid handleHookEvent), not as a standalone
+		// parent Agent tool_use chip. Emitting a tool_use StreamEvent for
+		// Agent here would create an empty parent chip alongside the
+		// sub-agent section.
+		if p.ToolName == "Agent" {
+			return nil
+		}
 		return []protocol.StreamEvent{{
 			Type:      "assistant",
 			SessionID: p.SessionID,

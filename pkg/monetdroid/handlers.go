@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,8 +68,6 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/api/notifications", hub.handleNotifications)
 	mux.HandleFunc("/bg-output/connect", hub.handleBgOutputConnect)
 	mux.HandleFunc("/bg-output/stream", hub.handleBgOutputStream)
-	mux.HandleFunc("/agent-detail/connect", hub.handleAgentDetailConnect)
-	mux.HandleFunc("/agent-detail/stream", hub.handleAgentDetailStream)
 	mux.HandleFunc("/messages/before", hub.handleMessagesBefore)
 	mux.HandleFunc("/review/comment-form", hub.handleReviewCommentForm)
 	mux.HandleFunc("/review/comment", hub.handleReviewComment)
@@ -457,6 +454,14 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			PermissionHandler: permHandler,
 			OnRawEvent:        onRawEvent,
 			HookRegistry:      h,
+			OnHookEvent: func(ev claude.HookEvent) {
+				mu.Lock()
+				ss := sess
+				mu.Unlock()
+				if ss != nil {
+					handleHookEvent(ss, ev, broadcast)
+				}
+			},
 		})
 		if err != nil {
 			log.Printf("[send] start process failed: %s", err)
@@ -1425,115 +1430,6 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 				if escaped != "" {
 					fmt.Fprint(w, FormatSSE("chunk", fmt.Sprintf("<span>%s\n</span>", escaped)))
 					flusher.Flush()
-				}
-			}
-			fmt.Fprint(w, FormatSSE("done", ""))
-			flusher.Flush()
-			return
-		case <-ctx.Done():
-			return
-		case <-time.After(pollInterval):
-		}
-	}
-}
-
-// handleAgentDetailConnect returns the rendered agent detail content: all
-// events buffered so far as static HTML, followed by an SSE div that picks
-// up exactly where this response stopped. The `from` offset embedded in the
-// SSE URL is the length of the snapshot we just rendered, so the SSE
-// handler cannot drop events that land between the two requests.
-func (h *Hub) handleAgentDetailConnect(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.URL.Query().Get("session")
-	toolID := r.URL.Query().Get("tool_id")
-	s := h.Sessions.Get(sessionID)
-	if s == nil {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html")
-	events := s.GetAgentEvents(toolID)
-	fmt.Fprint(w, RenderAgentDetail(events))
-	fmt.Fprint(w, RenderAgentSSEDiv(sessionID, toolID, len(events)))
-}
-
-// handleAgentDetailStream serves buffered agent events as an SSE stream
-// starting at the offset given by the `from` query parameter. The connect
-// handler passes the length of the snapshot it rendered; this handler
-// resumes from that exact point. Returns 400 if `from` is missing or not
-// a non-negative integer.
-func (h *Hub) handleAgentDetailStream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "SSE not supported", http.StatusInternalServerError)
-		return
-	}
-
-	sessionID := r.URL.Query().Get("session")
-	toolID := r.URL.Query().Get("tool_id")
-	fromStr := r.URL.Query().Get("from")
-	from, err := strconv.Atoi(fromStr)
-	if err != nil {
-		http.Error(w, "invalid from: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if from < 0 {
-		http.Error(w, "from must be non-negative", http.StatusBadRequest)
-		return
-	}
-	s := h.Sessions.Get(sessionID)
-	if s == nil {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher.Flush()
-
-	stopCh := s.GetAgentStop(toolID)
-	ctx := r.Context()
-	offset := from
-
-	const pollInterval = 500 * time.Millisecond
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		events := s.GetAgentEvents(toolID)
-		if len(events) > offset {
-			for _, msg := range events[offset:] {
-				rendered := RenderMsg(msg)
-				if rendered != "" {
-					fmt.Fprint(w, FormatSSE("event", rendered))
-					flusher.Flush()
-				}
-			}
-			offset = len(events)
-		}
-
-		if stopCh == nil {
-			// Agent already done
-			fmt.Fprint(w, FormatSSE("done", ""))
-			flusher.Flush()
-			return
-		}
-		select {
-		case <-stopCh:
-			// Agent just completed — send remaining events
-			events := s.GetAgentEvents(toolID)
-			if len(events) > offset {
-				for _, msg := range events[offset:] {
-					rendered := RenderMsg(msg)
-					if rendered != "" {
-						fmt.Fprint(w, FormatSSE("event", rendered))
-						flusher.Flush()
-					}
 				}
 			}
 			fmt.Fprint(w, FormatSSE("done", ""))

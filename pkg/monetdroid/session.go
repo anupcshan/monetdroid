@@ -31,15 +31,39 @@ type Session struct {
 	DiffStat          DiffStat
 	EventLog          EventLog
 	PermChans         map[string]chan protocol.PermResponse
-	AgentDepth        int                      // nesting depth of active sub-agents
-	AgentToolIDs      map[string]bool          // active Agent tool_use IDs
-	AgentEvents       map[string][]ServerMsg   // buffered sub-agent events per parent Agent tool_use ID
-	AgentStats        map[string]*AgentStat    // live stats per Agent tool_use ID
-	AgentStops        map[string]chan struct{} // stop channels for agent detail streams
-	StreamingText     string                   // accumulated text from text_delta events
-	StreamingThinking string                   // accumulated text from thinking_delta events
+	AgentDepth        int                   // nesting depth of active sub-agents
+	AgentToolIDs      map[string]bool       // active Agent tool_use IDs (keyed by parent tool_use_id)
+	AgentStats        map[string]*AgentStat // live stats per Agent tool_use ID (from task_progress)
+	// AgentDescriptions stashes the parent Agent tool's `description` from
+	// PreToolUse, keyed by the parent's tool_use_id. Consumed at parent's
+	// PostToolUse for Agent (the only payload that pairs that tool_use_id
+	// with the sub-agent's agent_id).
+	AgentDescriptions map[string]string
+	// SubagentSections tracks sub-agent section state for log replay. Keyed
+	// by agent_id (from SubagentStart). Each section is created live and
+	// progressively populated. The replay path uses this state to render the
+	// section in its final form on initial page load.
+	SubagentSections  map[string]*SubagentSection
+	StreamingText     string // accumulated text from text_delta events
+	StreamingThinking string // accumulated text from thinking_delta events
 	proc              *claude.ClaudeProcess
 	mu                sync.Mutex
+}
+
+// SubagentSection holds the rendered state of a sub-agent section. Fields
+// are filled in progressively: AgentID at SubagentStart, the rest at the
+// parent's PostToolUse for Agent (link). Stopped flips at SubagentStop.
+type SubagentSection struct {
+	AgentID         string
+	AgentType       string
+	Linked          bool
+	ParentToolUseID string
+	Description     string
+	FinalText       string
+	TotalTokens     int
+	TotalToolUses   int
+	DurationMs      int
+	Stopped         bool
 }
 
 func (s *Session) Append(msg ServerMsg) {
@@ -397,15 +421,9 @@ func (s *Session) RemoveSuppressed(id string) bool {
 
 // --- Agent operations ---
 
-// StartAgent registers a sub-agent. Idempotent: if called more than once
-// for the same toolUseID (e.g. once at the parent tool_use, then again at
-// the task_started system event), only the first call allocates the stop
-// channel and increments depth; subsequent calls update the description if
-// the existing one is empty. The early call at tool_use is required because
-// the browser's hx-trigger="revealed" on the agent slot fires as soon as
-// the slot lands in the DOM, so /agent-detail/stream can race in before
-// task_started arrives; without a pre-allocated stop channel, the stream
-// handler reads stopCh==nil and exits assuming the agent is already done.
+// StartAgent registers an Agent invocation in the AgentStats table. Called
+// from stdout task_started, which carries the parent tool_use_id only. The
+// associated sub-agent's agent_id is not yet known.
 func (s *Session) StartAgent(toolUseID, description string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -414,12 +432,6 @@ func (s *Session) StartAgent(toolUseID, description string) {
 	}
 	if s.AgentStats == nil {
 		s.AgentStats = make(map[string]*AgentStat)
-	}
-	if s.AgentEvents == nil {
-		s.AgentEvents = make(map[string][]ServerMsg)
-	}
-	if s.AgentStops == nil {
-		s.AgentStops = make(map[string]chan struct{})
 	}
 	if s.AgentToolIDs[toolUseID] {
 		if description != "" && s.AgentStats[toolUseID] != nil && s.AgentStats[toolUseID].Description == "" {
@@ -430,10 +442,9 @@ func (s *Session) StartAgent(toolUseID, description string) {
 	s.AgentDepth++
 	s.AgentToolIDs[toolUseID] = true
 	s.AgentStats[toolUseID] = &AgentStat{Description: description}
-	s.AgentStops[toolUseID] = make(chan struct{})
 }
 
-// FinishAgent marks an agent as completed and decrements depth.
+// FinishAgent marks an Agent invocation as completed and decrements depth.
 func (s *Session) FinishAgent(toolUseID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -443,10 +454,6 @@ func (s *Session) FinishAgent(toolUseID string) {
 	}
 	if stat := s.AgentStats[toolUseID]; stat != nil {
 		stat.Completed = true
-	}
-	if ch, ok := s.AgentStops[toolUseID]; ok {
-		close(ch)
-		delete(s.AgentStops, toolUseID)
 	}
 }
 
@@ -471,23 +478,6 @@ func (s *Session) UpdateAgentStat(toolUseID string, usage *protocol.TaskUsage, d
 	}
 }
 
-// BufferAgentEvent appends a ServerMsg to the buffer for a sub-agent.
-func (s *Session) BufferAgentEvent(parentToolUseID string, msg ServerMsg) {
-	s.mu.Lock()
-	s.AgentEvents[parentToolUseID] = append(s.AgentEvents[parentToolUseID], msg)
-	s.mu.Unlock()
-}
-
-// GetAgentEvents returns a copy of the buffered events for an agent.
-func (s *Session) GetAgentEvents(toolUseID string) []ServerMsg {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	events := s.AgentEvents[toolUseID]
-	out := make([]ServerMsg, len(events))
-	copy(out, events)
-	return out
-}
-
 // GetAgentStat returns a copy of the agent stat.
 func (s *Session) GetAgentStat(toolUseID string) *AgentStat {
 	s.mu.Lock()
@@ -507,11 +497,78 @@ func (s *Session) GetAgentDepth() int {
 	return s.AgentDepth
 }
 
-// GetAgentStop returns the stop channel for an agent's detail stream, if still running.
-func (s *Session) GetAgentStop(toolUseID string) chan struct{} {
+// StashAgentDescription stores the parent Agent tool's `description` from
+// PreToolUse, keyed by the parent's tool_use_id. Consumed by
+// TakeAgentDescription at parent's PostToolUse for Agent.
+func (s *Session) StashAgentDescription(parentToolUseID, description string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.AgentStops[toolUseID]
+	if s.AgentDescriptions == nil {
+		s.AgentDescriptions = make(map[string]string)
+	}
+	s.AgentDescriptions[parentToolUseID] = description
+}
+
+// TakeAgentDescription returns and removes the stashed description for a
+// parent Agent tool_use_id.
+func (s *Session) TakeAgentDescription(parentToolUseID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	desc := s.AgentDescriptions[parentToolUseID]
+	delete(s.AgentDescriptions, parentToolUseID)
+	return desc
+}
+
+// StartSubagent records a sub-agent section by agent_id (from SubagentStart).
+// Idempotent on repeated calls with the same agent_id.
+func (s *Session) StartSubagent(agentID, agentType string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.SubagentSections == nil {
+		s.SubagentSections = make(map[string]*SubagentSection)
+	}
+	if _, ok := s.SubagentSections[agentID]; ok {
+		return
+	}
+	s.SubagentSections[agentID] = &SubagentSection{AgentID: agentID, AgentType: agentType}
+}
+
+// LinkSubagent fills in the link-time fields on a sub-agent section. The
+// hook contract guarantees SubagentStart (which creates the section) fires
+// before the parent's PostToolUse for Agent (which triggers this call), so
+// the section is always present.
+func (s *Session) LinkSubagent(agentID, parentToolUseID, description, finalText string, tokens, toolUses, durationMs int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sec := s.SubagentSections[agentID]
+	sec.Linked = true
+	sec.ParentToolUseID = parentToolUseID
+	sec.Description = description
+	sec.FinalText = finalText
+	sec.TotalTokens = tokens
+	sec.TotalToolUses = toolUses
+	sec.DurationMs = durationMs
+}
+
+// MarkSubagentStopped flips the Stopped bit on a sub-agent section.
+func (s *Session) MarkSubagentStopped(agentID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sec := s.SubagentSections[agentID]; sec != nil {
+		sec.Stopped = true
+	}
+}
+
+// GetSubagentSection returns a copy of the section state for agent_id.
+func (s *Session) GetSubagentSection(agentID string) *SubagentSection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sec := s.SubagentSections[agentID]
+	if sec == nil {
+		return nil
+	}
+	cp := *sec
+	return &cp
 }
 
 // --- Compound operations ---

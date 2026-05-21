@@ -1094,7 +1094,7 @@ func sortPathListPrefix(s string) string {
 		tail = s[idx:]
 	}
 	lines := strings.Split(head, "\n")
-	if len(lines) < 3 {
+	if len(lines) < 2 {
 		return s
 	}
 	for _, l := range lines {
