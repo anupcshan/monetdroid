@@ -439,6 +439,14 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			}()
 		} else {
 			parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
+			// Nest the result inside the parent tool chip's result-slot
+			// instead of appending a standalone chip to the timeline.
+			// Applies to both top-level and sub-agent tools, since both
+			// chips render a tool-result-slot-<id> placeholder.
+			if inner := RenderToolResultInner(msg); inner != "" {
+				parts = append(parts, OobSwap("tool-result-slot-"+msg.ToolUseID, "innerHTML", inner))
+			}
+			msgHTML = ""
 		}
 	}
 	// Background task completed — remove spinner, show final elapsed time
@@ -603,12 +611,14 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc *claude.ClaudeProcess) {
 
 // renderContext holds precomputed metadata for rendering a slice of messages.
 type renderContext struct {
-	lastCompact      int
-	completedTools   map[string]bool
-	bgTaskResults    map[string]string               // tool_use id → output file path
-	suppressedIDs    map[string]bool                 // tool_use ids for tools whose results are suppressed
-	pendingPerms     map[string]ServerMsg            // tool_use id → unresolved inline permission_request
-	subagentSections map[string]*subagentRenderState // agent_id → section state derived from later events
+	lastCompact       int
+	toolResults       map[string]ServerMsg            // tool_use id → tool_result message (presence ⇒ completed)
+	toolUseIndexes    map[string]int                  // tool_use id → log index of its tool_use entry
+	toolResultIndexes map[string]int                  // tool_use id → log index of its tool_result entry
+	bgTaskResults     map[string]string               // tool_use id → output file path
+	suppressedIDs     map[string]bool                 // tool_use ids for tools whose results are suppressed
+	pendingPerms      map[string]ServerMsg            // tool_use id → unresolved inline permission_request
+	subagentSections  map[string]*subagentRenderState // agent_id → section state derived from later events
 }
 
 // subagentRenderState holds the inner events and link metadata for one
@@ -622,19 +632,25 @@ type subagentRenderState struct {
 // precomputeRenderContext scans the full log to build rendering metadata.
 func precomputeRenderContext(log []ServerMsg) renderContext {
 	rc := renderContext{
-		lastCompact:      -1,
-		completedTools:   make(map[string]bool),
-		bgTaskResults:    make(map[string]string),
-		suppressedIDs:    make(map[string]bool),
-		pendingPerms:     make(map[string]ServerMsg),
-		subagentSections: make(map[string]*subagentRenderState),
+		lastCompact:       -1,
+		toolResults:       make(map[string]ServerMsg),
+		toolUseIndexes:    make(map[string]int),
+		toolResultIndexes: make(map[string]int),
+		bgTaskResults:     make(map[string]string),
+		suppressedIDs:     make(map[string]bool),
+		pendingPerms:      make(map[string]ServerMsg),
+		subagentSections:  make(map[string]*subagentRenderState),
 	}
 	for i, msg := range log {
 		if msg.Type == "compact_boundary" {
 			rc.lastCompact = i
 		}
+		if msg.Type == "tool_use" && msg.ToolUseID != "" && msg.AgentID == "" {
+			rc.toolUseIndexes[msg.ToolUseID] = i
+		}
 		if msg.Type == "tool_result" && msg.ToolUseID != "" && msg.AgentID == "" {
-			rc.completedTools[msg.ToolUseID] = true
+			rc.toolResults[msg.ToolUseID] = msg
+			rc.toolResultIndexes[msg.ToolUseID] = i
 			if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
 				rc.bgTaskResults[msg.ToolUseID] = bgPath
 			}
@@ -706,6 +722,13 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 			}
 			continue
 		}
+		// Skip tool_results whose tool_use chip lives in the rendered slice:
+		// they're nested inside that chip via result-slot injection below.
+		if msg.Type == "tool_result" && msg.ToolUseID != "" {
+			if useIdx, ok := rc.toolUseIndexes[msg.ToolUseID]; ok && useIdx >= start && useIdx < end {
+				continue
+			}
+		}
 		if msg.Type == "tool_result" && rc.suppressedIDs[msg.ToolUseID] {
 			if len(msg.Images) == 0 {
 				continue
@@ -721,14 +744,35 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 		}
 		rendered := RenderMsg(msg)
 		// Strip spinners for tool_use events that already have results
-		if msg.Type == "tool_use" && rc.completedTools[msg.ToolUseID] {
-			rendered = stripSpinner(rendered, msg.ToolUseID)
+		if msg.Type == "tool_use" {
+			if _, ok := rc.toolResults[msg.ToolUseID]; ok {
+				rendered = stripSpinner(rendered, msg.ToolUseID)
+			}
 		}
 		// Populate the bg-slot with a lazy-load trigger for bg task tool chips
 		if msg.Type == "tool_use" && rc.bgTaskResults[msg.ToolUseID] != "" {
 			emptySlot := fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
 			populatedSlot := fmt.Sprintf(`<div id="bg-slot-%s">%s</div>`, Esc(msg.ToolUseID), RenderBgSlot(sessionID, msg.ToolUseID))
 			rendered = strings.Replace(rendered, emptySlot, populatedSlot, 1)
+		}
+		// Populate the result slot with the nested tool_result content.
+		// Only inject when the tool_result also lies in [start, end): otherwise
+		// the standalone tool_result chip in its own slice would render the
+		// same content, producing a duplicate when pagination straddles a pair.
+		// Skipped for bg tasks (lazy-loaded into a separate slot) and for
+		// suppressed text-only results (Read, TodoWrite, etc.).
+		if msg.Type == "tool_use" && msg.ToolUseID != "" && rc.bgTaskResults[msg.ToolUseID] == "" {
+			if result, ok := rc.toolResults[msg.ToolUseID]; ok {
+				resultIdx, hasIdx := rc.toolResultIndexes[msg.ToolUseID]
+				inSlice := hasIdx && resultIdx >= start && resultIdx < end
+				if inSlice && (!rc.suppressedIDs[msg.ToolUseID] || len(result.Images) > 0) {
+					if inner := RenderToolResultInner(result); inner != "" {
+						emptySlot := fmt.Sprintf(`<div class="tool-result-content" id="tool-result-slot-%s"></div>`, Esc(msg.ToolUseID))
+						filledSlot := fmt.Sprintf(`<div class="tool-result-content" id="tool-result-slot-%s">%s</div>`, Esc(msg.ToolUseID), inner)
+						rendered = strings.Replace(rendered, emptySlot, filledSlot, 1)
+					}
+				}
+			}
 		}
 		// Populate the perm-slot with inline permission for unresolved permissions
 		if msg.Type == "tool_use" && msg.ToolUseID != "" {

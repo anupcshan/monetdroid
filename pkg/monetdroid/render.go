@@ -369,13 +369,13 @@ func RenderMsg(msg ServerMsg) string {
 		if msg.AgentID != "" {
 			return RenderSubagentChip(msg)
 		}
+		spinnerHTML := fmt.Sprintf(` <span class="tool-spinner" id="spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span> <span class="tool-elapsed" id="elapsed-%s"></span></span>`, Esc(msg.ToolUseID), Esc(msg.ToolUseID))
+		permStatus := fmt.Sprintf(`<span id="perm-status-%s"></span>`, Esc(msg.ToolUseID))
+		permSlot := fmt.Sprintf(`<div id="perm-slot-%s"></div>`, Esc(msg.ToolUseID))
+		resultSlot := fmt.Sprintf(`<div class="tool-result-content" id="tool-result-slot-%s"></div>`, Esc(msg.ToolUseID))
 		if diffHTML, summary := renderToolDiff(msg); diffHTML != "" {
-			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s<span id="perm-status-%s"></span></summary><div class="tool-detail" id="tool-detail-%s">%s</div><div id="perm-slot-%s"></div></details></div>`,
-				Esc(msg.ToolUseID), Esc(summary), Esc(msg.ToolUseID), Esc(msg.ToolUseID), diffHTML, Esc(msg.ToolUseID))
-		}
-		var spinnerHTML string
-		if msg.Tool == "Bash" {
-			spinnerHTML = fmt.Sprintf(` <span class="tool-spinner" id="spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span> <span class="tool-elapsed" id="elapsed-%s"></span></span>`, Esc(msg.ToolUseID), Esc(msg.ToolUseID))
+			return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s%s</summary><div class="tool-detail" id="tool-detail-%s">%s</div>%s%s</details></div>`,
+				Esc(msg.ToolUseID), Esc(summary), spinnerHTML, permStatus, Esc(msg.ToolUseID), diffHTML, resultSlot, permSlot)
 		}
 		summary := ToolChipSummary(msg.Tool, msg.Input)
 		detail := FormatToolInput(msg.Tool, msg.Input)
@@ -383,9 +383,7 @@ func RenderMsg(msg ServerMsg) string {
 		if msg.Tool == "Bash" {
 			extraSlot = fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
 		}
-		permSlot := fmt.Sprintf(`<div id="perm-slot-%s"></div>`, Esc(msg.ToolUseID))
-		permStatus := fmt.Sprintf(`<span id="perm-status-%s"></span>`, Esc(msg.ToolUseID))
-		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s%s</summary><div class="tool-detail" id="tool-detail-%s">%s</div>%s%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, permStatus, Esc(msg.ToolUseID), Esc(detail), permSlot, extraSlot)
+		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s%s</summary><div class="tool-detail" id="tool-detail-%s">%s</div>%s%s%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, permStatus, Esc(msg.ToolUseID), Esc(detail), resultSlot, permSlot, extraSlot)
 	case "tool_result":
 		if msg.AgentID != "" {
 			return RenderSubagentToolResult(msg)
@@ -422,6 +420,25 @@ func RenderMsg(msg ServerMsg) string {
 		return ""
 	}
 	return ""
+}
+
+// RenderToolResultInner renders the body of a tool_result for embedding inside
+// its parent tool chip. Returns the empty string when there is nothing to show.
+func RenderToolResultInner(msg ServerMsg) string {
+	if len(msg.Images) > 0 {
+		var content strings.Builder
+		for _, img := range msg.Images {
+			dlgID := fmt.Sprintf("img-dlg-%d", imgDlgSeq.Add(1))
+			src := fmt.Sprintf("data:%s;base64,%s", Esc(img.MediaType), img.Data)
+			fmt.Fprintf(&content, `<img src="%s" class="msg-img-thumb" onclick="document.getElementById('%s').showModal()">`, src, dlgID)
+			fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s" onclick="event.stopPropagation()"></dialog>`, dlgID, src)
+		}
+		return content.String()
+	}
+	if strings.TrimSpace(msg.Output) == "" {
+		return ""
+	}
+	return fmt.Sprintf(`<div class="tool-result-divider"></div><pre class="tool-result-output">%s</pre>`, Esc(msg.Output))
 }
 
 func RenderPermission(msg ServerMsg) string {

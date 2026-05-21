@@ -2703,16 +2703,17 @@ func TestBashToolForeground(t *testing.T) {
 	page.MustElement(`textarea[name="text"]`).MustInput("Run `cat bigfile.txt` using the Bash tool. Do not use Read.")
 	page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for tool result and turn completion.
-	WaitForElement(t, page, ".tool-result-chip", 60*time.Second)
+	// Wait for tool result and turn completion. The result content is nested
+	// inside the tool chip's body, revealed by expanding the chip.
+	WaitForElement(t, page, ".tool-result-output", 60*time.Second)
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Expand the tool result.
-	page.MustElement(".tool-result-chip summary").MustClick()
+	// Expand the tool chip to reveal input + result content.
+	page.MustElement(".tool-chip summary").MustClick()
 	Screenshot(t, page, "bash_fg_result_expanded")
 
-	// Full output must be present — not truncated.
-	resultText := page.MustElement(".tool-result-full").MustText()
+	// Full output must be present, not truncated.
+	resultText := page.MustElement(".tool-result-output").MustText()
 	if !strings.Contains(resultText, "line 000") {
 		t.Fatalf("bash output missing first line (line 000)")
 	}
@@ -2724,7 +2725,7 @@ func TestBashToolForeground(t *testing.T) {
 	}
 
 	// Scroll to the end of the result for a visible screenshot.
-	page.MustEval(`() => document.querySelector('.tool-result-full').scrollIntoView({block: 'end'})`)
+	page.MustEval(`() => document.querySelector('.tool-result-output').scrollIntoView({block: 'end'})`)
 	Screenshot(t, page, "bash_fg_result_end")
 }
 

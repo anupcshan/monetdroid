@@ -628,6 +628,21 @@ details[open] > .history-group-header::before { content: '▼ '; }
   max-height: 400px;
   overflow: auto;
 }
+.tool-result-divider {
+  border-top: 1px dashed var(--tool);
+  margin: 8px 0;
+  opacity: 0.5;
+}
+.tool-result-output {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  max-height: 400px;
+  overflow: auto;
+}
 .msg-error {
   background: var(--error-bg);
   border: 1px solid var(--error);

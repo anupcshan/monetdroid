@@ -149,13 +149,16 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Images: b.Content.Images})
 					continue
 				}
-				if suppressed {
-					continue
+				output := ""
+				if !suppressed {
+					out := b.Content.String()
+					if !isBoringResult(out) {
+						output = out
+					}
 				}
-				output := b.Content.String()
-				if !isBoringResult(output) {
-					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
-				}
+				// Always broadcast tool_result (empty output when suppressed/boring)
+				// so the tool chip's spinner is stripped on result arrival.
+				broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
 			}
 		}
 	}

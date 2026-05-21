@@ -409,9 +409,12 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 						msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Images: b.Content.Images})
 					} else {
 						output := b.Content.String()
-						if !isBoringResult(output) {
-							msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: output})
+						if isBoringResult(output) {
+							output = ""
 						}
+						// Keep the entry even with empty output so the tool chip's
+						// spinner is stripped on replay.
+						msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: output})
 					}
 				}
 			}
