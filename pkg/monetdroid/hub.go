@@ -554,10 +554,6 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 		s.SetProc(proc)
 	}
 
-	// Drain stale turnDone from previously untracked turns
-	// (e.g. messages injected during permission-blocked state).
-	proc.DrainTurnDone()
-
 	// Auto-label from first user message
 	s.TryAutoLabel(text)
 

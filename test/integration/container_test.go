@@ -2836,3 +2836,95 @@ After step 6, reply with the single word "done" and stop.`,
 		}
 	}
 }
+
+// TestInjectDuringPermission exercises the handlers.go HasPendingPerms branch:
+// when the user sends a message while a permission prompt is open, monetdroid
+// calls proc.SendUserMessage directly (bypassing StartTurn). The claude CLI
+// folds the injected message into the current turn and emits exactly one
+// "result" event covering both messages and their tool uses.
+func TestInjectDuringPermission(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "inject_during_permission.jsonl.zst", testMode())
+	page := f.Page()
+
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	// Turn-trigger: request a file create. This blocks on a Write permission.
+	page.MustElement(`textarea[name="text"]`).MustInput("Create a file called hello.txt containing 'Hello'")
+	page.MustElement(`.send-btn`).MustClick()
+
+	WaitForElement(t, page, ".perm-inline", 60*time.Second)
+	Screenshot(t, page, "inject_perm_open")
+
+	// Inject a second user message while the permission is still pending.
+	// monetdroid's /send handler sees HasPendingPerms=true and calls
+	// proc.SendUserMessage directly instead of EnqueueMessage or StartTurn.
+	page.MustElement(`textarea[name="text"]`).MustInput("Also create world.txt containing 'World'")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Confirm the second user message rendered in chat (proves the inject
+	// reached the session log, not just the textarea).
+	if _, err := page.Timeout(10*time.Second).ElementR(".msg-user", "world.txt"); err != nil {
+		Screenshot(t, page, "inject_second_msg_missing")
+		t.Fatalf("second user message never rendered: %v", err)
+	}
+	Screenshot(t, page, "inject_second_msg_sent")
+
+	// Resolve permissions as they appear. The inject may add a second tool
+	// use (write world.txt), which gates on its own permission. Race
+	// `.perm-allow` (more work) against `#stop-btn:empty` (turn settled);
+	// whichever fires first decides the next step.
+	allowed := 0
+	done := false
+	for !done {
+		page.Timeout(60 * time.Second).Race().
+			Element(`.perm-allow`).MustHandle(func(e *rod.Element) {
+			e.MustClick()
+			allowed++
+			e.MustWaitInvisible()
+		}).
+			Element(`#stop-btn:empty`).MustHandle(func(e *rod.Element) {
+			done = true
+		}).
+			MustDo()
+	}
+	t.Logf("=== INJECT-DURING-PERMISSION: allowed %d permission prompt(s) ===", allowed)
+	Screenshot(t, page, "inject_complete")
+
+	// Diagnostic: count "result" events.
+	events := f.SessionLog()
+	resultCount := 0
+	for _, e := range events {
+		if e.Type == "result" {
+			resultCount++
+		}
+	}
+	t.Logf("=== INJECT-DURING-PERMISSION: %d result event(s), %d total events ===", resultCount, len(events))
+	for i, e := range events {
+		line := fmt.Sprintf("[%3d] type=%-20s tool=%-20s toolUseID=%s", i, e.Type, e.Tool, e.ToolUseID)
+		if e.Text != "" {
+			text := e.Text
+			if len(text) > 80 {
+				text = text[:80] + "..."
+			}
+			line += fmt.Sprintf(" text=%q", text)
+		}
+		t.Logf("%s", line)
+	}
+
+	// The original Write must have completed (we clicked Allow).
+	helloContent := f.ReadFile(containerWorkdir + "/hello.txt")
+	if !strings.Contains(helloContent, "Hello") {
+		t.Fatalf("hello.txt has unexpected content: %s", helloContent)
+	}
+
+	// world.txt may or may not exist depending on how claude handled the
+	// inject. Log either way without failing. The result-event count is
+	// the primary observation for this test.
+	if worldOut, err := f.DockerExec("cat", containerWorkdir+"/world.txt"); err != nil {
+		t.Logf("world.txt: not created (inject was not acted upon)")
+	} else {
+		t.Logf("world.txt: %q", worldOut)
+	}
+}

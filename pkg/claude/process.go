@@ -557,17 +557,6 @@ func (p *ClaudeProcess) WaitForTurnDone(ctx context.Context) error {
 	}
 }
 
-// DrainTurnDone discards any stale turnDone signal from a previous turn.
-// Call before starting a new turn to prevent WaitForTurnDone from returning
-// immediately on a result event that nobody was waiting for (e.g. a message
-// injected while permission-blocked).
-func (p *ClaudeProcess) DrainTurnDone() {
-	select {
-	case <-p.turnDone:
-	default:
-	}
-}
-
 // Kill terminates the process and waits for exit.
 func (p *ClaudeProcess) Kill() {
 	p.stdin.Close()
