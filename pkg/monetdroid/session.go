@@ -230,22 +230,24 @@ func (s *Session) SetProc(proc *claude.ClaudeProcess) {
 	s.mu.Unlock()
 }
 
-// AppendStreamingText appends a text delta and returns the accumulated text.
-func (s *Session) AppendStreamingText(delta string) string {
+// AppendStreamingTextAtomically appends a delta and reports whether it was the
+// first delta of a new stream. Check and mutation happen under one lock.
+func (s *Session) AppendStreamingTextAtomically(delta string) (accumulated string, first bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	first = s.StreamingText == ""
 	s.StreamingText += delta
-	result := s.StreamingText
-	s.mu.Unlock()
-	return result
+	return s.StreamingText, first
 }
 
-// AppendStreamingThinking appends a thinking delta and returns the accumulated text.
-func (s *Session) AppendStreamingThinking(delta string) string {
+// AppendStreamingThinkingAtomically appends a thinking delta and reports whether
+// it was the first delta of a new stream.
+func (s *Session) AppendStreamingThinkingAtomically(delta string) (accumulated string, first bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	first = s.StreamingThinking == ""
 	s.StreamingThinking += delta
-	result := s.StreamingThinking
-	s.mu.Unlock()
-	return result
+	return s.StreamingThinking, first
 }
 
 // ClearStreaming resets the streaming accumulators.

@@ -537,7 +537,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			OobSwap("close-btn", "outerHTML",
 				`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`),
 			CwdCopyButton(s.GetCwd()),
-		}, "\n")))
+		}, "\n")), "", "")
 
 		// Broadcast user message and running state
 		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
@@ -555,7 +555,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	if queued, queuedText := s.EnqueueMessage(text); queued {
 		// Actively streaming: show editable queue bar
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)))
+		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)), "", "")
 	} else if s.HasPendingPerms() {
 		// Permission-blocked: inject message directly into stdin.
 		// The CLI queues it internally and processes it after the current turn.
@@ -623,7 +623,7 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 		oobParts = append(oobParts, OobSwap("perm-slot-"+toolUseID, "innerHTML", ""))
 	}
 	event := FormatSSE("htmx", strings.Join(oobParts, "\n"))
-	h.BroadcastToSession(sessionID, event)
+	h.BroadcastToSession(sessionID, event, "", "")
 
 	s.RemovePermission(permID)
 
@@ -691,7 +691,7 @@ func (h *Hub) handlePermAnswer(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&summaryHTML, `<div class="ask-answered"><span class="ask-text">%s</span> <span style="color:var(--tool)">%s</span></div>`, Esc(question), Esc(answer))
 	}
 	event := FormatSSE("htmx", OobSwap("perm-"+permID, "innerHTML", summaryHTML.String()))
-	h.BroadcastToSession(sessionID, event)
+	h.BroadcastToSession(sessionID, event, "", "")
 
 	s.RemovePermission(permID)
 	w.WriteHeader(204)
@@ -884,7 +884,7 @@ func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.ClearQueue()
-	h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")))
+	h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")), "", "")
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(nil)
 }

@@ -188,7 +188,7 @@ func (h *Hub) handleReviewComment(w http.ResponseWriter, r *http.Request) {
 	count := h.Reviews.Count(sessionID)
 	barHTML := RenderReviewBar(sessionID, count)
 	oob := OobSwap("review-bar", "outerHTML", barHTML)
-	h.BroadcastToSession(sessionID, FormatSSE("htmx", oob))
+	h.BroadcastToSession(sessionID, FormatSSE("htmx", oob), "", "")
 }
 
 func (h *Hub) handleReviewDelete(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +206,7 @@ func (h *Hub) handleReviewDelete(w http.ResponseWriter, r *http.Request) {
 		barHTML = `<div class="review-bar" id="review-bar"></div>`
 	}
 	oob := OobSwap("review-bar", "outerHTML", barHTML)
-	h.BroadcastToSession(sessionID, FormatSSE("htmx", oob))
+	h.BroadcastToSession(sessionID, FormatSSE("htmx", oob), "", "")
 }
 
 func (h *Hub) handleReviewSend(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +227,7 @@ func (h *Hub) handleReviewSend(w http.ResponseWriter, r *http.Request) {
 
 	// Send as a user message
 	if queued, queuedText := s.EnqueueMessage(msg); queued {
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)))
+		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)), "", "")
 	} else if s.HasPendingPerms() {
 		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: msg})
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: msg})
@@ -241,7 +241,7 @@ func (h *Hub) handleReviewSend(w http.ResponseWriter, r *http.Request) {
 	// Clear the review bar
 	barHTML := `<div class="review-bar" id="review-bar"></div>`
 	oob := OobSwap("review-bar", "outerHTML", barHTML)
-	h.BroadcastToSession(sessionID, FormatSSE("htmx", oob))
+	h.BroadcastToSession(sessionID, FormatSSE("htmx", oob), "", "")
 
 	w.WriteHeader(204)
 }

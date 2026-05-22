@@ -21,7 +21,8 @@ import (
 type SSEEvent struct {
 	Seq        uint64
 	Event      string
-	CompactKey string // non-empty → newer event with same key supersedes this one
+	CompactKey string // dedup key. events sharing this key supersede each other
+	ParentKey  string // parent key. cascade-removed when the parent is superseded
 }
 
 // EventLog is an append-only log of rendered SSE events for a session.
@@ -57,22 +58,33 @@ func compactKey(event string) string {
 }
 
 // Append adds an event to the log and returns its sequence number.
-// If the event is a single innerHTML/outerHTML OOB swap, any previous
-// event targeting the same element is removed (it's been superseded).
-func (l *EventLog) Append(event string) uint64 {
+// key is an explicit compact key. When empty, one is derived from the event HTML.
+// parent is an optional parent reference. Removed when a CompactKey match on
+// parent is superseded.
+func (l *EventLog) Append(event string, key string, parent string) uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	key := compactKey(event)
+	if key == "" {
+		key = compactKey(event)
+	}
 	if key != "" {
 		for i := len(l.events) - 1; i >= 0; i-- {
+			if i >= len(l.events) {
+				continue
+			}
 			if l.events[i].CompactKey == key {
 				l.events = append(l.events[:i], l.events[i+1:]...)
-				break
+				// Remove all events parented to the superseded key.
+				for j := len(l.events) - 1; j >= 0; j-- {
+					if l.events[j].ParentKey == key {
+						l.events = append(l.events[:j], l.events[j+1:]...)
+					}
+				}
 			}
 		}
 	}
 	l.seq++
-	l.events = append(l.events, SSEEvent{Seq: l.seq, Event: event, CompactKey: key})
+	l.events = append(l.events, SSEEvent{Seq: l.seq, Event: event, CompactKey: key, ParentKey: parent})
 	return l.seq
 }
 
@@ -210,11 +222,11 @@ func (h *Hub) RemoveClient(cid string) {
 	h.mu.Unlock()
 }
 
-func (h *Hub) BroadcastToSession(sessionID string, event string) {
+func (h *Hub) BroadcastToSession(sessionID string, event string, key string, parent string) {
 	s := h.Sessions.Get(sessionID)
 	var seq uint64
 	if s != nil {
-		seq = s.EventLog.Append(event)
+		seq = s.EventLog.Append(event, key, parent)
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -282,26 +294,46 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	stopBtnHTML := `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`
 
 	// --- Streaming deltas (text_delta, thinking_delta) ---
+	// First delta of a stream creates the container via innerHTML (key "streaming").
+	// Subsequent deltas append text fragments via beforeend (parent "streaming",
+	// cascade-removed when the next container replaces the parent).
 	if msg.Type == "text_delta" && s != nil {
-		accumulated := s.AppendStreamingText(msg.Text)
-		parts = append(parts, clearThinking)
-		parts = append(parts, OobSwap("streaming", "innerHTML",
-			fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble streaming-text">%s</div></div>`, Esc(accumulated))))
-		event := FormatSSE("htmx", strings.Join(parts, "\n"))
-		h.BroadcastToSession(sessionID, event)
+		_, first := s.AppendStreamingTextAtomically(msg.Text)
+		if first {
+			parts = append(parts, clearThinking)
+			parts = append(parts, OobSwap("streaming", "innerHTML",
+				fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble streaming-text" id="streaming-detail">%s</div></div>`, Esc(msg.Text))))
+			event := FormatSSE("htmx", strings.Join(parts, "\n"))
+			h.BroadcastToSession(sessionID, event, "streaming", "")
+		} else {
+			event := FormatSSE("htmx", OobSwap("streaming-detail", "beforeend", Esc(msg.Text)))
+			h.BroadcastToSession(sessionID, event, "", "streaming")
+		}
 		return
 	}
 	if msg.Type == "thinking_delta" && s != nil {
-		accumulated := s.AppendStreamingThinking(msg.Text)
-		parts = append(parts, clearThinking)
-		preview := accumulated
-		if len(preview) > 120 {
-			preview = preview[:120] + "..."
+		accumulated, first := s.AppendStreamingThinkingAtomically(msg.Text)
+		if first {
+			preview := msg.Text
+			if len(preview) > 120 {
+				preview = preview[:120] + "..."
+			}
+			parts = append(parts, clearThinking)
+			parts = append(parts, OobSwap("streaming", "innerHTML",
+				fmt.Sprintf(`<div class="msg msg-thinking"><details class="thinking-chip" open><summary class="thinking-summary" id="streaming-summary">%s</summary><div class="thinking-detail" id="streaming-detail">%s</div></details></div>`, Esc(preview), Esc(msg.Text))))
+			event := FormatSSE("htmx", strings.Join(parts, "\n"))
+			h.BroadcastToSession(sessionID, event, "streaming", "")
+		} else {
+			preview := accumulated
+			if len(preview) > 120 {
+				preview = preview[:120] + "..."
+			}
+			event := FormatSSE("htmx", strings.Join([]string{
+				OobSwap("streaming-detail", "beforeend", Esc(msg.Text)),
+				OobSwap("streaming-summary", "innerHTML", Esc(preview)),
+			}, "\n"))
+			h.BroadcastToSession(sessionID, event, "", "streaming")
 		}
-		parts = append(parts, OobSwap("streaming", "innerHTML",
-			fmt.Sprintf(`<div class="msg msg-thinking"><details class="thinking-chip" open><summary class="thinking-summary">%s</summary><div class="thinking-detail">%s</div></details></div>`, Esc(preview), Esc(accumulated))))
-		event := FormatSSE("htmx", strings.Join(parts, "\n"))
-		h.BroadcastToSession(sessionID, event)
 		return
 	}
 
@@ -448,7 +480,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 					case <-time.After(1 * time.Second):
 						secs := int(time.Since(started).Seconds())
 						h.BroadcastToSession(sessionID, FormatSSE("htmx",
-							OobSwap("elapsed-"+toolUseID, "innerHTML", fmt.Sprintf("%ds", secs))))
+							OobSwap("elapsed-"+toolUseID, "innerHTML", fmt.Sprintf("%ds", secs))), "", "")
 					}
 				}
 			}()
@@ -502,12 +534,14 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 
 	if msgHTML != "" {
-		parts = append(parts, clearStreaming)
-		parts = append(parts, OobSwap("msg-content", "beforeend", msgHTML))
-		parts = append(parts, clearThinking)
+		// Clear the live zone (key "streaming"). Supersedes the container and fragments.
+		liveClears := []string{clearStreaming, clearThinking}
 		if msg.Type == "tool_use" || msg.Type == "tool_result" {
-			parts = append(parts, OobSwap("thinking", "innerHTML", thinkingDots))
+			liveClears = append(liveClears, OobSwap("thinking", "innerHTML", thinkingDots))
 		}
+		h.BroadcastToSession(sessionID, FormatSSE("htmx", strings.Join(liveClears, "\n")), "streaming", "")
+		// Append the message to the timeline (beforeend, never compacted).
+		h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", msgHTML)), "", "")
 	}
 
 	if msg.Type == "permission_mode" {
@@ -532,7 +566,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		return
 	}
 	event := FormatSSE("htmx", strings.Join(parts, "\n"))
-	h.BroadcastToSession(sessionID, event)
+	h.BroadcastToSession(sessionID, event, "", "")
 }
 
 func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
@@ -607,7 +641,7 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc *claude.ClaudeProcess) {
 			break
 		}
 
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")))
+		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
 		s.SetRunning(true)
 		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
@@ -897,7 +931,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 	chromeParts = append(chromeParts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
 	chromeParts = append(chromeParts, RenderQueueBar(s.ID, snap.QueuedText))
 
-	s.EventLog.Append(FormatSSE("htmx", strings.Join(chromeParts, "\n")))
+	s.EventLog.Append(FormatSSE("htmx", strings.Join(chromeParts, "\n")), "", "")
 
 	// --- Render messages from the log (paginated) ---
 	rc := precomputeRenderContext(snap.Log)
@@ -922,7 +956,7 @@ func (h *Hub) SeedEventLog(s *Session) {
 	}
 	msgsHTML.WriteString(renderMessages(snap.Log, start, len(snap.Log), rc, s.ID))
 
-	s.EventLog.Append(FormatSSE("htmx", OobSwap("msg-content", "innerHTML", msgsHTML.String())))
+	s.EventLog.Append(FormatSSE("htmx", OobSwap("msg-content", "innerHTML", msgsHTML.String())), "", "")
 }
 
 // BuildReplay writes all stored SSE events for the session directly to w
