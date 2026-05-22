@@ -73,7 +73,10 @@ func TestMain(m *testing.M) {
 		// Inside the container: run the monetdroid server.
 		os.MkdirAll(containerWorkdir, 0o755)
 		ensureDummyCredentials()
-		hub := monetdroid.NewHub("http://127.0.0.1:8222")
+		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", nil)
+		if err != nil {
+			panic(err)
+		}
 		mux := monetdroid.RegisterRoutes(hub)
 
 		// Test-only endpoints for file I/O (no bind mount needed).

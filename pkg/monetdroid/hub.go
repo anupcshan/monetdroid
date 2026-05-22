@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -128,7 +129,11 @@ type Hub struct {
 	// hookBaseURL is the http://host:port that prefixes every hook URL.
 	hookBaseURL string
 	hooks       hookRegistry
-	mu          sync.RWMutex
+	// claudeCommand overrides the claude CLI invocation. Nil/empty means
+	// use the default "claude" in PATH (resolved by
+	// claude.StartProcessWithConfig). Set at construction; read-only after.
+	claudeCommand []string
+	mu            sync.RWMutex
 }
 
 // Close kills all active claude processes.
@@ -168,11 +173,20 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".monetdroid")
 }
 
-func NewHub(hookBaseURL string) *Hub {
-	return NewHubWithDataDir(hookBaseURL, defaultDataDir())
+// NewHub constructs a Hub. claudeCommand overrides the claude CLI
+// invocation; nil/empty uses the default "claude" in PATH. When non-empty,
+// claudeCommand[0] is validated with exec.LookPath so a missing binary
+// fails here rather than at session start.
+func NewHub(hookBaseURL string, claudeCommand []string) (*Hub, error) {
+	return NewHubWithDataDir(hookBaseURL, defaultDataDir(), claudeCommand)
 }
 
-func NewHubWithDataDir(hookBaseURL, dataDir string) *Hub {
+func NewHubWithDataDir(hookBaseURL, dataDir string, claudeCommand []string) (*Hub, error) {
+	if len(claudeCommand) > 0 {
+		if _, err := exec.LookPath(claudeCommand[0]); err != nil {
+			return nil, fmt.Errorf("claude binary %q: %w", claudeCommand[0], err)
+		}
+	}
 	go func() {
 		t := NewGitTrace("warm-cache")
 		defer t.Log()
@@ -186,7 +200,8 @@ func NewHubWithDataDir(hookBaseURL, dataDir string) *Hub {
 		Labels:        NewLabelStore(dataDir),
 		Reviews:       NewReviewStore(),
 		hookBaseURL:   hookBaseURL,
-	}
+		claudeCommand: append([]string(nil), claudeCommand...),
+	}, nil
 }
 
 func (h *Hub) RemoveClient(cid string) {
@@ -536,6 +551,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 		proc, err = claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
 			handleStreamEvent(s, &event, broadcast)
 		}, s.ID, &claude.ProcessConfig{
+			Command: h.claudeCommand,
 			PermissionHandler: func(req protocol.PermissionRequest) protocol.PermResponse {
 				return s.HandlePermission(req, func(msg ServerMsg) { h.Broadcast(msg) })
 			},

@@ -451,6 +451,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
+			Command:           h.claudeCommand,
 			PermissionHandler: permHandler,
 			OnRawEvent:        onRawEvent,
 			HookRegistry:      h,

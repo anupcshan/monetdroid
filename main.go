@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 )
@@ -12,10 +13,14 @@ import (
 func main() {
 	addr := flag.String("addr", ":8222", "listen address")
 	trace := flag.Bool("trace", false, "enable git trace logging")
+	claudeBin := flag.String("claude-bin", "", `claude CLI to invoke; whitespace-separated tokens, e.g. "podman run -i --rm img claude". Defaults to "claude" in PATH.`)
 	flag.Parse()
 	monetdroid.SetTraceEnabled(*trace)
 
-	hub := monetdroid.NewHub(httpURL(*addr, "127.0.0.1"))
+	hub, err := monetdroid.NewHub(httpURL(*addr, "127.0.0.1"), strings.Fields(*claudeBin))
+	if err != nil {
+		log.Fatalf("claude-bin: %s", err)
+	}
 	mux := monetdroid.RegisterRoutes(hub)
 
 	log.Printf("Monet Droid listening on %s", *addr)

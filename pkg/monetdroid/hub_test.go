@@ -1,9 +1,49 @@
 package monetdroid
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestNewHubClaudeCommand(t *testing.T) {
+	t.Run("nil command succeeds with empty override", func(t *testing.T) {
+		h, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), nil)
+		if err != nil {
+			t.Fatalf("NewHubWithDataDir: %v", err)
+		}
+		if len(h.claudeCommand) != 0 {
+			t.Errorf("expected empty claudeCommand, got %v", h.claudeCommand)
+		}
+	})
+
+	t.Run("missing binary returns error", func(t *testing.T) {
+		_, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), []string{"definitely-not-a-real-binary-xyz123"})
+		if err == nil {
+			t.Fatal("expected error for missing binary")
+		}
+	})
+
+	t.Run("valid binary with extra args is stored", func(t *testing.T) {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatalf("os.Executable: %v", err)
+		}
+		want := []string{exe, "--foo", "--bar"}
+		h, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), want)
+		if err != nil {
+			t.Fatalf("NewHubWithDataDir: %v", err)
+		}
+		if len(h.claudeCommand) != len(want) {
+			t.Fatalf("expected %v, got %v", want, h.claudeCommand)
+		}
+		for i := range want {
+			if h.claudeCommand[i] != want[i] {
+				t.Errorf("claudeCommand[%d]: want %q, got %q", i, want[i], h.claudeCommand[i])
+			}
+		}
+	})
+}
 
 // When a tool_use/tool_result pair straddles a pagination boundary, the result
 // must render exactly once across the two slices: standalone in the slice that
