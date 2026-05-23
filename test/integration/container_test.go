@@ -309,10 +309,10 @@ const Version = "1.0.0"
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 	// Send a prompt that triggers multiple tool calls
-	page.MustElement(`textarea[name="text"]`).MustInput("Read all three Go files and summarize what each one does")
+	page.MustElement(`textarea[name="text"]`).MustInput("First explain your approach, then read all three Go files and summarize what each one does")
 	page.MustElement(`.send-btn`).MustClick()
 
-	WaitForText(t, page, ".msg-user", "Read all three Go files", 30*time.Second)
+	WaitForText(t, page, ".msg-user", "First explain your approach", 30*time.Second)
 
 	// Wait for assistant response (multiple API calls)
 	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
@@ -323,6 +323,16 @@ const Version = "1.0.0"
 
 	// Cost bar should show
 	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
+
+	// Wait for turn to complete before inspecting state
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Preamble text before tool calls must survive in the permanent view.
+	assistants := page.MustElements("#msg-content > .msg-assistant")
+	if len(assistants) < 2 {
+		Screenshot(t, page, "missing_preamble")
+		t.Fatalf("expected at least 2 .msg-assistant in #msg-content, got %d", len(assistants))
+	}
 }
 
 func TestPermissionFlow(t *testing.T) {

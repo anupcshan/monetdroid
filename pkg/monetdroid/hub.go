@@ -534,6 +534,25 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 
 	if msgHTML != "" {
+		// Flush accumulated streaming text/thinking to the permanent
+		// log before clearing the live zone.
+		if s != nil {
+			streamText, streamThinking := s.DrainStreaming()
+			if streamText != "" {
+				s.Append(ServerMsg{Type: "text", SessionID: s.ID, Text: streamText})
+				flushHTML := RenderMsg(ServerMsg{Type: "text", SessionID: s.ID, Text: streamText})
+				if flushHTML != "" {
+					h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", flushHTML)), "", "")
+				}
+			}
+			if streamThinking != "" {
+				s.Append(ServerMsg{Type: "thinking", SessionID: s.ID, Text: streamThinking})
+				flushHTML := RenderMsg(ServerMsg{Type: "thinking", SessionID: s.ID, Text: streamThinking})
+				if flushHTML != "" {
+					h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", flushHTML)), "", "")
+				}
+			}
+		}
 		// Clear the live zone (key "streaming"). Supersedes the container and fragments.
 		liveClears := []string{clearStreaming, clearThinking}
 		if msg.Type == "tool_use" || msg.Type == "tool_result" {

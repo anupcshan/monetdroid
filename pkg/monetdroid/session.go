@@ -258,6 +258,17 @@ func (s *Session) ClearStreaming() {
 	s.mu.Unlock()
 }
 
+// DrainStreaming atomically reads and clears both streaming accumulators.
+func (s *Session) DrainStreaming() (text string, thinking string) {
+	s.mu.Lock()
+	text = s.StreamingText
+	thinking = s.StreamingThinking
+	s.StreamingText = ""
+	s.StreamingThinking = ""
+	s.mu.Unlock()
+	return
+}
+
 func (s *Session) SetDiffStat(ds DiffStat) {
 	s.mu.Lock()
 	s.DiffStat = ds
