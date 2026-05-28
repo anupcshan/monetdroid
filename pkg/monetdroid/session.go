@@ -28,6 +28,7 @@ type Session struct {
 	SuppressedToolIDs map[string]string        // tool_use id → tool name, for suppressing results
 	BgTaskStops       map[string]chan struct{} // tool_use id → stop channel for bg tailers
 	BgTaskPaths       map[string]string        // tool_use id → output file path
+	BgTaskCommands    map[string]string        // tool_use id → command string
 	DiffStat          DiffStat
 	EventLog          EventLog
 	PermChans         map[string]chan protocol.PermResponse
@@ -390,6 +391,21 @@ func (s *Session) RegisterBgPath(id, path string) {
 	}
 	s.BgTaskPaths[id] = path
 	s.mu.Unlock()
+}
+
+func (s *Session) RegisterBgCommand(id, cmd string) {
+	s.mu.Lock()
+	if s.BgTaskCommands == nil {
+		s.BgTaskCommands = make(map[string]string)
+	}
+	s.BgTaskCommands[id] = cmd
+	s.mu.Unlock()
+}
+
+func (s *Session) GetBgCommand(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.BgTaskCommands[id]
 }
 
 func (s *Session) GetBgPath(id string) string {

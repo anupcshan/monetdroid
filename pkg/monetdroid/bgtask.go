@@ -57,6 +57,25 @@ func RenderBgSlot(sessionID, toolUseID string) string {
 		Esc(toolUseID), url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
 }
 
+// RenderBgExtractorDiv returns the SSE-connected div for an extractor-backed
+// bg task. The summary zone is replaced on each "summary" event; the raw
+// toggle accumulates raw chunks on "raw" events. Both share one SSE connection.
+func RenderBgExtractorDiv(sessionID, toolUseID string) string {
+	return fmt.Sprintf(
+		`<div hx-ext="sse" `+
+			`sse-connect="/bg-output/stream?session=%s&tool_id=%s" `+
+			`sse-close="done">`+
+			`<div sse-swap="summary" hx-swap="innerHTML" class="bg-summary">`+
+			`<div class="bg-loading">Running...</div>`+
+			`</div>`+
+			`<details class="bg-raw-toggle">`+
+			`<summary>Show raw output</summary>`+
+			`<div sse-swap="raw" hx-swap="beforeend" class="bg-raw"></div>`+
+			`</details>`+
+			`</div>`,
+		url.QueryEscape(sessionID), url.QueryEscape(toolUseID))
+}
+
 // RenderBgSSEDiv returns the SSE-connected div that streams bg task output.
 // Returned by /bg-output/connect when the lazy-load trigger fires.
 func RenderBgSSEDiv(sessionID, toolUseID string) string {

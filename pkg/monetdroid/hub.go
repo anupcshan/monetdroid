@@ -270,6 +270,10 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 				todosChanged = true
 			}
 		}
+		// Stash the command for background task output extraction.
+		if msg.Input != nil && msg.Input.Bash != nil && msg.Input.Bash.Command != "" {
+			s.RegisterBgCommand(msg.ToolUseID, msg.Input.Bash.Command)
+		}
 	}
 
 	msgHTML := RenderMsg(msg)

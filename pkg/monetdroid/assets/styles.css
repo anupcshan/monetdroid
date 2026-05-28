@@ -600,6 +600,52 @@ details[open] > .history-group-header::before { content: '▼ '; }
   border-radius: 8px;
   padding: 8px 12px;
 }
+.bg-summary-header {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--tool);
+}
+.bg-stat {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.bg-stat-fail {
+  color: #e05555;
+  font-weight: 600;
+}
+.bg-failure {
+  font-size: 11px;
+  margin: 2px 0;
+}
+.bg-failure summary {
+  color: #e05555;
+  cursor: pointer;
+}
+.bg-failure-detail {
+  color: var(--text2);
+  margin: 4px 0 4px 12px;
+}
+.bg-raw-toggle {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text2);
+}
+.bg-raw-toggle summary {
+  cursor: pointer;
+  opacity: 0.6;
+}
+.bg-raw-toggle summary:hover {
+  opacity: 1;
+}
+.bg-raw {
+  color: var(--text2);
+}
+.bg-loading {
+  opacity: 0.5;
+}
 .bg-elapsed {
   color: var(--tool);
   font-size: 10px;

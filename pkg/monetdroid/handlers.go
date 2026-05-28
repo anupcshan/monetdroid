@@ -1347,6 +1347,12 @@ func (h *Hub) handleBgOutputConnect(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session")
 	toolID := r.URL.Query().Get("tool_id")
 	w.Header().Set("Content-Type", "text/html")
+	if s := h.Sessions.Get(sessionID); s != nil {
+		if cmd := s.GetBgCommand(toolID); cmd != "" && MatchExtractor("Bash", cmd) != nil {
+			fmt.Fprint(w, RenderBgExtractorDiv(sessionID, toolID))
+			return
+		}
+	}
 	fmt.Fprint(w, RenderBgSSEDiv(sessionID, toolID))
 }
 
@@ -1395,6 +1401,15 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	ctx := r.Context()
+
+	// Route through extractor if one matches the command.
+	if cmd := s.GetBgCommand(toolID); cmd != "" {
+		if ext := MatchExtractor("Bash", cmd); ext != nil {
+			h.streamWithExtractor(w, flusher, ctx, bgPath, stopCh, ext)
+			return
+		}
+	}
+
 	var offset int64
 	const pollInterval = 500 * time.Millisecond
 
@@ -1435,6 +1450,68 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprint(w, FormatSSE("done", ""))
 			flusher.Flush()
+			return
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// streamWithExtractor polls a bg task output file, feeds chunks to the
+// extractor, and streams summary and raw SSE events to the client.
+func (h *Hub) streamWithExtractor(w http.ResponseWriter, flusher http.Flusher, ctx context.Context, bgPath string, stopCh chan struct{}, ext Extractor) {
+	var offset int64
+	var lastSummary string
+	const pollInterval = 500 * time.Millisecond
+
+	sendFinal := func() {
+		chunk, _, err := ReadBgChunk(bgPath, offset)
+		if err == nil && len(chunk) > 0 {
+			ext.Ingest(chunk)
+			if s := ext.Summary(); s != "" && s != lastSummary {
+				fmt.Fprint(w, FormatSSE("summary", s))
+			}
+			escaped := Esc(strings.TrimRight(chunk, "\n"))
+			if escaped != "" {
+				fmt.Fprint(w, FormatSSE("raw", fmt.Sprintf("<span>%s\n</span>", escaped)))
+			}
+		}
+		fmt.Fprint(w, FormatSSE("done", ""))
+		flusher.Flush()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		chunk, newOffset, err := ReadBgChunk(bgPath, offset)
+		if err == nil && len(chunk) > 0 {
+			offset = newOffset
+			ext.Ingest(chunk)
+
+			if s := ext.Summary(); s != "" && s != lastSummary {
+				lastSummary = s
+				fmt.Fprint(w, FormatSSE("summary", s))
+			}
+
+			escaped := Esc(strings.TrimRight(chunk, "\n"))
+			if escaped != "" {
+				fmt.Fprint(w, FormatSSE("raw", fmt.Sprintf("<span>%s\n</span>", escaped)))
+			}
+			flusher.Flush()
+		}
+
+		if stopCh == nil {
+			sendFinal()
+			return
+		}
+		select {
+		case <-stopCh:
+			sendFinal()
 			return
 		case <-ctx.Done():
 			return
