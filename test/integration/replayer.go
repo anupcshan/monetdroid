@@ -230,7 +230,19 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	r.pauseMu.Lock()   //nolint:staticcheck // intentional gate pattern
 	r.pauseMu.Unlock() //nolint:staticcheck
 
-	liveHash := hashRequestBody(body)
+	// Normalize the live body by replacing any live random IDs with their
+	// recorded counterparts so the hash matches. Without this, IDs that leak
+	// from tool_result text into subsequent model requests cause hash mismatches.
+	r.mu.Lock()
+	normalizedBody := body
+	for rec, live := range r.idMap {
+		if rec != live {
+			normalizedBody = bytes.ReplaceAll(normalizedBody, []byte(live), []byte(rec))
+		}
+	}
+	r.mu.Unlock()
+
+	liveHash := hashRequestBody(normalizedBody)
 
 	r.mu.Lock()
 	idx := -1

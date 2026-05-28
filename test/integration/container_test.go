@@ -900,6 +900,9 @@ func TestReadImage(t *testing.T) {
 	if out, err := f.DockerExec("sh", "-c", "echo '"+pngB64+"' | base64 -d > "+containerWorkdir+"/test.png"); err != nil {
 		t.Fatalf("create test.png: %v\n%s", err, out)
 	}
+	// Pin mtime so Read tool output (which includes ls -l metadata) is
+	// deterministic between record and replay runs.
+	f.DockerExec("touch", "-d", "2020-01-01T00:00:00Z", containerWorkdir+"/test.png")
 
 	page := f.Page()
 
