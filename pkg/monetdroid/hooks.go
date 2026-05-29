@@ -1,14 +1,58 @@
 package monetdroid
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/anupcshan/monetdroid/pkg/claude"
 )
+
+// HookLogEntry records a single hook event for the debug log.
+type HookLogEntry struct {
+	Timestamp time.Time
+	EventName string
+	SessionID string
+	AgentID   string
+	ToolName  string
+	ToolUseID string
+	Body      string // full raw JSON body
+}
+
+// hookLog is a bounded in-memory log of hook events for debugging.
+type hookLog struct {
+	mu      sync.Mutex
+	entries []HookLogEntry
+	maxSize int
+}
+
+func newHookLog(maxSize int) *hookLog {
+	return &hookLog{maxSize: maxSize}
+}
+
+func (l *hookLog) Append(entry HookLogEntry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.entries) >= l.maxSize {
+		l.entries = l.entries[1:]
+	}
+	l.entries = append(l.entries, entry)
+}
+
+// Snapshot returns entries newest first.
+func (l *hookLog) List() []HookLogEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]HookLogEntry, len(l.entries))
+	for i, entry := range l.entries {
+		out[len(l.entries)-1-i] = entry
+	}
+	return out
+}
 
 // hookRegistry is the routing table from URL token to handler. Lives on the
 // Hub so handlers are registered and unregistered alongside the claude
@@ -91,5 +135,29 @@ func (h *Hub) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Log the hook event for the debug page.
+	var env struct {
+		EventName string `json:"hook_event_name"`
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+		ToolName  string `json:"tool_name"`
+		ToolUseID string `json:"tool_use_id"`
+	}
+	if err := json.Unmarshal(body, &env); err == nil {
+		h.hookLog.Append(HookLogEntry{
+			Timestamp: time.Now(),
+			EventName: env.EventName,
+			SessionID: env.SessionID,
+			AgentID:   env.AgentID,
+			ToolName:  env.ToolName,
+			ToolUseID: env.ToolUseID,
+			Body:      string(body),
+		})
+	}
+
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Hub) GetHookLog() []HookLogEntry {
+	return h.hookLog.List()
 }

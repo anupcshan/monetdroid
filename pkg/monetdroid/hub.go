@@ -145,6 +145,7 @@ type Hub struct {
 	// use the default "claude" in PATH (resolved by
 	// claude.StartProcessWithConfig). Set at construction; read-only after.
 	claudeCommand []string
+	hookLog       *hookLog
 	mu            sync.RWMutex
 }
 
@@ -213,6 +214,7 @@ func NewHubWithDataDir(hookBaseURL, dataDir string, claudeCommand []string) (*Hu
 		Reviews:       NewReviewStore(),
 		hookBaseURL:   hookBaseURL,
 		claudeCommand: append([]string(nil), claudeCommand...),
+		hookLog:       newHookLog(500),
 	}, nil
 }
 

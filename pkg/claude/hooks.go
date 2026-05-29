@@ -248,6 +248,7 @@ var hookEvents = []string{
 	"FileChanged", "CwdChanged", "ConfigChange", "InstructionsLoaded",
 	"PreCompact", "PostCompact",
 	"Elicitation", "ElicitationResult", "Notification",
+	"MessageDisplay",
 	"WorktreeCreate", "WorktreeRemove",
 }
 

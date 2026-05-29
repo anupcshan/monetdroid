@@ -2,6 +2,7 @@ package monetdroid
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -74,6 +75,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/review/delete", hub.handleReviewDelete)
 	mux.HandleFunc("/review/send", hub.handleReviewSend)
 	mux.HandleFunc("/kb/", hub.handleKB)
+	mux.HandleFunc("/hooks-log", hub.handleHookLog)
 	mux.HandleFunc("/hooks/", hub.handleHook)
 	return mux
 }
@@ -820,6 +822,9 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	buf.WriteString(`<div class="drawer-section-label">Debug</div>`)
+	buf.WriteString(`<div style="padding:4px 16px 8px"><a href="/hooks-log" style="color:var(--accent);font-size:13px;text-decoration:none" onclick="document.getElementById('drawer').hidePopover()">Hook Log</a></div>`)
+
 	if len(tracked) == 0 && (err != nil || len(groups) == 0) {
 		buf.WriteString(`<div style="padding:20px;text-align:center;color:var(--text2);font-size:13px">No sessions yet</div>`)
 	}
@@ -1518,4 +1523,59 @@ func (h *Hub) streamWithExtractor(w http.ResponseWriter, flusher http.Flusher, c
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+func prettyJSON(raw string) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(raw), "", "  "); err != nil {
+		return raw
+	}
+	return buf.String()
+}
+
+func (h *Hub) handleHookLog(w http.ResponseWriter, r *http.Request) {
+	entries := h.hookLog.List()
+	var b strings.Builder
+
+	b.WriteString(`<!DOCTYPE html><html lang="en" class="hook-log-page"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hook Log</title>
+<link rel="stylesheet" href="/assets/styles.css">
+<style>
+html.hook-log-page, html.hook-log-page body { overflow: auto; height: auto; }
+.hook-log-header { display:flex; align-items:center; gap:12px; padding:8px 16px; background:var(--bg2); border-bottom:1px solid var(--border); }
+.hook-log-header h1 { margin:0; font-size:16px; }
+.hook-log-table { width:100%; border-collapse:collapse; font-size:12px; font-family:monospace; }
+.hook-log-table th, .hook-log-table td { border:1px solid var(--border); padding:4px 8px; text-align:left; vertical-align:top; }
+.hook-log-table th { background:var(--bg2); position:sticky; top:0; z-index:1; }
+.hook-log-table tr:hover { background:var(--bg2); }
+.hook-log-table .col-body { word-break:break-all; white-space:pre-wrap; min-width:480px; }
+.hook-log-table .entry-num { color:var(--text2); }
+.hook-log-table .entry-event { font-weight:600; }
+</style></head><body>
+<div class="hook-log-header">
+  <a href="/" style="color:var(--accent);text-decoration:none">&larr; Back</a>
+  <h1>Hook Log</h1>
+  <span style="color:var(--text2);font-size:11px">last 500 hooks, in-memory</span>
+</div>
+<table class="hook-log-table">
+<thead><tr><th class="col-num">#</th><th class="col-time">Time</th><th class="col-event">Event</th><th>Session</th><th>Agent</th><th class="col-tool">Tool</th><th class="col-body">Body</th></tr></thead>
+<tbody>`)
+
+	for i, entry := range entries {
+		fmt.Fprintf(&b, `<tr><td class="col-num">%d</td><td class="col-time">%s</td><td class="col-event">%s</td><td>%s</td><td>%s</td><td class="col-tool">%s</td><td class="col-body">%s</td></tr>`,
+			len(entries)-i,
+			entry.Timestamp.Format("15:04:05.000"),
+			Esc(entry.EventName),
+			Esc(entry.SessionID),
+			Esc(entry.AgentID),
+			Esc(entry.ToolName),
+			Esc(prettyJSON(entry.Body)),
+		)
+	}
+
+	b.WriteString(`</tbody></table></body></html>`)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(b.String()))
 }
