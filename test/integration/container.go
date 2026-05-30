@@ -204,6 +204,9 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		"-e", "MONETDROID_IN_CONTAINER=1",
 		"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
 		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// Prevent auto memory probes (e.g. `ls /root/.claude/projects/`)
+		// that introduce non-deterministic Bash results in cassettes.
+		"-e", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
 		// Fail fast on replayer 5xx responses; default is 10 retries with backoff.
 		"-e", "CLAUDE_CODE_MAX_RETRIES=0",
 		// Pin the model so record and replay send identical request bodies

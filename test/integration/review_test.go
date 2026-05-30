@@ -202,6 +202,7 @@ func TestWriteReviewComment(t *testing.T) {
 
 	// Claude acts on the review (reads the file, edits to add godoc comments).
 	// Enable Accept Edits via the mode bar, then allow the current permission.
+	WaitForElement(t, page, ".perm-inline", 120*time.Second)
 	page.MustElement(`.mode-accept-edits`).MustClick()
 	page.MustElement(`.perm-allow`).MustClick()
 
@@ -314,6 +315,7 @@ func TestOverwriteReviewComment(t *testing.T) {
 
 	// Claude acts on the review (adds a division-by-zero check to Modulo).
 	// Enable Accept Edits via the mode bar, then allow the current permission.
+	WaitForElement(t, page, ".perm-inline", 120*time.Second)
 	page.MustElement(`.mode-accept-edits`).MustClick()
 	page.MustElement(`.perm-allow`).MustClick()
 

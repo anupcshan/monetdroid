@@ -2323,6 +2323,12 @@ func getEnv(key, fallback string) string {
 		f.WriteFile(containerWorkdir+path, files[path])
 	}
 
+	promptFiles := make([]string, len(paths))
+	for i, p := range paths {
+		promptFiles[i] = containerWorkdir + p
+	}
+	fileList := strings.Join(promptFiles, ", ")
+
 	// Pin mtimes so any ls-la-style output the model solicits shows the same
 	// timestamps between record and replay. Subagents in this test sometimes
 	// reach for Bash's `ls -la` despite the "no Bash" prompt instruction.
@@ -2386,9 +2392,12 @@ func getEnv(key, fallback string) string {
 	// Re-pin after the write.
 	f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
 
-	// Send a prompt that explicitly requests Agent tool usage for parallel investigation
-	page.MustElement(`textarea[name="text"]`).MustInput(
-		"Launch three parallel agents (Read/Grep/Glob only, no Bash) to investigate: 1) SQL injection vulnerabilities, 2) hardcoded secrets or credentials, 3) HTTP handler input validation. Report combined findings.")
+	// Send a prompt that explicitly requests Agent tool usage for parallel
+	// investigation. Every file is named in the prompt and Glob is banned
+	// because Glob's output ordering is non-deterministic across runs
+	// An explicit file list with no Glob/Bash eliminates that variance.
+	prompt := fmt.Sprintf("Launch three parallel agents (Read/Grep only, no Bash, no Glob) to investigate these files: %s. Look for: 1) SQL injection vulnerabilities, 2) hardcoded secrets or credentials, 3) HTTP handler input validation. Report combined findings.", fileList)
+	page.MustElement(`textarea[name="text"]`).MustInput(prompt)
 	page.MustElement(`.send-btn`).MustClick()
 
 	// Wait for first tool chip (agent is working)
