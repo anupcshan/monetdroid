@@ -3,6 +3,7 @@ package monetdroid
 import (
 	"time"
 
+	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
@@ -31,7 +32,7 @@ type ServerMsg struct {
 	PermInput       *protocol.ToolInput       `json:"perm_input,omitempty"`
 	PermReason      string                    `json:"perm_reason,omitempty"`
 	PermSuggestions []protocol.PermSuggestion `json:"perm_suggestions,omitempty"`
-	PermMode        string                    `json:"perm_mode,omitempty"`
+	PermMode        claude.PermissionMode     `json:"perm_mode,omitempty"`
 }
 
 // AgentStat tracks live stats for a sub-agent invocation.

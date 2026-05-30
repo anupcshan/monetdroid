@@ -18,6 +18,54 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
+// PermissionMode identifies a claude permission mode.
+type PermissionMode string
+
+const (
+	PermDefault     PermissionMode = "default"
+	PermAcceptEdits PermissionMode = "acceptEdits"
+)
+
+// PermissionModeFromString converts a string to PermissionMode. Only modes
+// monetdroid explicitly supports are recognized; unknown modes return false.
+func PermissionModeFromString(s string) (PermissionMode, bool) {
+	switch s {
+	case "default":
+		return PermDefault, true
+	case "acceptEdits":
+		return PermAcceptEdits, true
+	default:
+		return PermissionMode(""), false
+	}
+}
+
+// Process is the interface for driving a claude backend.
+type Process interface {
+	// SendUserMessage delivers user text and optional images to claude.
+	SendUserMessage(text string, images []protocol.ImageData) error
+
+	// WaitForSessionID blocks until the session ID is known or the context
+	// is cancelled. Returns ErrProcessDead if the process exits first.
+	WaitForSessionID(ctx context.Context) (string, error)
+
+	// WaitForTurnDone blocks until the current turn completes or the context
+	// is cancelled. Returns ErrProcessDead if the process exits first.
+	WaitForTurnDone(ctx context.Context) error
+
+	// Interrupt requests that the current turn be aborted.
+	Interrupt() error
+
+	// SetPermissionMode changes the permission mode mid-session.
+	SetPermissionMode(mode PermissionMode) error
+
+	// IsDead reports whether the process has exited and will no longer
+	// respond to any method.
+	IsDead() bool
+
+	// Kill terminates the process and releases its resources. Idempotent.
+	Kill()
+}
+
 // ErrProcessDead is returned by WaitForSessionID and WaitForTurnDone when the
 // process exits before the awaited event occurs.
 var ErrProcessDead = errors.New("process exited")
@@ -516,8 +564,8 @@ func (p *ClaudeProcess) Interrupt() error {
 }
 
 // SetPermissionMode changes the permission mode mid-session.
-func (p *ClaudeProcess) SetPermissionMode(mode string) error {
-	return p.sendControlRequest(ctlSetPermModeRequest{Subtype: "set_permission_mode", Mode: mode})
+func (p *ClaudeProcess) SetPermissionMode(mode PermissionMode) error {
+	return p.sendControlRequest(ctlSetPermModeRequest{Subtype: "set_permission_mode", Mode: string(mode)})
 }
 
 // IsDead returns true if the process has exited.

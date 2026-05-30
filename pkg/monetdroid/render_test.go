@@ -201,7 +201,7 @@ func TestRenderPermSuggestions(t *testing.T) {
 		SessionID: "sess-1",
 		PermID:    "perm-1",
 		PermTool:  "Bash",
-		PermInput:       &protocol.ToolInput{Bash: &protocol.BashInput{Command: "curl -s http://example.com"}},
+		PermInput: &protocol.ToolInput{Bash: &protocol.BashInput{Command: "curl -s http://example.com"}},
 		PermSuggestions: []protocol.PermSuggestion{
 			{Type: "setMode", Mode: "acceptEdits"},
 			{Type: "addRules", Rules: []protocol.PermissionRuleVal{{ToolName: "Bash", RuleContent: "curl -s http://example.com"}}},

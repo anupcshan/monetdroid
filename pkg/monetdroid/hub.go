@@ -571,16 +571,13 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 
 	if msg.Type == "permission_mode" {
 		var modeHTML string
-		if msg.PermMode != "" && msg.PermMode != "default" {
-			names := map[string]string{
-				"acceptEdits":       "Auto-accepting edits",
-				"plan":              "Plan mode (read-only)",
-				"bypassPermissions": "All permissions bypassed",
-				"dontAsk":           "Don't ask mode",
-			}
-			label := names[msg.PermMode]
-			if label == "" {
-				label = msg.PermMode
+		if msg.PermMode != "" && msg.PermMode != claude.PermDefault {
+			var label string
+			switch msg.PermMode {
+			case claude.PermAcceptEdits:
+				label = "Auto-accepting edits"
+			default:
+				label = string(msg.PermMode)
 			}
 			modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(label), Esc(sessionID))
 		} else {
@@ -652,7 +649,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 // waitAndDrainLoop waits for the current turn to complete, then drains
 // any queued messages, sending each as a new turn. Loops until the queue
 // is empty or the session is interrupted.
-func (h *Hub) waitAndDrainLoop(s *Session, proc *claude.ClaudeProcess) {
+func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 	for {
 		proc.WaitForTurnDone(context.Background())
 
@@ -942,14 +939,13 @@ func (h *Hub) SeedEventLog(s *Session) {
 	chromeParts = append(chromeParts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
 
 	var modeHTML string
-	if snap.PermMode != "" && snap.PermMode != "default" {
-		names := map[string]string{
-			"acceptEdits": "Auto-accepting edits", "plan": "Plan mode (read-only)",
-			"bypassPermissions": "All permissions bypassed", "dontAsk": "Don't ask mode",
-		}
-		ml := names[snap.PermMode]
-		if ml == "" {
-			ml = snap.PermMode
+	if snap.PermMode != "" && snap.PermMode != claude.PermDefault {
+		var ml string
+		switch snap.PermMode {
+		case claude.PermAcceptEdits:
+			ml = "Auto-accepting edits"
+		default:
+			ml = string(snap.PermMode)
 		}
 		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(ml), Esc(s.ID))
 	} else {

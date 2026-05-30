@@ -598,6 +598,12 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "bad suggestion data", http.StatusBadRequest)
 				return
 			}
+			if suggestion.Type == "setMode" && suggestion.Mode != "" {
+				if mode, ok := claude.PermissionModeFromString(suggestion.Mode); ok {
+					s.SetPermissionMode(mode)
+					h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: mode})
+				}
+			}
 			if suggestion.Type == "setMode" {
 				continue
 			}
@@ -712,14 +718,20 @@ func (h *Hub) handleMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proc := s.SetPermModeAndGetProc(mode)
+	permMode, ok := claude.PermissionModeFromString(mode)
+	if !ok {
+		w.WriteHeader(204)
+		return
+	}
+
+	proc := s.SetPermModeAndGetProc(permMode)
 
 	if proc != nil && !proc.IsDead() {
-		if err := proc.SetPermissionMode(mode); err != nil {
+		if err := proc.SetPermissionMode(permMode); err != nil {
 			log.Printf("[mode] error setting permission mode: %v", err)
 		}
 	}
-	h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: mode})
+	h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: permMode})
 
 	w.WriteHeader(204)
 }

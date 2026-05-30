@@ -16,7 +16,7 @@ type Session struct {
 	AutoLabel         bool
 	Cwd               string
 	Branches          []string
-	PermissionMode    string
+	PermissionMode    claude.PermissionMode
 	Running           bool
 	Interrupted       bool
 	CreatedAt         time.Time
@@ -47,7 +47,7 @@ type Session struct {
 	SubagentSections  map[string]*SubagentSection
 	StreamingText     string // accumulated text from text_delta events
 	StreamingThinking string // accumulated text from thinking_delta events
-	proc              *claude.ClaudeProcess
+	proc              claude.Process
 	mu                sync.Mutex
 }
 
@@ -167,7 +167,7 @@ func (s *Session) HasPendingPerms() bool {
 	return len(s.PermChans) > 0
 }
 
-func (s *Session) GetProc() *claude.ClaudeProcess {
+func (s *Session) GetProc() claude.Process {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.proc
@@ -225,7 +225,7 @@ func (s *Session) SetRunning(v bool) {
 	s.mu.Unlock()
 }
 
-func (s *Session) SetProc(proc *claude.ClaudeProcess) {
+func (s *Session) SetProc(proc claude.Process) {
 	s.mu.Lock()
 	s.proc = proc
 	s.mu.Unlock()
@@ -323,7 +323,7 @@ func (s *Session) UpdateTask(input *protocol.TaskUpdateInput) {
 	}
 }
 
-func (s *Session) SetPermissionMode(mode string) {
+func (s *Session) SetPermissionMode(mode claude.PermissionMode) {
 	s.mu.Lock()
 	s.PermissionMode = mode
 	s.mu.Unlock()
@@ -625,7 +625,7 @@ func (s *Session) InitFromHistory(label, jsonlPath string, branches []string, co
 	s.mu.Unlock()
 }
 
-func (s *Session) InitLive(label string, autoLabel, running bool, proc *claude.ClaudeProcess) {
+func (s *Session) InitLive(label string, autoLabel, running bool, proc claude.Process) {
 	s.mu.Lock()
 	s.Label = label
 	s.AutoLabel = autoLabel
@@ -659,7 +659,7 @@ func (s *Session) TryAutoLabel(text string) {
 	s.mu.Unlock()
 }
 
-func (s *Session) SetPermModeAndGetProc(mode string) *claude.ClaudeProcess {
+func (s *Session) SetPermModeAndGetProc(mode claude.PermissionMode) claude.Process {
 	s.mu.Lock()
 	s.PermissionMode = mode
 	proc := s.proc
@@ -667,7 +667,7 @@ func (s *Session) SetPermModeAndGetProc(mode string) *claude.ClaudeProcess {
 	return proc
 }
 
-func (s *Session) InterruptAndGetProc() *claude.ClaudeProcess {
+func (s *Session) InterruptAndGetProc() claude.Process {
 	s.mu.Lock()
 	s.Interrupted = true
 	proc := s.proc
@@ -675,7 +675,7 @@ func (s *Session) InterruptAndGetProc() *claude.ClaudeProcess {
 	return proc
 }
 
-func (s *Session) ResetInterruptAndGetProc() *claude.ClaudeProcess {
+func (s *Session) ResetInterruptAndGetProc() claude.Process {
 	s.mu.Lock()
 	s.Interrupted = false
 	proc := s.proc
@@ -715,7 +715,7 @@ func (s *Session) DrainQueue() (bool, string) {
 type SeedState struct {
 	Log        []ServerMsg
 	Running    bool
-	PermMode   string
+	PermMode   claude.PermissionMode
 	Label      string
 	AutoLabel  bool
 	Cwd        string

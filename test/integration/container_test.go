@@ -2959,7 +2959,7 @@ func TestPermissionSuggestions(t *testing.T) {
 	Screenshot(t, page, "permission_suggestions_prompt")
 
 	// Check for suggestion checkboxes; if present, click first and Allow selected
-	checkboxes, err := page.Timeout(5*time.Second).Elements(".perm-checkbox-label")
+	checkboxes, err := page.Timeout(5 * time.Second).Elements(".perm-checkbox-label")
 	if err == nil && len(checkboxes) > 0 {
 		checkboxes[0].MustClick()
 		allowSelected, err := page.Timeout(5*time.Second).ElementR("button", "Allow selected")
