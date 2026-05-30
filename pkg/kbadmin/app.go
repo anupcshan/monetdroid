@@ -31,6 +31,10 @@ const installSnippet = "## KB (Knowledge Base)\n\n" +
 	"- One file per project at `projects/<slug>.md`.\n" +
 	"- Entries should include a *Status* section listing what's done and\n" +
 	"  what's next, so \"resume\" calls can pick up where work left off.\n" +
+	"- **Keep kb current as work progresses.** When a phase ships, a\n" +
+	"  finding changes, or a decision solidifies, update the relevant kb\n" +
+	"  documents immediately. Don't wait to be asked. Stale kb is as\n" +
+	"  harmful as stale code.\n" +
 	"- Use kb to record project plans and progress. Do not use Claude\n" +
 	"  Code's built-in plan mode (EnterPlanMode / ExitPlanMode) for\n" +
 	"  project tracking; write the plan directly to `projects/<slug>.md`.\n"
