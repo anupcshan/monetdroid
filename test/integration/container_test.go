@@ -477,16 +477,13 @@ func main() {
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
 	page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for permission prompt with Accept Edits button (inline inside tool chip)
+	// Wait for permission prompt (inline inside tool chip)
 	WaitForElement(t, page, ".perm-inline", 60*time.Second)
 	Screenshot(t, page, "accept_edits_permission")
 
-	// Click "Accept Edits" instead of plain "Allow"
-	acceptBtn, err := page.Timeout(5*time.Second).ElementR("button", "Accept Edits")
-	if err != nil {
-		t.Fatalf("Accept Edits button not found: %v", err)
-	}
-	acceptBtn.MustClick()
+	// Enable Accept Edits via the mode bar toggle, then allow the current permission
+	page.MustElement(`.mode-accept-edits`).MustClick()
+	page.MustElement(`.perm-allow`).MustClick()
 
 	// Permission should be resolved — status shows in tool chip summary
 	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
@@ -2943,4 +2940,66 @@ func TestInjectDuringPermission(t *testing.T) {
 	} else {
 		t.Logf("world.txt: %q", worldOut)
 	}
+}
+
+func TestPermissionSuggestions(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "permission_suggestions.jsonl.zst", testMode())
+	page := f.Page()
+
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	// Ask claude to run a command that may trigger addRules suggestions
+	page.MustElement(`textarea[name="text"]`).MustInput("Run python3 -c \"print('hello world')\" and tell me what it prints")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for permission prompt
+	WaitForElement(t, page, ".perm-inline", 120*time.Second)
+	Screenshot(t, page, "permission_suggestions_prompt")
+
+	// Check for suggestion checkboxes; if present, click first and Allow selected
+	checkboxes, err := page.Timeout(5*time.Second).Elements(".perm-checkbox-label")
+	if err == nil && len(checkboxes) > 0 {
+		checkboxes[0].MustClick()
+		allowSelected, err := page.Timeout(5*time.Second).ElementR("button", "Allow selected")
+		if err == nil {
+			allowSelected.MustClick()
+		} else {
+			page.MustElement(`.perm-allow`).MustClick()
+		}
+	} else {
+		page.MustElement(`.perm-allow`).MustClick()
+	}
+
+	Screenshot(t, page, "permission_suggestions_allowed")
+
+	// Wait for completion
+	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+	Screenshot(t, page, "permission_suggestions_complete")
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	Screenshot(t, page, "permission_suggestions_turn1")
+
+	// Send the same command again. With the persisted rule, no new permission
+	// should appear; the second turn should just run through.
+	prevAssistants := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
+	page.MustElement(`textarea[name="text"]`).MustInput("Run python3 -c \"print('hello world')\" again and tell me what it prints")
+	page.MustElement(`.send-btn`).MustClick()
+
+	// Wait for turn 2 to complete
+	page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
+		`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	// Verify no new permission prompt appeared (the rule from turn 1 persisted)
+	prompts, err := page.Elements(".perm-inline")
+	if err != nil {
+		t.Fatalf("failed to query perm-inlines: %v", err)
+	}
+	if len(prompts) > 0 {
+		Screenshot(t, page, "permission_suggestions_unexpected_perm")
+		t.Fatalf("expected 0 inline permission prompts after Allow selected, got %d", len(prompts))
+	}
+
+	Screenshot(t, page, "permission_suggestions_no_perm_on_rerun")
 }

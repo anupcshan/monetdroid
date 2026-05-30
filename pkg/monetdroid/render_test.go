@@ -3,6 +3,8 @@ package monetdroid
 import (
 	"strings"
 	"testing"
+
+	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
 func TestRenderBranchList_SingleBranchInSync(t *testing.T) {
@@ -191,5 +193,101 @@ func assertRow(t *testing.T, row, classes, name, status string) {
 		if !strings.Contains(row, part) {
 			t.Errorf("row missing status %q:\n%s", part, row)
 		}
+	}
+}
+
+func TestRenderPermSuggestions(t *testing.T) {
+	msg := ServerMsg{
+		SessionID: "sess-1",
+		PermID:    "perm-1",
+		PermTool:  "Bash",
+		PermInput:       &protocol.ToolInput{Bash: &protocol.BashInput{Command: "curl -s http://example.com"}},
+		PermSuggestions: []protocol.PermSuggestion{
+			{Type: "setMode", Mode: "acceptEdits"},
+			{Type: "addRules", Rules: []protocol.PermissionRuleVal{{ToolName: "Bash", RuleContent: "curl -s http://example.com"}}},
+			{Type: "addDirectories", Directories: []string{"/home/project/src"}},
+		},
+	}
+	html := RenderPermission(msg)
+
+	if strings.Contains(html, "Accept Edits") {
+		t.Error("setMode suggestion should not render in permission prompt")
+	}
+	if !strings.Contains(html, "Always allow: curl -s http://example.com") {
+		t.Error("addRules should render 'Always allow:' label")
+	}
+	if !strings.Contains(html, "Add /home/project/src") {
+		t.Error("addDirectories should render 'Add' label")
+	}
+	if !strings.Contains(html, `type="checkbox" name="suggestion"`) {
+		t.Error("suggestions should render as checkboxes")
+	}
+	if !strings.Contains(html, "Allow selected") {
+		t.Error("should have 'Allow selected' button")
+	}
+	if !strings.Contains(html, "Deny") {
+		t.Error("should have Deny button")
+	}
+	if !strings.Contains(html, "Allow once") {
+		t.Error("should have 'Allow once' button")
+	}
+}
+
+func TestRenderPermSuggestions_NoAddRules(t *testing.T) {
+	msg := ServerMsg{
+		SessionID:       "sess-1",
+		PermID:          "perm-1",
+		PermTool:        "Bash",
+		PermInput:       &protocol.ToolInput{Bash: &protocol.BashInput{Command: "echo hi"}},
+		PermSuggestions: nil,
+	}
+	html := RenderPermission(msg)
+	if strings.Contains(html, "perm-suggestions") {
+		t.Error("nil suggestions should not render perm-suggestions")
+	}
+	if strings.Contains(html, "Allow selected") {
+		t.Error("nil suggestions should not render 'Allow selected'")
+	}
+}
+
+func TestRenderPermSuggestions_OnlySetMode(t *testing.T) {
+	msg := ServerMsg{
+		SessionID: "sess-1",
+		PermID:    "perm-1",
+		PermTool:  "Bash",
+		PermInput: &protocol.ToolInput{Bash: &protocol.BashInput{Command: "echo hi"}},
+		PermSuggestions: []protocol.PermSuggestion{
+			{Type: "setMode", Mode: "acceptEdits"},
+		},
+	}
+	html := RenderPermission(msg)
+	if strings.Contains(html, "perm-suggestions") {
+		t.Error("only setMode should not render perm-suggestions")
+	}
+	if strings.Contains(html, "Allow selected") {
+		t.Error("only setMode should not render 'Allow selected'")
+	}
+}
+
+func TestRenderPermSuggestions_MultipleRulesOneCheckbox(t *testing.T) {
+	msg := ServerMsg{
+		SessionID: "sess-1",
+		PermID:    "perm-1",
+		PermTool:  "Bash",
+		PermInput: &protocol.ToolInput{Bash: &protocol.BashInput{Command: "python3 script.py"}},
+		PermSuggestions: []protocol.PermSuggestion{
+			{Type: "addRules", Rules: []protocol.PermissionRuleVal{
+				{ToolName: "Bash", RuleContent: "curl -s http://api.example.com/*"},
+				{ToolName: "Bash", RuleContent: "python3 -c 'import requests'"},
+			}},
+		},
+	}
+	html := RenderPermission(msg)
+	if !strings.Contains(html, "Always allow: curl -s http://api.example.com/*; python3 -c &#39;import requests&#39;") {
+		t.Error("multiple rules in one suggestion should be joined with '; '")
+	}
+	checkboxes := strings.Count(html, `type="checkbox"`)
+	if checkboxes != 1 {
+		t.Errorf("one suggestion with multiple rules should be 1 checkbox, got %d", checkboxes)
 	}
 }

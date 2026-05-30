@@ -201,14 +201,9 @@ func TestWriteReviewComment(t *testing.T) {
 	Screenshot(t, page, "write_review_new_file_sent")
 
 	// Claude acts on the review (reads the file, edits to add godoc comments).
-	// Accept Edits so all follow-up permissions are auto-approved.
-	acceptBtn, err := page.Timeout(120*time.Second).ElementR(".perm-allow", "Accept Edits")
-	if err != nil {
-		Screenshot(t, page, "write_review_followup_fail")
-		t.Fatalf("follow-up permission never appeared: %v", err)
-	}
-	Screenshot(t, page, "write_review_followup_perm")
-	acceptBtn.MustClick()
+	// Enable Accept Edits via the mode bar, then allow the current permission.
+	page.MustElement(`.mode-accept-edits`).MustClick()
+	page.MustElement(`.perm-allow`).MustClick()
 
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 	Screenshot(t, page, "write_review_response")
@@ -318,13 +313,9 @@ func TestOverwriteReviewComment(t *testing.T) {
 	Screenshot(t, page, "overwrite_review_sent")
 
 	// Claude acts on the review (adds a division-by-zero check to Modulo).
-	// Accept Edits so all follow-up permissions are auto-approved.
-	acceptBtn, err := page.Timeout(120*time.Second).ElementR(".perm-allow", "Accept Edits")
-	if err != nil {
-		Screenshot(t, page, "overwrite_review_followup_fail")
-		t.Fatalf("follow-up permission never appeared: %v", err)
-	}
-	acceptBtn.MustClick()
+	// Enable Accept Edits via the mode bar, then allow the current permission.
+	page.MustElement(`.mode-accept-edits`).MustClick()
+	page.MustElement(`.perm-allow`).MustClick()
 
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 	Screenshot(t, page, "overwrite_review_response")

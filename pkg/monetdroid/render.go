@@ -459,27 +459,6 @@ func RenderPermission(msg ServerMsg) string {
 	if detailHTML == "" {
 		detailHTML = Esc(FormatPermDetail(msg.PermTool, msg.PermInput))
 	}
-	var suggBtns strings.Builder
-	for _, s := range msg.PermSuggestions {
-		var label string
-		switch s.Type {
-		case "setMode":
-			if s.Mode == "acceptEdits" {
-				label = "Accept Edits"
-			} else {
-				label = s.Mode
-			}
-		case "addDirectories":
-			label = "Add " + strings.Join(s.Directories, ", ")
-		default:
-			label = s.Type
-		}
-		sJSON, _ := json.Marshal(s)
-		fmt.Fprintf(&suggBtns,
-			`<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><input type="hidden" name="suggestion" value="%s"><button type="submit" class="perm-allow" style="width:100%%;font-size:11px">%s</button></form>`,
-			Esc(msg.SessionID), Esc(msg.PermID), Esc(string(sJSON)), Esc(label),
-		)
-	}
 
 	return fmt.Sprintf(`<div class="perm-prompt" id="perm-%s">
 <div class="perm-header">Permission Required</div>
@@ -488,9 +467,8 @@ func RenderPermission(msg ServerMsg) string {
 <div class="perm-detail">%s</div>
 <div class="perm-actions" id="perm-actions-%s">
 <form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form>
-<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow</button></form>
-%s
-</div></div>`,
+<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow once</button></form>
+</div>%s</div>`,
 		Esc(msg.PermID), Esc(msg.PermTool),
 		func() string {
 			if msg.PermReason != "" {
@@ -501,12 +479,12 @@ func RenderPermission(msg ServerMsg) string {
 		detailHTML, Esc(msg.PermID),
 		Esc(msg.SessionID), Esc(msg.PermID),
 		Esc(msg.SessionID), Esc(msg.PermID),
-		suggBtns.String(),
+		renderPermSuggestions(msg),
 	)
 }
 
 // RenderInlinePermission renders permission actions for OOB swap into a tool chip's perm-slot.
-// No header, tool name, or detail — the tool chip already shows those.
+// No header, tool name, or detail - the tool chip already shows those.
 func RenderInlinePermission(msg ServerMsg) string {
 	var b strings.Builder
 	b.WriteString(`<div class="perm-inline" hx-on:htmx:load="this.closest('details').open=true">`)
@@ -516,30 +494,45 @@ func RenderInlinePermission(msg ServerMsg) string {
 	fmt.Fprintf(&b, `<div class="perm-actions" id="perm-actions-%s">`, Esc(msg.PermID))
 	fmt.Fprintf(&b, `<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form>`,
 		Esc(msg.SessionID), Esc(msg.PermID))
-	fmt.Fprintf(&b, `<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow</button></form>`,
+	fmt.Fprintf(&b, `<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow once</button></form>`,
 		Esc(msg.SessionID), Esc(msg.PermID))
+	b.WriteString(`</div>`)
+	b.WriteString(renderPermSuggestions(msg))
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func renderPermSuggestions(msg ServerMsg) string {
+	var html strings.Builder
 	for _, s := range msg.PermSuggestions {
+		if s.Type == "setMode" {
+			continue
+		}
 		var label string
 		switch s.Type {
-		case "setMode":
-			if s.Mode == "acceptEdits" {
-				label = "Accept Edits"
-			} else {
-				label = s.Mode
-			}
 		case "addDirectories":
 			label = "Add " + strings.Join(s.Directories, ", ")
+		case "addRules":
+			var parts []string
+			for _, r := range s.Rules {
+				parts = append(parts, r.RuleContent)
+			}
+			label = "Always allow: " + strings.Join(parts, "; ")
 		default:
 			label = s.Type
 		}
 		sJSON, _ := json.Marshal(s)
-		fmt.Fprintf(&b,
-			`<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><input type="hidden" name="suggestion" value="%s"><button type="submit" class="perm-allow" style="width:100%%;font-size:11px">%s</button></form>`,
-			Esc(msg.SessionID), Esc(msg.PermID), Esc(string(sJSON)), Esc(label),
+		fmt.Fprintf(&html,
+			`<label class="perm-checkbox-label"><input type="checkbox" name="suggestion" value="%s"><span>%s</span></label>`,
+			Esc(string(sJSON)), Esc(label),
 		)
 	}
-	b.WriteString(`</div></div>`)
-	return b.String()
+	if html.Len() == 0 {
+		return ""
+	}
+	return fmt.Sprintf(`<form hx-post="/perm" hx-swap="none" style="margin-top:8px"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><div class="perm-suggestions">%s</div><button type="submit" class="perm-allow" style="width:100%%;margin-top:6px">Allow selected</button></form>`,
+		Esc(msg.SessionID), Esc(msg.PermID), html.String(),
+	)
 }
 
 func RenderAskUser(msg ServerMsg) string {

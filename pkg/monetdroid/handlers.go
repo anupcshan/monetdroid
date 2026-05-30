@@ -536,6 +536,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			OobSwap("session-label", "innerHTML", Esc(sessionLabel)),
 			TitleOob(sessionLabel),
 			FaviconOob(sessionLabel),
+			OobSwap("mode-bar", "innerHTML", fmt.Sprintf(`<form hx-post="/mode" hx-swap="none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="acceptEdits"><button type="submit" class="mode-accept-edits">Accept Edits</button></form>`, Esc(s.ID))),
 			OobSwap("close-btn", "outerHTML",
 				`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`),
 			CwdCopyButton(s.GetCwd()),
@@ -578,7 +579,7 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.FormValue("session_id")
 	permID := r.FormValue("perm_id")
 	allow := r.FormValue("allow") == "true"
-	suggestionJSON := r.FormValue("suggestion")
+	suggestionJSONs := r.Form["suggestion"]
 
 	s := h.Sessions.Get(sessionID)
 	if s == nil {
@@ -590,15 +591,17 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 
 	if ok {
 		var perms []protocol.PermSuggestion
-		if suggestionJSON != "" {
+		for _, sJSON := range suggestionJSONs {
 			var suggestion protocol.PermSuggestion
-			if err := json.Unmarshal([]byte(suggestionJSON), &suggestion); err == nil {
-				perms = []protocol.PermSuggestion{suggestion}
-				if suggestion.Type == "setMode" && suggestion.Mode != "" {
-					s.SetPermissionMode(suggestion.Mode)
-					h.Broadcast(ServerMsg{Type: "permission_mode", SessionID: sessionID, PermMode: suggestion.Mode})
-				}
+			if err := json.Unmarshal([]byte(sJSON), &suggestion); err != nil {
+				log.Printf("permission suggestion parse error: %v", err)
+				http.Error(w, "bad suggestion data", http.StatusBadRequest)
+				return
 			}
+			if suggestion.Type == "setMode" {
+				continue
+			}
+			perms = append(perms, suggestion)
 		}
 		ch <- protocol.PermResponse{Allow: allow, Permissions: perms}
 	}
@@ -609,7 +612,7 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	var resultHTML string
 	if allow {
 		label := "Allowed"
-		if suggestionJSON != "" {
+		if len(suggestionJSONs) > 0 {
 			label = "Allowed (with suggestion)"
 		}
 		resultHTML = fmt.Sprintf(`<span style="color:var(--tool);font-size:12px">✓ %s</span>`, Esc(label))

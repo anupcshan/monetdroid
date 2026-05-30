@@ -583,6 +583,8 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 				label = msg.PermMode
 			}
 			modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(label), Esc(sessionID))
+		} else {
+			modeHTML = fmt.Sprintf(`<form hx-post="/mode" hx-swap="none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="acceptEdits"><button type="submit" class="mode-accept-edits">Accept Edits</button></form>`, Esc(sessionID))
 		}
 		parts = append(parts, OobSwap("mode-bar", "innerHTML", modeHTML))
 	}
@@ -950,6 +952,8 @@ func (h *Hub) SeedEventLog(s *Session) {
 			ml = snap.PermMode
 		}
 		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(ml), Esc(s.ID))
+	} else {
+		modeHTML = fmt.Sprintf(`<form hx-post="/mode" hx-swap="none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="acceptEdits"><button type="submit" class="mode-accept-edits">Accept Edits</button></form>`, Esc(s.ID))
 	}
 	chromeParts = append(chromeParts, OobSwap("mode-bar", "innerHTML", modeHTML))
 	chromeParts = append(chromeParts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
