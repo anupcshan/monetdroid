@@ -203,12 +203,41 @@ func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg))
 		return
 	}
 
+	// Token count refresh: Stop/StopFailure signal a completed turn.
+	// The JSONL file has been updated with the final assistant usage.
+	if env.EventName == "Stop" || env.EventName == "StopFailure" {
+		refreshTokenCount(s, broadcast)
+	}
+
 	if env.AgentID == "" {
 		handleParentAgentHook(s, ev, env, broadcast)
 		return
 	}
 
 	handleSubagentHook(s, ev, env, broadcast)
+}
+
+func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
+	if s.JSONLPath == "" {
+		return
+	}
+	used, window, err := scanTokenUsage(s.JSONLPath)
+	if err != nil {
+		return
+	}
+	cost := &CostInfo{}
+	changed := false
+	if used > 0 && used != s.CostAccum.ContextUsed {
+		cost.ContextUsed = used
+		changed = true
+	}
+	if window > 0 && window != s.CostAccum.ContextWindow {
+		cost.ContextWindow = window
+		changed = true
+	}
+	if changed {
+		broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: cost})
+	}
 }
 
 func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broadcast func(ServerMsg)) {

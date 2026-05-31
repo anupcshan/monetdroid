@@ -349,6 +349,42 @@ func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 	return info, scanner.Err()
 }
 
+// scanTokenUsage reads just the token usage fields from a JSONL file.
+// Returns the last non-zero contextUsed from assistant entries and
+// contextWindow from the result entry.
+func scanTokenUsage(fpath string) (used, window int, err error) {
+	f, err := os.Open(fpath)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+	for scanner.Scan() {
+		var entry jsonlEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.Type == "assistant" {
+			if u := entry.Message.Usage; u != nil {
+				ctx := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
+				if ctx > 0 {
+					used = ctx
+				}
+			}
+		}
+		if entry.Type == "result" {
+			for _, mu := range entry.ModelUsage {
+				if mu.ContextWindow > 0 {
+					window = mu.ContextWindow
+				}
+				break
+			}
+		}
+	}
+	return used, window, scanner.Err()
+}
+
 func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, branches []string, usage SessionUsage, err error) {
 	f, err := os.Open(jsonlPath)
 	if err != nil {
