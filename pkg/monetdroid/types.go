@@ -49,6 +49,7 @@ type CostInfo struct {
 	TotalCostUSD  float64 `json:"total_cost_usd,omitempty"`
 	ContextUsed   int     `json:"context_used,omitempty"`
 	ContextWindow int     `json:"context_window,omitempty"`
+	ModelName     string  `json:"model_name,omitempty"`
 }
 
 type HistoryGroup struct {
@@ -81,4 +82,5 @@ type SessionUsage struct {
 	TotalCostUSD  float64
 	ContextUsed   int
 	ContextWindow int
+	ModelName     string
 }

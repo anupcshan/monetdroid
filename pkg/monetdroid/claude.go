@@ -221,7 +221,7 @@ func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
 	if s.JSONLPath == "" {
 		return
 	}
-	used, window, err := scanTokenUsage(s.JSONLPath)
+	used, window, modelName, err := scanTokenUsage(s.JSONLPath)
 	if err != nil {
 		return
 	}
@@ -233,6 +233,10 @@ func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
 	}
 	if window > 0 && window != s.CostAccum.ContextWindow {
 		cost.ContextWindow = window
+		changed = true
+	}
+	if modelName != "" && modelName != s.CostAccum.ModelName {
+		cost.ModelName = modelName
 		changed = true
 	}
 	if changed {

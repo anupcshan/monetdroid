@@ -34,6 +34,20 @@ var imgDlgSeq atomic.Int64
 
 func Esc(s string) string { return html.EscapeString(s) }
 
+// ShortModelName strips common prefixes and date suffixes from model names.
+func ShortModelName(name string) string {
+	s := strings.TrimPrefix(name, "claude-")
+	if idx := strings.LastIndex(s, "-"); idx > 0 {
+		suffix := s[idx+1:]
+		if len(suffix) == 8 {
+			if _, err := fmt.Sscanf(suffix, "%08d", &[]int{}[0]); err == nil {
+				s = s[:idx]
+			}
+		}
+	}
+	return s
+}
+
 func RenderMarkdown(text string) string {
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(text), &buf); err != nil {
@@ -624,9 +638,12 @@ func RenderCostBar(s *Session) string {
 	}
 	if c.ContextUsed > 0 && c.ContextWindow > 0 {
 		pct := 100 * c.ContextUsed / c.ContextWindow
-		parts = append(parts, fmt.Sprintf("context %s/%s (%d%%)", FmtK(c.ContextUsed), FmtK(c.ContextWindow), pct))
+		parts = append(parts, fmt.Sprintf("%s/%s (%d%%)", FmtK(c.ContextUsed), FmtK(c.ContextWindow), pct))
 	} else if c.ContextUsed > 0 {
-		parts = append(parts, fmt.Sprintf("context %s", FmtK(c.ContextUsed)))
+		parts = append(parts, FmtK(c.ContextUsed))
+	}
+	if c.ModelName != "" {
+		parts = append(parts, ShortModelName(c.ModelName))
 	}
 	parts = append(parts, RenderDiffStat(sid, ds))
 	parts = append(parts, fmt.Sprintf(`<a href="/kb/?cwd=%s" class="diff-stat-link" style="color:var(--text2)">KB</a>`, Esc(s.GetCwd())))
@@ -667,7 +684,7 @@ func FmtK(n int) string {
 		return fmt.Sprintf("%.1fM", float64(n)/1000000)
 	}
 	if n >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
+		return fmt.Sprintf("%.1fkT", float64(n)/1000)
 	}
 	return fmt.Sprintf("%d", n)
 }
@@ -698,10 +715,10 @@ func ShortPath(p string) string {
 
 // --- Todos rendering ---
 
-// FormatTokens formats token counts like "62k" or "62k/200k".
+// FormatTokens formats token counts like "62kT" or "62kT/200kT".
 func FormatTokens(used, window int) string {
 	fmtK := func(n int) string {
-		return fmt.Sprintf("%dk", (n+500)/1000)
+		return fmt.Sprintf("%dkT", (n+500)/1000)
 	}
 	if window > 0 {
 		return fmtK(used) + "/" + fmtK(window)

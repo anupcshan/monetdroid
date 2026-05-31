@@ -613,6 +613,9 @@ func (s *Session) AccumulateCost(cost *CostInfo) {
 	if cost.ContextWindow > 0 {
 		s.CostAccum.ContextWindow = cost.ContextWindow
 	}
+	if cost.ModelName != "" {
+		s.CostAccum.ModelName = cost.ModelName
+	}
 	s.mu.Unlock()
 }
 

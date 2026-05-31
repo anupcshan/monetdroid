@@ -37,6 +37,7 @@ type compactMetadata struct {
 type jsonlMessage struct {
 	Content messageContent `json:"content"`
 	Usage   *jsonlUsage    `json:"usage,omitempty"`
+	Model   string         `json:"model,omitempty"`
 }
 
 // messageContent handles the polymorphic content field: plain string or array of blocks.
@@ -352,10 +353,10 @@ func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 // scanTokenUsage reads just the token usage fields from a JSONL file.
 // Returns the last non-zero contextUsed from assistant entries and
 // contextWindow from the result entry.
-func scanTokenUsage(fpath string) (used, window int, err error) {
+func scanTokenUsage(fpath string) (used, window int, modelName string, err error) {
 	f, err := os.Open(fpath)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
@@ -372,9 +373,15 @@ func scanTokenUsage(fpath string) (used, window int, err error) {
 					used = ctx
 				}
 			}
+			if modelName == "" && entry.Message.Model != "" {
+				modelName = entry.Message.Model
+			}
 		}
 		if entry.Type == "result" {
-			for _, mu := range entry.ModelUsage {
+			for name, mu := range entry.ModelUsage {
+				if modelName == "" && name != "" {
+					modelName = name
+				}
 				if mu.ContextWindow > 0 {
 					window = mu.ContextWindow
 				}
@@ -382,7 +389,7 @@ func scanTokenUsage(fpath string) (used, window int, err error) {
 			}
 		}
 	}
-	return used, window, scanner.Err()
+	return used, window, modelName, scanner.Err()
 }
 
 func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, branches []string, usage SessionUsage, err error) {
@@ -464,6 +471,9 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					usage.ContextUsed = ctx
 				}
 			}
+			if usage.ModelName == "" && entry.Message.Model != "" {
+				usage.ModelName = entry.Message.Model
+			}
 			for _, b := range entry.Message.Content.Blocks {
 				switch b.Type {
 				case "thinking":
@@ -488,7 +498,10 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			if entry.TotalCost > 0 {
 				usage.TotalCostUSD = entry.TotalCost
 			}
-			for _, info := range entry.ModelUsage {
+			for name, info := range entry.ModelUsage {
+				if usage.ModelName == "" && name != "" {
+					usage.ModelName = name
+				}
 				if info.ContextWindow > 0 {
 					usage.ContextWindow = info.ContextWindow
 				}
