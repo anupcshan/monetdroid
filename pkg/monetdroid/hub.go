@@ -402,7 +402,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 				}
 			}
 		} else {
-			// Sub-agent or unknown tool — render standalone
+			// Render sub-agent and unknown tool requests as standalone permission chips.
 			msgHTML = RenderPermission(msg)
 		}
 	}
@@ -461,7 +461,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	}
 	// Remove spinner when tool_result arrives
 	if msg.Type == "tool_result" && msg.ToolUseID != "" {
-		// Detect background Bash tasks — insert lazy-load SSE slot for output
+		// For background Bash tasks, insert a lazy-load SSE slot for the output.
 		if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
 			// Register the output path and stop channel for the stream endpoint.
 			toolUseID := msg.ToolUseID
@@ -472,11 +472,11 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			}
 			// Populate the bg-slot with a lazy-load trigger.
 			// The SSE connection is only made when the user opens the details.
-			// Keep the spinner — it will be removed when task_done arrives.
+			// Keep the spinner until task_done arrives, then remove it.
 			parts = append(parts, OobSwap("bg-slot-"+msg.ToolUseID, "innerHTML",
 				RenderBgSlot(sessionID, msg.ToolUseID)))
 			msgHTML = ""
-			// Elapsed timer — ticks every second until task completes.
+			// Run an elapsed timer that ticks every second until the task completes.
 			go func() {
 				started := time.Now()
 				for {
@@ -502,7 +502,7 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			msgHTML = ""
 		}
 	}
-	// Background task completed — remove spinner, show final elapsed time
+	// On task completion, remove the spinner and show the final elapsed time.
 	if msg.Type == "task_done" && msg.ToolUseID != "" {
 		parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
 	}
@@ -599,7 +599,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 	// Ensure process is alive
 	if proc == nil || proc.IsDead() {
 		broadcast := func(msg ServerMsg) {
-			// Streaming deltas are ephemeral — don't persist in the session log.
+			// Streaming deltas are ephemeral and should not be persisted in the session log.
 			if msg.Type != "text_delta" && msg.Type != "thinking_delta" {
 				s.Append(msg)
 			}

@@ -7,7 +7,7 @@ import (
 )
 
 // Control protocol types for communication with the Claude CLI subprocess.
-// These are internal to the claude package — consumers interact through
+// These are internal to the claude package. Consumers interact through
 // ClaudeProcess methods and protocol.StreamEvent.
 
 // --- Outgoing envelopes (we send to CLI) ---
@@ -45,7 +45,7 @@ type ctlRespPayload struct {
 type ctlIncomingRequest struct {
 	Type      string `json:"type"` // "control_request"
 	RequestID string `json:"request_id"`
-	// Nested inside "request" — use custom unmarshal
+	// Nested inside "request", extracted via custom unmarshal
 	Subtype               string                    `json:"-"`
 	ToolName              string                    `json:"-"`
 	ToolUseID             string                    `json:"-"`

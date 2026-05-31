@@ -25,7 +25,7 @@ var suppressResultTools = map[string]bool{
 // and broadcasts text/thinking deltas for live display. Sub-agent deltas are ignored
 // (their content is buffered by the final assistant event).
 func handleRawStreamEvent(s *Session, raw *protocol.RawStreamEvent, broadcast func(ServerMsg)) {
-	// Skip sub-agent streaming — too noisy, and the buffered view handles it.
+	// Skip sub-agent streaming. The buffered view handles it, and raw deltas are too noisy.
 	if raw.ParentToolUseID != nil {
 		return
 	}

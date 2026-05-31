@@ -11,8 +11,8 @@ import (
 var _ func(string, func(protocol.StreamEvent), string, *claude.ProcessConfig) (*claude.ClaudeProcess, error) = claude.StartProcessWithConfig
 
 // TestPermissionHandlerAPI verifies that PermissionRequest, PermissionHandler,
-// PermResponse, and ProcessConfig compose correctly from an external package —
-// ensuring the library's public API surface stays usable without importing
+// PermResponse, and ProcessConfig compose correctly from an external package.
+// This ensures the library's public API surface stays usable without importing
 // internal wire protocol.
 func TestPermissionHandlerAPI(t *testing.T) {
 	handler := func(req protocol.PermissionRequest) protocol.PermResponse {

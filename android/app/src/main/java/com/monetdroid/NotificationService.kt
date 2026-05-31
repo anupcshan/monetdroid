@@ -41,7 +41,7 @@ class NotificationService : Service() {
         startForeground(1, buildForegroundNotification())
 
         synchronized(threadLock) {
-            // Stop old thread — close the connection to unblock readLine()
+            // Stop old thread and close the connection to unblock readLine()
             running = false
             activeConnection?.disconnect()
             sseThread?.interrupt()
@@ -144,7 +144,7 @@ class NotificationService : Service() {
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {
-                // Connection failed, dropped, or disconnected — retry after delay
+                // Connection failed, dropped, or disconnected. Retry after a delay.
                 if (running) {
                     try { Thread.sleep(5_000) } catch (_: InterruptedException) { break }
                 }

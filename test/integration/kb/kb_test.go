@@ -330,7 +330,7 @@ func TestGitCommonDirResolution(t *testing.T) {
 	// Write from the main workdir.
 	f.KBWithStdin("from main", "write", "test.md")
 
-	// Create a worktree and read from there — should see the same KB.
+	// Create a worktree and read from there. Should see the same KB.
 	f.MustExec("git", "-C", containerWorkdir, "worktree", "add", "/work2", "-b", "test-branch")
 
 	cmdArgs := []string{"exec", "-e", "KB_CLI_MODE=kb", "-w", "/work2", f.containerID, "/test", "read", "test.md"}

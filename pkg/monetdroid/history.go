@@ -13,7 +13,7 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
-// JSONL schema types — minimal subset of fields we need from Claude session files.
+// JSONL schema types for the subset of fields we read from Claude session files.
 
 type jsonlEntry struct {
 	CWD             string                    `json:"cwd"`
@@ -53,7 +53,7 @@ func (c *messageContent) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &c.Blocks)
 }
 
-// FirstText returns the first text content — either the plain string or the first text block.
+// FirstText returns the first text content, whether the plain string or the first text block.
 func (c *messageContent) FirstText() string {
 	if c.Text != "" {
 		return c.Text

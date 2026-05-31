@@ -99,7 +99,7 @@ Create → Work → Archive (hide) → Prune (delete)
 - Claude CLI `-p --resume <id>` only searches `~/.claude/projects/<mangled-cmd.Dir>/`
 - No worktree-aware lookup in `-p` mode (known CLI gap)
 - **Workaround**: always start claude process in the session's original cwd (first `cwd` entry in JSONL)
-- **Rule**: sessions must stick to one worktree — never change cwd mid-session
+- **Rule**: sessions must stick to one worktree and never change cwd mid-session
 - We only manage worktrees we create; don't mess with user-created worktrees
 
 ## Build Order (Completed ✓ / Remaining)
@@ -138,7 +138,7 @@ Per-branch info:
 - Ahead/behind remote (pushed or not)
 - Remote tracking status (`gone` = PR merged/branch deleted)
 - Uncommitted changes (staged/unstaged)
-- PR status (future — requires GitHub API, likely via `gh` for auth)
+- PR status (future, requires GitHub API, likely via `gh` for auth)
 
 Stack visualization:
 - Branch topology inferred from upstream chain
@@ -153,14 +153,14 @@ Actions available from the panel:
 ## Sync
 
 ### Pull main
-- `git pull --ff-only` in the main worktree — fetches from origin and fast-forwards local main
+- `git pull --ff-only` in the main worktree, fetches from origin and fast-forwards local main
 - Separate from sync so it can be done independently
 - Subsequent syncs (including retries after fixing conflicts) use the already-updated local main
 
 ### Single workstream sync
 1. Walk the upstream chain to find the stack order
 2. Rebase each branch onto its upstream, in topological order
-3. On conflict: **stop, leave the broken state**, show conflicting files — user resolves manually
+3. On conflict: **stop, leave the broken state**, show conflicting files. User resolves manually.
 4. After resolving, user can re-run sync without pulling again
 
 ### Mass sync
@@ -171,14 +171,14 @@ Actions available from the panel:
 
 ```
 ✓ auth          synced to main
-✗ auth-ui       rebase conflict (2 files) — sync manually
+✗ auth-ui       rebase conflict (2 files), sync manually
 ⊘ auth-tests    skipped (depends on auth-ui)
 ✓ perf          synced to main
 ```
 
 ## Prune
 
-Global action — scans all workstreams and presents everything prunable in one view. User selects what to delete.
+Global action that scans all workstreams and presents everything prunable in one view. User selects what to delete.
 
 ### Branch Safety Checks
 
@@ -188,11 +188,11 @@ Global action — scans all workstreams and presents everything prunable in one 
 | PR open, work pushed | no | yes | Warn, leave alone |
 | Locally merged into main | no remote | no | Safe to delete |
 | Brand new, no work | no remote | no | Safe to delete (harmless) |
-| Local work, never pushed | no remote | yes | Warn — unpushed commits |
+| Local work, never pushed | no remote | yes | Warn about unpushed commits |
 
 Note: squash merges can cause false "ahead" counts since original commits aren't reachable from main. This is a known git limitation.
 
-Sessions associated with the workstream are checked regardless of branch state — warn if there are sessions that will become non-resumable.
+Sessions associated with the workstream are checked regardless of branch state. Warn if there are sessions that will become non-resumable.
 
 ## Persistence
 
@@ -202,9 +202,9 @@ Sessions associated with the workstream are checked regardless of branch state �
 
 ## Decisions
 
-- Branches created outside Monetdroid (without upstream set) are not tracked — user manages those manually
-- PR status deferred — start with git-only info, add GitHub API later (likely via `gh` CLI for auth)
-- Worktree pool deferred — creation is slower without it but not a blocker
+- Branches created outside Monetdroid (without upstream set) are not tracked. User manages those manually.
+- PR status deferred. Start with git-only info, add GitHub API later (likely via `gh` CLI for auth).
+- Worktree pool deferred. Creation is slower without it but not a blocker.
 
 ## Open Questions
 

@@ -100,7 +100,7 @@ func TestRenderBranchList_StackedBranches(t *testing.T) {
 	assertRow(t, rows[4], "ws-child ws-last ws-color-b", "perf", "=")
 }
 
-// Depth pattern: 0, 1, 1, 2 — fork at depth 1, one child goes deeper.
+// Depth pattern: 0, 1, 1, 2 (fork at depth 1, one child goes deeper).
 func TestRenderBranchList_ForkedStack(t *testing.T) {
 	panel := BranchPanel{
 		DefaultBranch: "main",
@@ -123,7 +123,7 @@ func TestRenderBranchList_ForkedStack(t *testing.T) {
 	assertRow(t, rows[5], "ws-child ws-last ws-color-b", "perf", "=")
 }
 
-// Depth pattern: 0, 1, 2 + separate workstream — linear 3-deep stack.
+// Depth pattern: 0, 1, 2 plus a separate workstream (linear 3-deep stack).
 func TestRenderBranchList_DeepLinearStack(t *testing.T) {
 	panel := BranchPanel{
 		DefaultBranch: "main",
@@ -144,7 +144,7 @@ func TestRenderBranchList_DeepLinearStack(t *testing.T) {
 	assertRow(t, rows[4], "ws-child ws-last ws-color-b", "bugfix", "↑1")
 }
 
-// Depth pattern: 0, 1, 2 — single workstream, linear 3-deep stack.
+// Depth pattern: 0, 1, 2 in a single workstream (linear 3-deep stack).
 func TestRenderBranchList_SingleDeepStack(t *testing.T) {
 	panel := BranchPanel{
 		DefaultBranch: "main",

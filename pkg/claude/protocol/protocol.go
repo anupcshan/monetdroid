@@ -356,7 +356,7 @@ type PermissionRuleVal struct {
 // PermissionRequest is the exported view of an incoming can_use_tool request.
 type PermissionRequest struct {
 	// RequestID is the control protocol request ID. The handler must not
-	// interpret it — it exists so the web UI can key permission channels
+	// interpret it. It exists so the web UI can key permission channels
 	// and HTML elements by a stable, unique ID.
 	RequestID      string
 	ToolName       string

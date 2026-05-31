@@ -274,7 +274,7 @@ func TestOverwriteReviewComment(t *testing.T) {
 	WaitForElement(t, page, ".perm-inline", 60*time.Second)
 	WaitForElement(t, page, ".tool-chip[open] .diff-table", 10*time.Second)
 
-	// Context lines have both old and new gutter numbers — proves this is a
+	// Context lines have both old and new gutter numbers, which proves this is a
 	// real diff against the existing file, not the all-additions fallback.
 	ctxRows := page.MustElements(".tool-chip[open] .diff-ctx")
 	if len(ctxRows) == 0 {

@@ -61,7 +61,7 @@ func buildDockerImage(t *testing.T) {
 			buildErr = fmt.Errorf("docker build failed: %v\n%s", err, out)
 			return
 		}
-		// Log but don't spam — only on first build
+		// Log on first build only, to avoid noise.
 		t.Logf("built docker image %s", dockerImage)
 	})
 	if buildErr != nil {
@@ -155,7 +155,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 
 	// Check docker is available
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Fatal("docker not found — integration tests require docker")
+		t.Fatal("docker not found, integration tests require docker")
 	}
 
 	// Build docker image (once per test run)
@@ -168,12 +168,12 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 	// In replay mode, cassette must exist
 	if mode == "replay" {
 		if _, err := os.Stat(cassettePath); err != nil {
-			t.Fatalf("cassette %s not found — record it first with -record flag", cassetteName)
+			t.Fatalf("cassette %s not found, record it first with -record flag", cassetteName)
 		}
 	}
 
 	// In record mode, guard against two tests claiming the same cassette in
-	// one run — otherwise the later test's os.Create overwrites the earlier
+	// the same run, otherwise the later test's os.Create overwrites the earlier
 	// test's recording. Non-owners should use SetupWithSharedCassette.
 	if mode == "record" {
 		cassetteClaimsMu.Lock()
@@ -190,7 +190,7 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 	replayer := NewReplayer(t, cassettePath, mode, upstream)
 	replayerURL := replayer.Start()
 
-	// Get the test binary path — we bind-mount it into the container
+	// Get the test binary path so we can bind-mount it into the container.
 	testBinary, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)

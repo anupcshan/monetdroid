@@ -791,9 +791,8 @@ func RenderTodosBody(todos []protocol.Todo) string {
 // --- SSE format helpers ---
 
 func FormatSSE(event, data string) string {
-	// Strip \r — SSE treats \r as a line terminator, so stray CRs
-	// (e.g. from CRLF textarea submissions) would split data lines
-	// and silently drop content.
+	// Strip \r before SSE formatting. Stray CRs from CRLF textarea submissions
+	// would be interpreted as line terminators and silently drop content.
 	data = strings.ReplaceAll(data, "\r", "")
 	var buf strings.Builder
 	buf.WriteString("event: ")
@@ -1056,13 +1055,13 @@ func RenderPruneConfirmation(plan PrunePlan, repo string) string {
 		fmt.Fprintf(&b, `<input type="hidden" name="path" value="%s">`, Esc(ws.Path))
 		fmt.Fprintf(&b, `<div class="ws-prune-ws">`)
 		fmt.Fprintf(&b, `<div class="ws-prune-ws-name">%s</div>`, Esc(ws.Name))
-		fmt.Fprintf(&b, `<div class="ws-prune-detail">worktree: %s — will be removed</div>`, Esc(ws.Path))
+		fmt.Fprintf(&b, `<div class="ws-prune-detail">worktree: %s, to be removed</div>`, Esc(ws.Path))
 		for _, br := range ws.Branches {
 			if br.Safe {
-				fmt.Fprintf(&b, `<div class="ws-prune-branch ws-prune-safe">branch %s — delete (%s)</div>`,
+				fmt.Fprintf(&b, `<div class="ws-prune-branch ws-prune-safe">branch %s, delete (%s)</div>`,
 					Esc(br.Name), Esc(br.Reason))
 			} else {
-				fmt.Fprintf(&b, `<div class="ws-prune-branch ws-prune-warn">branch %s — keep (%s)</div>`,
+				fmt.Fprintf(&b, `<div class="ws-prune-branch ws-prune-warn">branch %s, keep (%s)</div>`,
 					Esc(br.Name), Esc(br.Reason))
 			}
 		}
@@ -1085,8 +1084,7 @@ func stripSpinner(html, toolUseID string) string {
 	if start < 0 {
 		return html
 	}
-	// Find the matching closing </span> — the spinner has nested spans,
-	// so count open/close tags.
+	// Find the matching closing </span> by counting open/close tags, since the spinner has nested spans.
 	depth := 0
 	i := start
 	for i < len(html) {

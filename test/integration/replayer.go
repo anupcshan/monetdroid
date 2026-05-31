@@ -54,11 +54,11 @@ import (
 //
 //  2. Normalizer iteration without re-recording. The hash is re-derived
 //     from the cassette body on every load, so a normalizer change
-//     just produces new hashes from existing bodies — no re-record.
+//     just produces new hashes from existing bodies, not a re-record.
 //
 // Scrub policy is privacy only. Only sensitive fields (user_id,
 // account IDs in metadata) are stripped from the cassette. Bulk fields
-// (system prompt, tool definitions) are kept — stripping them would
+// (system prompt, tool definitions) are kept. Stripping them would
 // hide real input changes like CLI version bumps that reword the
 // system prompt or change tool schemas, which is exactly what the
 // drift mechanism exists to surface. Invariant: every key in
@@ -333,7 +333,7 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	// UUIDs in the response body with the live CLI's values so subsequent
 	// tool_use inputs reference paths that actually exist in the live
 	// filesystem. tool_use inputs are SSE-fragmented across
-	// input_json_delta events — substituteSSEDeltas reassembles, replaces,
+	// input_json_delta events. substituteSSEDeltas reassembles, replaces,
 	// and re-emits. A follow-up flat ReplaceAll catches any occurrences
 	// outside the fragmented inputs (e.g. in text deltas).
 	for rec, live := range idMapCopy {
@@ -367,7 +367,7 @@ func (r *Replayer) handleRecord(w http.ResponseWriter, req *http.Request) {
 
 	// Build upstream request. Use a detached context so the drain continues
 	// even if the test's request context is cancelled mid-stream by test
-	// cleanup — otherwise the recorded SSE stream ends mid-event (no
+	// cleanup. Otherwise the recorded SSE stream ends mid-event (no
 	// terminating message_stop), which makes replay-mode CLIs think the turn
 	// never ended and fire spurious follow-up POSTs that have no cassette
 	// match. The 3-minute cap bounds how long a hung upstream can block
@@ -386,7 +386,7 @@ func (r *Replayer) handleRecord(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Forward headers (including Authorization), but strip Accept-Encoding
-	// so the upstream sends plain text — makes cassettes readable and avoids
+	// so the upstream sends plain text, making cassettes readable and avoiding
 	// storing gzip-compressed response bodies.
 	for k, vals := range req.Header {
 		if k == "Accept-Encoding" {
@@ -464,7 +464,7 @@ func (r *Replayer) Start() string {
 	// Listen on all interfaces so containers using bridge networking can reach
 	// the replayer via host.docker.internal. This exposes the replayer on the
 	// network during test runs. In record mode the replayer proxies to the real
-	// Anthropic API using your credentials — only run on trusted networks.
+	// Anthropic API using your credentials. Only run on trusted networks.
 	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		r.t.Fatalf("replayer listen: %v", err)
@@ -802,7 +802,7 @@ func hashRequestBody(body []byte) string {
 // UUIDs) that appear in both the recorded and live request bodies and pairs
 // them up by order of first appearance. Resulting map (recorded→live) is
 // used at response-serve time to rewrite recorded identifiers to their live
-// counterparts. Safe to call repeatedly as turns accumulate — new IDs are
+// counterparts. Safe to call repeatedly as turns accumulate because new IDs are
 // appended; existing mappings stay consistent because IDs are stable within
 // a single session on each side.
 //
@@ -999,9 +999,9 @@ func stripCacheControl(v any) {
 
 // systemReminderRe matches a `<system-reminder>...</system-reminder>` block
 // (plus surrounding whitespace). The CLI appends these harness metadata
-// blocks to the "freshest" tool_result in a parallel tool batch — which
-// block gets it is non-deterministic across runs.
-// Match only newlines around the reminder, never tabs or spaces — tool_result
+// blocks to the "freshest" tool_result in a parallel tool batch. The
+// receiving block is non-deterministic across runs.
+// Match only newlines around the reminder, never tabs or spaces. tool_result
 // content (e.g. Read line-numbered output) can legitimately end with a tab
 // that belongs to the phantom last line; greedy \s* would eat it.
 var systemReminderRe = regexp.MustCompile(`(?s)\n*<system-reminder>.*?</system-reminder>\n*`)
@@ -1053,7 +1053,7 @@ func stripSystemRemindersInToolResults(parsed map[string]any) {
 // (used by the Claude CLI's Glob tool) documents arbitrary ordering, so the
 // same file set can come back in different orders between record and replay
 // and drift the hash. We only sort the leading run of path-like lines up to
-// the first blank line — trailing content (e.g. appended system-reminder
+// the first blank line. Trailing content (e.g. appended system-reminder
 // blocks) is left as-is.
 // Matches a line that starts with a path token, optionally followed by a
 // grep-style `:line:content` suffix. Covers both Glob results (just paths)
@@ -1123,7 +1123,7 @@ func sortPathListPrefix(s string) string {
 // sortToolResults canonicalizes the order of tool_result content blocks
 // within each user message. When the model issues parallel tool calls, the
 // CLI's follow-up message carries the results in whichever order the local
-// reads completed — non-deterministic across runs. tool_use_id is generated
+// reads completed, which is non-deterministic across runs. tool_use_id is generated
 // by the API and carried through the cassette's response unchanged, so
 // sorting by it produces the same order at record and replay time.
 //
@@ -1181,7 +1181,7 @@ func toolResultID(v any) string {
 // claude.ai MCP servers via an out-of-band call (not routed through
 // ANTHROPIC_BASE_URL), so the recorded body includes tools like
 // mcp__claude_ai_Gmail__authenticate. In replay mode the dummy credential
-// can't auth against claude.ai, so those tools are absent — producing a
+// can't auth against claude.ai, so those tools are absent and produce a
 // 4KB-ish drift that's unrelated to anything the tests exercise. Stripping
 // them on both sides before hashing lets the hash focus on meaningful
 // input drift.
@@ -1225,7 +1225,7 @@ func scrubRequestBody(body []byte) (string, error) {
 		}
 	}
 	if len(unknown) > 0 {
-		return "", fmt.Errorf("unknown request body keys: %v — add them to allowedRequestKeys or deniedRequestKeys in replayer.go", unknown)
+		return "", fmt.Errorf("unknown request body keys: %v, add them to allowedRequestKeys or deniedRequestKeys in replayer.go", unknown)
 	}
 
 	for k := range deniedRequestKeys {

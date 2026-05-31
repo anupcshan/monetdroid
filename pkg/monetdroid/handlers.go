@@ -207,7 +207,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Each SSE connection gets its own unique client ID — no cookies.
+	// Assign each SSE connection a unique client ID instead of using cookies.
 	b := make([]byte, 16)
 	rand.Read(b)
 	connID := hex.EncodeToString(b)
@@ -273,7 +273,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
 		} else {
-			// No active session — landing page
+			// No active session, so render the landing page.
 			content := h.renderLanding()
 			if content == "" {
 				content = `<div class="empty-state"><p>No active workstreams. Click + to create one.</p></div>`
@@ -418,7 +418,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			buffered []protocol.StreamEvent
 		)
 		broadcast := func(msg ServerMsg) {
-			// Streaming deltas are ephemeral — don't persist in the session log.
+			// Streaming deltas are ephemeral and should not be persisted in the session log.
 			if msg.Type != "text_delta" && msg.Type != "thinking_delta" {
 				sess.Append(msg)
 			}
@@ -1134,9 +1134,9 @@ func rebaseWorkstream(t *GitTrace, w http.ResponseWriter, flusher http.Flusher, 
 		if err != nil {
 			if abortOnConflict {
 				exec.Command("git", "-C", cwd, "rebase", "--abort").Run()
-				fmt.Fprint(w, `<div class="ws-cmd-err">conflict — aborted, sync manually</div></div>`)
+				fmt.Fprint(w, `<div class="ws-cmd-err">conflict, aborted, sync manually</div></div>`)
 			} else {
-				fmt.Fprint(w, `<div class="ws-cmd-err">rebase failed — resolve conflicts and run git rebase --continue</div></div>`)
+				fmt.Fprint(w, `<div class="ws-cmd-err">rebase failed, resolve conflicts and run git rebase --continue</div></div>`)
 			}
 			flusher.Flush()
 			return false
@@ -1313,7 +1313,7 @@ func (h *Hub) handlePruneConfirm(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Fallback: all workstreams pruned — render a minimal panel with just the log.
+	// Fallback when all workstreams are pruned: render a minimal panel with just the log.
 	fmt.Fprintf(w, `<div id="ws-panel-%s"><div class="queue-header">%s</div><div id="ws-cmd-output-%s" class="ws-cmd-output">%s</div></div>`,
 		Esc(repo), Esc(repo), Esc(repo), logHTML.String())
 }
@@ -1459,7 +1459,7 @@ func (h *Hub) handleBgOutputStream(w http.ResponseWriter, r *http.Request) {
 		}
 		select {
 		case <-stopCh:
-			// Task just completed — do a final read
+			// Task just completed, so do a final read to capture remaining output.
 			chunk, _, err := ReadBgChunk(bgPath, offset)
 			if err == nil && len(chunk) > 0 {
 				escaped := Esc(strings.TrimRight(chunk, "\n"))

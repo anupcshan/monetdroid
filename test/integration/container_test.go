@@ -185,7 +185,7 @@ func TestClearCommand(t *testing.T) {
 	}
 	Screenshot(t, page, "clear_after_slash")
 
-	// Turn 3: fresh session — ask about the prior arithmetic.
+	// Turn 3 starts a fresh session that asks about the prior arithmetic.
 	page.MustElement(`textarea[name="text"]`).MustInput("What was the result of the last addition I asked about?")
 	page.MustElement(`.send-btn`).MustClick()
 	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
@@ -259,7 +259,7 @@ func Add(a, b int) int {
 	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
 
 	// Second turn: follow-up question referencing the first turn's context
-	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go call the Add function from util.go? Just explain — don't modify any files.")
+	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go call the Add function from util.go? Just explain, don't modify any files.")
 	page.MustElement(`.send-btn`).MustClick()
 
 	// Wait for second user message to render
@@ -355,7 +355,7 @@ func TestPermissionFlow(t *testing.T) {
 	// Click Allow
 	page.MustElement(`.perm-allow`).MustClick()
 
-	// Permission should be resolved — status shows in tool chip summary
+	// Permission should be resolved, with status shown in the tool chip summary.
 	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 	Screenshot(t, page, "permission_allowed")
 
@@ -473,7 +473,7 @@ func main() {
 	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-	// Ask claude to edit the file — triggers Edit permission with "Accept Edits" suggestion
+	// Ask claude to edit the file, which triggers an Edit permission with the "Accept Edits" suggestion.
 	page.MustElement(`textarea[name="text"]`).MustInput("Change the greeting in greeting.go from 'hello world' to 'goodbye world'")
 	page.MustElement(`.send-btn`).MustClick()
 
@@ -485,7 +485,7 @@ func main() {
 	page.MustElement(`.mode-accept-edits`).MustClick()
 	page.MustElement(`.perm-allow`).MustClick()
 
-	// Permission should be resolved — status shows in tool chip summary
+	// Permission should be resolved, with status shown in the tool chip summary.
 	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 	Screenshot(t, page, "accept_edits_allowed")
 
@@ -509,8 +509,7 @@ func main() {
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 	Screenshot(t, page, "accept_edits_second_turn")
 
-	// Verify no second permission prompt appeared — after first was resolved,
-	// the perm-inline was cleared, so there should be zero .perm-inline elements
+	// After the first permission was resolved, the perm-inline was cleared. Verify no second prompt appears.
 	prompts, err := page.Elements(".perm-inline")
 	if err != nil {
 		t.Fatalf("failed to query perm-inlines: %v", err)
@@ -531,7 +530,7 @@ func main() {
 	page.MustWait(`() => !document.querySelector('.mode-reset')`)
 	Screenshot(t, page, "accept_edits_mode_reset")
 
-	// Third turn: another edit — should require permission again after reset
+	// Third turn does another edit and should require permission again after the mode reset.
 	page.MustElement(`textarea[name="text"]`).MustInput("Now change 'greetings world' to 'howdy world' in greeting.go")
 	page.MustElement(`.send-btn`).MustClick()
 
@@ -560,7 +559,7 @@ func TestSessionReload(t *testing.T) {
 	t.Parallel()
 	f := SetupWithContainer(t, "multi_turn.jsonl.zst", testMode())
 
-	// Write files (same as TestMultiTurn — needed for tool execution)
+	// Write files the same way as TestMultiTurn, needed for tool execution.
 	f.WriteFile(containerWorkdir+"/main.go", `package main
 
 import "fmt"
@@ -590,7 +589,7 @@ func Add(a, b int) int {
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
 	// Second turn
-	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go call the Add function from util.go? Just explain — don't modify any files.")
+	page.MustElement(`textarea[name="text"]`).MustInput("Can main.go call the Add function from util.go? Just explain, don't modify any files.")
 	page.MustElement(`.send-btn`).MustClick()
 	if _, err := page.Timeout(120*time.Second).ElementR(".msg-assistant", "Add"); err != nil {
 		t.Fatalf("second assistant response never appeared: %v", err)
@@ -603,7 +602,7 @@ func Add(a, b int) int {
 		t.Fatalf("URL should contain session=, got: %s", currentURL)
 	}
 
-	// Reload with small viewport — multi-turn content should overflow
+	// Reload with a small viewport so multi-turn content overflows.
 	page.MustSetViewport(800, 300, 1, false)
 	page.MustNavigate(currentURL).MustWaitStable()
 	WaitForElement(t, page, ".msg-assistant", 10*time.Second)
@@ -800,7 +799,7 @@ func TestBashSpinner(t *testing.T) {
 	CreatePlainSession(t, page, containerWorkdir)
 	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-	// Background Bash command — tests spinner lifecycle AND streaming output.
+	// Run a background Bash command to test spinner lifecycle and streaming output.
 	// The sleep between steps gives time to observe partial output.
 	page.MustElement(`textarea[name="text"]`).MustInput(
 		"Start `for i in $(seq 1 10); do echo step $i; sleep 1; done` in the background and explain what the command does while it runs")
@@ -810,14 +809,14 @@ func TestBashSpinner(t *testing.T) {
 	WaitForElement(t, page, ".tool-spinner", 60*time.Second)
 	Screenshot(t, page, "bash_spinner_active")
 
-	// Command substitution ($()) triggers a permission prompt — allow it
+	// Command substitution ($()) triggers a permission prompt, so allow it.
 	WaitForElement(t, page, ".perm-allow", 10*time.Second)
 	page.MustElement(`.perm-allow`).MustClick()
 
 	// Wait for turn to complete (Claude responds after submitting the bg task)
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Spinner should still be present — bg command is still running
+	// Spinner should still be present because the bg command is still running.
 	if !page.MustHas(".tool-spinner") {
 		Screenshot(t, page, "bash_spinner_gone_too_early")
 		t.Fatal("spinner disappeared before bg task completed")
@@ -827,17 +826,17 @@ func TestBashSpinner(t *testing.T) {
 	// Tool chip details is already open from the permission flow's auto-open,
 	// so the bg-slot SSE lazy-load triggers as soon as it's populated.
 
-	// Wait for streaming to start — at least 2 lines visible
+	// Wait for streaming output, expecting at least 2 visible lines.
 	WaitForText(t, page, ".tool-bg-output", "step 2", 30*time.Second)
 
 	// Immediately assert that the last step is NOT yet visible (proves partial streaming)
 	bgText := page.MustEval(`() => document.querySelector('.tool-bg-output').textContent`).String()
 	if strings.Contains(bgText, "step 10") {
 		Screenshot(t, page, "bash_bg_not_partial")
-		t.Fatal("step 10 already visible when step 2 first appeared — not partial streaming")
+		t.Fatal("step 10 already visible when step 2 first appeared, not partial streaming")
 	}
 
-	// Reload mid-stream — verify partial bg output survives reload
+	// Reload mid-stream to verify partial bg output survives reload.
 	Screenshot(t, page, "bash_bg_before_reload")
 	currentURL := page.MustEval(`() => window.location.href`).String()
 	page.MustNavigate(currentURL).MustWaitStable()
@@ -863,7 +862,7 @@ func TestBashSpinner(t *testing.T) {
 	}
 	Screenshot(t, page, "bash_bg_output")
 
-	// Spinner should be removed by task_notification — get a fresh reference
+	// Spinner should be removed by task_notification. Get a fresh reference.
 	spinner, err := page.Timeout(30 * time.Second).Element(".tool-spinner")
 	if err == nil {
 		if err := spinner.WaitInvisible(); err != nil {
@@ -871,10 +870,10 @@ func TestBashSpinner(t *testing.T) {
 			t.Fatalf("spinner still visible after bg task completed: %v", err)
 		}
 	}
-	// If Element returned error, spinner is already gone — that's fine
+	// If Element returned error, spinner is already gone, so that's fine.
 	Screenshot(t, page, "bash_spinner_complete")
 
-	// Reload — verify spinners are stripped in replay and page stabilises
+	// Reload to verify spinners are stripped in replay and the page stabilises.
 	currentURL = page.MustEval(`() => window.location.href`).String()
 	page.MustNavigate(currentURL).MustWaitStable()
 	WaitForElement(t, page, ".msg-assistant", 10*time.Second)
@@ -994,7 +993,7 @@ func TestDrawerNewWorkstream(t *testing.T) {
 	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Open drawer — history group should have the repo.
+	// Open the drawer to verify the history group has the repo.
 	page.MustElement(`button[popovertarget="drawer"]`).MustClick()
 	WaitForElement(t, page, ".history-group", 5*time.Second)
 	Screenshot(t, page, "drawer_ws_history")
@@ -1036,7 +1035,7 @@ func TestDrawerNewWorkstream(t *testing.T) {
 	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
 	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Open drawer — both sessions should be in the same history group.
+	// Open the drawer to verify both sessions are in the same history group.
 	page.MustElement(`button[popovertarget="drawer"]`).MustClick()
 	WaitForElement(t, page, ".history-group", 5*time.Second)
 	Screenshot(t, page, "drawer_ws_grouped")
@@ -1117,7 +1116,7 @@ func Add(a, b int) int {
 	// Pause the replayer: all API calls from here will block.
 	f.Replayer.Pause()
 
-	// Turn 2: send a message — Claude CLI sends an API call which blocks.
+	// Turn 2 sends a message, and the Claude CLI sends a blocking API call.
 	page.MustElement(`textarea[name="text"]`).MustInput("What functions are defined in each file?")
 	page.MustElement(`.send-btn`).MustClick()
 
@@ -1125,7 +1124,7 @@ func Add(a, b int) int {
 	WaitForElement(t, page, "#stop-btn button", 10*time.Second)
 	Screenshot(t, page, "queue_turn2_paused")
 
-	// Send a third message while Claude is streaming — should be queued.
+	// Send a third message while Claude is streaming. It should be queued.
 	page.MustElement(`textarea[name="text"]`).MustInput("Thanks for the help")
 	page.MustElement(`.send-btn`).MustClick()
 
@@ -1206,7 +1205,7 @@ func Add(a, b int) int {
 	page.MustElement(`.send-btn`).MustClick()
 	WaitForElement(t, page, ".queue-content", 5*time.Second)
 
-	// Click Edit — cancels queue on backend, swaps to textarea + Save + ✕.
+	// Click Edit to cancel the queue on the backend and swap to textarea + Save + ✕.
 	page.MustElement(`.queue-btn`).MustClick()
 	WaitForElement(t, page, `.queue-text`, 5*time.Second)
 
@@ -1215,10 +1214,10 @@ func Add(a, b int) int {
 	queueTA.MustSelectAllText().MustInput("What about error handling?")
 	Screenshot(t, page, "queue_edited")
 
-	// Unpause before clicking Send — so the API calls can flow.
+	// Unpause before clicking Send so the API calls can flow.
 	f.Replayer.Unpause()
 
-	// Click Send — submits /send with the edited text.
+	// Click Send to submit /send with the edited text.
 	page.MustElement(`.queue-send`).MustClick()
 
 	// The EDITED message (not the original) should appear in chat.
@@ -1269,8 +1268,8 @@ func main() {
 
 	WaitForText(t, page, ".msg-user", "fibonacci", 30*time.Second)
 
-	// EnterPlanMode executes without permission. Wait for the ExitPlanMode
-	// permission prompt — the CLI sends a can_use_tool with the plan content.
+	// EnterPlanMode executes without permission. The ExitPlanMode action triggers
+	// a can_use_tool permission prompt with the plan content.
 	WaitForElement(t, page, ".perm-inline", 120*time.Second)
 	// Scroll the Allow button into view so the screenshot captures the full prompt.
 	page.MustElement(`.perm-allow`).MustScrollIntoView()
@@ -1436,7 +1435,7 @@ func TestPullMain(t *testing.T) {
 	WaitForText(t, page, "#ws-panel-work .ws-cmd-ok", "done", 15*time.Second)
 	Screenshot(t, page, "pull_done")
 
-	// Verify main advanced — the workstream should now show ↓1.
+	// Verify that main advanced. The workstream should now show ↓1.
 	page.MustElement(`#ws-panel-work button.btn-sm[hx-get*="refresh"]`).MustClick()
 	time.Sleep(1 * time.Second)
 	WaitForText(t, page, "#ws-panel-work .ws-behind", "↓1", 5*time.Second)
@@ -1503,7 +1502,7 @@ func TestMassSync(t *testing.T) {
 	syncBtn := WaitForElement(t, page, `#ws-panel-work button.btn-sm[hx-post*="mass-sync"]`, 5*time.Second)
 	syncBtn.MustClick()
 
-	// Wait for both sections to complete — one "done", one "aborted".
+	// Wait for both sections to complete: one "done", one "aborted".
 	WaitForText(t, page, "#ws-panel-work .ws-cmd-ok", "done", 10*time.Second)
 	WaitForText(t, page, "#ws-panel-work .ws-cmd-err", "aborted", 10*time.Second)
 	Screenshot(t, page, "mass_sync_done")
@@ -1610,7 +1609,7 @@ func TestPruneWorkstream(t *testing.T) {
 	WaitForText(t, page, "#ws-panel-work2 .ws-archived-list .ws-branch-name", "other-feature", 5*time.Second)
 	Screenshot(t, page, "prune_archived")
 
-	// Click Prune button on the work panel — should only show work repo's workstreams.
+	// Click the Prune button on the work panel. It should only show the work repo's workstreams.
 	btn := WaitForElement(t, page, `#ws-panel-work button.btn-sm[hx-get^="/prune"]`, 5*time.Second)
 	btn.MustClick()
 	WaitForElement(t, page, "#ws-panel-work .ws-prune-confirm", 5*time.Second)
@@ -2310,7 +2309,7 @@ func getEnv(key, fallback string) string {
 `,
 	}
 
-	// Write files in a deterministic order — record and replay need identical
+	// Write files in a deterministic order because record and replay need identical
 	// filesystem directory entry layouts so Glob inside the subagents returns
 	// the same list. Go map iteration is randomized, which leaks directly
 	// into the filesystem's readdir order.
@@ -2332,12 +2331,12 @@ func getEnv(key, fallback string) string {
 	// Pin mtimes so any ls-la-style output the model solicits shows the same
 	// timestamps between record and replay. Subagents in this test sometimes
 	// reach for Bash's `ls -la` despite the "no Bash" prompt instruction.
-	// `ls -la /work` includes a `..` entry showing the parent directory's
-	// mtime — pin `/` too so that line is stable across runs.
+	// `ls -la /work` includes a `..` entry for the parent directory
+	// Pin its mtime too for stable output.
 	f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
 	f.DockerExec("touch", "-d", "2020-01-01T00:00:00Z", "/")
 
-	// No git init — this test's subagents scan source files; a .git
+	// No git init because this test's subagents scan source files, and a .git
 	// directory adds non-deterministic Glob results (object creation order
 	// varies across runs even with a pinned commit SHA) without contributing
 	// anything the test's assertions depend on.
@@ -2521,7 +2520,7 @@ func getEnv(key, fallback string) string {
 		t.Fatalf("top-level message sequence mismatch:\n  got:      %v\n  expected: %v", topClasses, expectedTop)
 	}
 
-	// Context usage should be monotonically non-decreasing — a drop means
+	// Context usage should be monotonically non-decreasing. A drop means
 	// a sub-agent's smaller context leaked into the parent's cost bar.
 	var lastContextUsed int
 	for _, e := range events {
@@ -2775,7 +2774,7 @@ func TestKBWebView(t *testing.T) {
 	WaitForText(t, page, ".kb-content", "Test KB", 5*time.Second)
 	Screenshot(t, page, "kb_index")
 
-	// Click an internal link — should navigate within the KB.
+	// Click an internal link to navigate within the KB.
 	detailsLink := WaitForElement(t, page, `.kb-content a[href*="details.md"]`, 5*time.Second)
 	detailsLink.MustClick()
 	page.MustWaitStable()
@@ -2830,7 +2829,7 @@ After step 6, reply with the single word "done" and stop.`,
 	// rod treats the collapsed body as having no visible text.
 	page.MustElement("#todos-panel").MustEval(`() => this.open = true`)
 
-	// Three rows: completed, in_progress, pending — in that order.
+	// Expect three rows in order: completed, in_progress, pending.
 	items := page.MustElements(".todo-item")
 	if len(items) != 3 {
 		t.Fatalf("expected 3 todo-item rows, got %d", len(items))

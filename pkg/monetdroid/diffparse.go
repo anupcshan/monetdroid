@@ -218,7 +218,7 @@ func parseHunk(lines []string) (*DiffHunk, int) {
 			break
 		}
 
-		// No-newline marker — skip
+		// No-newline marker, skip this line.
 		if strings.HasPrefix(line, `\ `) {
 			i++
 			continue

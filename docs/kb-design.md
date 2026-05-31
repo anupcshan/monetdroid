@@ -1,4 +1,4 @@
-# KB — Per-repo knowledge base for Claude sessions
+# KB: Per-repo knowledge base for Claude sessions
 
 ## Problem
 
@@ -6,12 +6,12 @@ Session context is ephemeral. Discarding a Claude session loses decisions, resea
 
 ## Design
 
-A per-repo knowledge base stored outside any checkout, accessed via a CLI. Sessions become truly ephemeral — all durable state lives in the KB.
+A per-repo knowledge base stored outside any checkout, accessed via a CLI. Sessions become truly ephemeral. All durable state lives in the KB.
 
 ### Storage
 
 - One KB (git repo) per code repo, stored under `~/.monetdroid/kb/<repo-identity>/`
-- Repo identity derived from `git rev-parse --git-common-dir` — all worktrees resolve to the same KB
+- Repo identity derived from `git rev-parse --git-common-dir`, so all worktrees resolve to the same KB
 - Fallback: `KB_PATH` env var to force a specific path (undocumented)
 - Markdown files, browsable with Obsidian or any markdown viewer
 - Every write auto-commits (simple commit message, e.g. filename)
@@ -28,8 +28,8 @@ kb mv <old> <new>            # rename/move
 kb search <query>            # search within this KB
 ```
 
-- No project parameter — repo identity is implicit from cwd
-- No init command — reads on non-existent KB return empty, first write creates it
+- No project parameter. Repo identity is implicit from cwd.
+- No init command. Reads on non-existent KB return empty, first write creates it.
 - Claude calls it via Bash, help text is the only "schema"
 - `kb edit` accepts JSON `{"old": "...", "new": "..."}` on stdin (same model as Claude Code's Edit tool)
 
@@ -43,7 +43,7 @@ kbadmin mode [readonly|readwrite]   # toggle write mode
 
 ### Write control
 
-- Read-only mode: `kbadmin mode readonly` — kb rejects all writes, Claude can still read
+- Read-only mode: `kbadmin mode readonly`. kb rejects all writes, Claude can still read.
 - Read-write mode: let the model write freely, review via git log/diff later
 - Auto-commit on every write means easy rollback of any individual change
 - Version control is the safety net, not per-edit approval
@@ -56,6 +56,6 @@ kbadmin mode [readonly|readwrite]   # toggle write mode
 
 ### Content
 
-Freeform markdown. The KB is a wiki, not a template system. Documents take whatever shape fits their purpose — feature trackers, migration runbooks, link directories, architecture references, research notes. The model structures each document appropriately.
+Freeform markdown. The KB is a wiki, not a template system. Documents take whatever shape fits their purpose: feature trackers, migration runbooks, link directories, architecture references, research notes. The model structures each document appropriately.
 
 Only convention: INDEX.md at the root for discovery (also freeform).

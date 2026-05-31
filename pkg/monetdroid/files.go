@@ -344,7 +344,7 @@ func renderFileView(t *GitTrace, b *strings.Builder, baseURL, sessionID, cwd, br
 		return b.String()
 	}
 
-	// Check if file has uncommitted changes — link to diff
+	// Check if the file has uncommitted changes and link to the diff.
 	var extraLinks string
 	if sessionID != "" {
 		diffContent, _ := GitDiffFileContent(t, cwd, browsePath, "unstaged")

@@ -70,8 +70,8 @@ type Process interface {
 // process exits before the awaited event occurs.
 var ErrProcessDead = errors.New("process exited")
 
-// PermissionHandler handles permission requests from the CLI. Called
-// synchronously in a separate goroutine — the caller blocks until it returns.
+// PermissionHandler handles permission requests from the CLI. It is called
+// synchronously in a separate goroutine, and the caller blocks until it returns.
 type PermissionHandler func(req protocol.PermissionRequest) protocol.PermResponse
 
 // ProcessConfig holds optional configuration for StartProcessWithConfig.
