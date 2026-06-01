@@ -414,9 +414,10 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		// exists (we need the ClaudeID from the stream to create it).
 		// Buffer them and replay once the session is bound.
 		var (
-			mu       sync.Mutex
-			sess     *Session
-			buffered []protocol.StreamEvent
+			mu           sync.Mutex
+			sess         *Session
+			buffered     []protocol.StreamEvent
+			hookBuffered []claude.HookEvent
 		)
 		broadcast := func(msg ServerMsg) {
 			// Streaming deltas are ephemeral and should not be persisted in the session log.
@@ -460,11 +461,13 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			HookRegistry:      h,
 			OnHookEvent: func(ev claude.HookEvent) {
 				mu.Lock()
-				ss := sess
-				mu.Unlock()
-				if ss != nil {
-					handleHookEvent(ss, ev, broadcast)
+				if sess == nil {
+					hookBuffered = append(hookBuffered, ev)
+					mu.Unlock()
+					return
 				}
+				mu.Unlock()
+				handleHookEvent(sess, ev, broadcast)
 			},
 		})
 		if err != nil {
@@ -500,6 +503,10 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			handleStreamEvent(s, &buffered[i], broadcast)
 		}
 		buffered = nil
+		for i := range hookBuffered {
+			handleHookEvent(s, hookBuffered[i], broadcast)
+		}
+		hookBuffered = nil
 		mu.Unlock()
 		autoLabel := label == ""
 		if autoLabel {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
@@ -202,6 +203,24 @@ func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg))
 		log.Printf("[hook] handleHookEvent envelope: %v", err)
 		return
 	}
+	if env.EventName == "SessionStart" {
+		type sessionStartPayload struct {
+			TranscriptPath string `json:"transcript_path"`
+			Model          string `json:"model"`
+		}
+		var p sessionStartPayload
+		if err := json.Unmarshal(ev.Body, &p); err != nil {
+			log.Printf("[hook] SessionStart parse error: %v", err)
+		} else {
+			if p.TranscriptPath != "" {
+				s.JSONLPath = p.TranscriptPath
+			}
+			if p.Model != "" {
+				s.AccumulateCost(&CostInfo{ModelName: p.Model})
+				broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: &CostInfo{ModelName: p.Model}})
+			}
+		}
+	}
 
 	// Token count refresh: Stop/StopFailure signal a completed turn.
 	// The JSONL file has been updated with the final assistant usage.
@@ -218,30 +237,43 @@ func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg))
 }
 
 func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
-	if s.JSONLPath == "" {
-		return
-	}
-	used, window, modelName, err := scanTokenUsage(s.JSONLPath)
-	if err != nil {
-		return
-	}
-	cost := &CostInfo{}
-	changed := false
-	if used > 0 && used != s.CostAccum.ContextUsed {
-		cost.ContextUsed = used
-		changed = true
-	}
-	if window > 0 && window != s.CostAccum.ContextWindow {
-		cost.ContextWindow = window
-		changed = true
-	}
-	if modelName != "" && modelName != s.CostAccum.ModelName {
-		cost.ModelName = modelName
-		changed = true
-	}
-	if changed {
-		broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: cost})
-	}
+	go func() {
+		jsonlPath := s.JSONLPath
+		if jsonlPath == "" {
+			jsonlPath = FindJSONLByClaudeID(s.ID)
+			if jsonlPath != "" {
+				s.JSONLPath = jsonlPath
+			}
+		}
+		if jsonlPath == "" {
+			return
+		}
+		used, window, modelName, err := scanTokenUsage(jsonlPath)
+		if err != nil || (used == 0 && window == 0 && modelName == "") {
+			time.Sleep(2 * time.Second)
+			used, window, modelName, err = scanTokenUsage(jsonlPath)
+		}
+		if err != nil {
+			return
+		}
+		cost := &CostInfo{}
+		changed := false
+		if used > 0 && used != s.CostAccum.ContextUsed {
+			cost.ContextUsed = used
+			changed = true
+		}
+		if window > 0 && window != s.CostAccum.ContextWindow {
+			cost.ContextWindow = window
+			changed = true
+		}
+		if modelName != "" && modelName != s.CostAccum.ModelName {
+			cost.ModelName = modelName
+			changed = true
+		}
+		if changed {
+			broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: cost})
+		}
+	}()
 }
 
 func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broadcast func(ServerMsg)) {

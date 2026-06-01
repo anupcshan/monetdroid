@@ -373,7 +373,7 @@ func scanTokenUsage(fpath string) (used, window int, modelName string, err error
 					used = ctx
 				}
 			}
-			if modelName == "" && entry.Message.Model != "" {
+			if modelName == "" && entry.Message.Model != "" && entry.Message.Model != "synthetic" {
 				modelName = entry.Message.Model
 			}
 		}
@@ -471,7 +471,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 					usage.ContextUsed = ctx
 				}
 			}
-			if usage.ModelName == "" && entry.Message.Model != "" {
+			if usage.ModelName == "" && entry.Message.Model != "" && entry.Message.Model != "synthetic" {
 				usage.ModelName = entry.Message.Model
 			}
 			for _, b := range entry.Message.Content.Blocks {
@@ -499,7 +499,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 				usage.TotalCostUSD = entry.TotalCost
 			}
 			for name, info := range entry.ModelUsage {
-				if usage.ModelName == "" && name != "" {
+				if usage.ModelName == "" && name != "" && name != "synthetic" {
 					usage.ModelName = name
 				}
 				if info.ContextWindow > 0 {

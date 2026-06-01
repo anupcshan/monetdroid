@@ -1,5 +1,8 @@
 package integration
 
+// Test binary flags (e.g. -record) must go after the package path:
+//   go test -v -run TestFoo ./test/integration/ -record
+
 import (
 	"context"
 	"encoding/json"
@@ -3010,4 +3013,48 @@ func TestPermissionSuggestions(t *testing.T) {
 	}
 
 	Screenshot(t, page, "permission_suggestions_no_perm_on_rerun")
+}
+
+// expectedModelName is the ShortModelName result for the model pinned by
+// ANTHROPIC_MODEL=claude-opus-4-7 in the container test setup.
+const expectedModelName = "opus"
+
+func TestModelNameInCostBar(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "model_name_cost_bar.jsonl.zst", testMode())
+	page := f.Page()
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	// Step 1: New session -- send a message and complete a turn
+	page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
+
+	WaitForText(t, page, "#cost-bar", expectedModelName, 5*time.Second)
+	Screenshot(t, page, "model_name_step1")
+
+	// Step 2: Kill process and reload from JSONL (tests ParseSessionMessages rehydration)
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	page.MustElement(`#close-btn button`).MustClick()
+	page.MustNavigate(currentURL).MustWaitStable()
+	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
+
+	costBar := page.MustElement("#cost-bar").MustText()
+	if !strings.Contains(costBar, expectedModelName) {
+		t.Fatalf("step 2: cost bar missing model name after JSONL rehydration; got: %q", costBar)
+	}
+	Screenshot(t, page, "model_name_step2")
+
+	// Step 3: Send another message in the resumed session and verify a new response appears
+	page.MustElement(`textarea[name="text"]`).MustInput("How are you?")
+	prev := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
+	page.MustElement(`.send-btn`).MustClick()
+	page.Timeout(10 * time.Second).MustWait(fmt.Sprintf(
+		`() => document.querySelectorAll('.msg-assistant').length > %d`, prev))
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	WaitForText(t, page, "#cost-bar", expectedModelName, 5*time.Second)
+	Screenshot(t, page, "model_name_step3")
 }
