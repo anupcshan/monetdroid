@@ -479,10 +479,7 @@ func RenderPermission(msg ServerMsg) string {
 <div class="perm-tool">⚙ %s</div>
 %s
 <div class="perm-detail">%s</div>
-<div class="perm-actions" id="perm-actions-%s">
-<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form>
-<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow once</button></form>
-</div>%s</div>`,
+%s</div>`,
 		Esc(msg.PermID), Esc(msg.PermTool),
 		func() string {
 			if msg.PermReason != "" {
@@ -490,9 +487,7 @@ func RenderPermission(msg ServerMsg) string {
 			}
 			return ""
 		}(),
-		detailHTML, Esc(msg.PermID),
-		Esc(msg.SessionID), Esc(msg.PermID),
-		Esc(msg.SessionID), Esc(msg.PermID),
+		detailHTML,
 		renderPermSuggestions(msg),
 	)
 }
@@ -505,19 +500,13 @@ func RenderInlinePermission(msg ServerMsg) string {
 	if msg.PermReason != "" {
 		fmt.Fprintf(&b, `<div class="perm-reason">%s</div>`, Esc(msg.PermReason))
 	}
-	fmt.Fprintf(&b, `<div class="perm-actions" id="perm-actions-%s">`, Esc(msg.PermID))
-	fmt.Fprintf(&b, `<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form>`,
-		Esc(msg.SessionID), Esc(msg.PermID))
-	fmt.Fprintf(&b, `<form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><button type="submit" class="perm-allow" style="width:100%%">Allow once</button></form>`,
-		Esc(msg.SessionID), Esc(msg.PermID))
-	b.WriteString(`</div>`)
 	b.WriteString(renderPermSuggestions(msg))
 	b.WriteString(`</div>`)
 	return b.String()
 }
 
 func renderPermSuggestions(msg ServerMsg) string {
-	var html strings.Builder
+	var checkboxes strings.Builder
 	for _, s := range msg.PermSuggestions {
 		if s.Type == "setMode" {
 			continue
@@ -536,16 +525,23 @@ func renderPermSuggestions(msg ServerMsg) string {
 			label = s.Type
 		}
 		sJSON, _ := json.Marshal(s)
-		fmt.Fprintf(&html,
-			`<label class="perm-checkbox-label"><input type="checkbox" name="suggestion" value="%s"><span>%s</span></label>`,
-			Esc(string(sJSON)), Esc(label),
+		fmt.Fprintf(&checkboxes,
+			`<label class="perm-checkbox-label"><input type="checkbox" name="suggestion" value="%s" form="allow-form-%s"><span>%s</span></label>`,
+			Esc(string(sJSON)), Esc(msg.PermID), Esc(label),
 		)
 	}
-	if html.Len() == 0 {
-		return ""
+
+	var suggestionsDiv string
+	if checkboxes.Len() > 0 {
+		suggestionsDiv = fmt.Sprintf(`<div class="perm-suggestions">%s</div>`, checkboxes.String())
 	}
-	return fmt.Sprintf(`<form hx-post="/perm" hx-swap="none" style="margin-top:8px"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"><div class="perm-suggestions">%s</div><button type="submit" class="perm-allow" style="width:100%%;margin-top:6px">Allow selected</button></form>`,
-		Esc(msg.SessionID), Esc(msg.PermID), html.String(),
+
+	return fmt.Sprintf(`<form id="allow-form-%s" hx-post="/perm" hx-swap="none" style="display:none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"></form>%s<div class="perm-actions" id="perm-actions-%s"><form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form><button type="submit" class="perm-allow" style="flex:1" form="allow-form-%s">Allow</button></div>`,
+		Esc(msg.PermID), Esc(msg.SessionID), Esc(msg.PermID),
+		suggestionsDiv,
+		Esc(msg.PermID),
+		Esc(msg.SessionID), Esc(msg.PermID),
+		Esc(msg.PermID),
 	)
 }
 

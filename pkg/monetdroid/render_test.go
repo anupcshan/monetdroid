@@ -222,14 +222,11 @@ func TestRenderPermSuggestions(t *testing.T) {
 	if !strings.Contains(html, `type="checkbox" name="suggestion"`) {
 		t.Error("suggestions should render as checkboxes")
 	}
-	if !strings.Contains(html, "Allow selected") {
-		t.Error("should have 'Allow selected' button")
+	if !strings.Contains(html, "Allow") {
+		t.Error("should have Allow button")
 	}
 	if !strings.Contains(html, "Deny") {
 		t.Error("should have Deny button")
-	}
-	if !strings.Contains(html, "Allow once") {
-		t.Error("should have 'Allow once' button")
 	}
 }
 
@@ -245,8 +242,8 @@ func TestRenderPermSuggestions_NoAddRules(t *testing.T) {
 	if strings.Contains(html, "perm-suggestions") {
 		t.Error("nil suggestions should not render perm-suggestions")
 	}
-	if strings.Contains(html, "Allow selected") {
-		t.Error("nil suggestions should not render 'Allow selected'")
+	if !strings.Contains(html, "Allow") {
+		t.Error("should still have Allow button without suggestions")
 	}
 }
 
@@ -264,8 +261,8 @@ func TestRenderPermSuggestions_OnlySetMode(t *testing.T) {
 	if strings.Contains(html, "perm-suggestions") {
 		t.Error("only setMode should not render perm-suggestions")
 	}
-	if strings.Contains(html, "Allow selected") {
-		t.Error("only setMode should not render 'Allow selected'")
+	if !strings.Contains(html, "Allow") {
+		t.Error("only setMode should still have Allow button")
 	}
 }
 

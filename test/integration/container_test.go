@@ -2969,11 +2969,11 @@ func TestPermissionSuggestions(t *testing.T) {
 	WaitForElement(t, page, ".perm-inline", 120*time.Second)
 	Screenshot(t, page, "permission_suggestions_prompt")
 
-	// Check for suggestion checkboxes; if present, click first and Allow selected
+	// Check for suggestion checkboxes; if present, click first and Allow
 	checkboxes, err := page.Timeout(5 * time.Second).Elements(".perm-checkbox-label")
 	if err == nil && len(checkboxes) > 0 {
 		checkboxes[0].MustClick()
-		allowSelected, err := page.Timeout(5*time.Second).ElementR("button", "Allow selected")
+		allowSelected, err := page.Timeout(5*time.Second).ElementR("button", "Allow")
 		if err == nil {
 			allowSelected.MustClick()
 		} else {
@@ -3009,7 +3009,7 @@ func TestPermissionSuggestions(t *testing.T) {
 	}
 	if len(prompts) > 0 {
 		Screenshot(t, page, "permission_suggestions_unexpected_perm")
-		t.Fatalf("expected 0 inline permission prompts after Allow selected, got %d", len(prompts))
+		t.Fatalf("expected 0 inline permission prompts after Allow, got %d", len(prompts))
 	}
 
 	Screenshot(t, page, "permission_suggestions_no_perm_on_rerun")

@@ -863,9 +863,7 @@ details[open] > .history-group-header::before { content: '▼ '; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  margin-bottom: 8px;
 }
 .perm-checkbox-label {
   display: flex;
