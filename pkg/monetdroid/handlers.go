@@ -76,6 +76,7 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/review/send", hub.handleReviewSend)
 	mux.HandleFunc("/kb/", hub.handleKB)
 	mux.HandleFunc("/hooks-log", hub.handleHookLog)
+	mux.HandleFunc("/hooks-log.json", hub.handleHookLogJSON)
 	mux.HandleFunc("/hooks/", hub.handleHook)
 	return mux
 }
@@ -1593,4 +1594,13 @@ html.hook-log-page, html.hook-log-page body { overflow: auto; height: auto; }
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(b.String()))
+}
+
+func (h *Hub) handleHookLogJSON(w http.ResponseWriter, r *http.Request) {
+	entries := h.hookLog.List()
+	out := make([]HookLogEntry, len(entries))
+	copy(out, entries)
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(out)
 }

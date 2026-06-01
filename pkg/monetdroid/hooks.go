@@ -14,13 +14,13 @@ import (
 
 // HookLogEntry records a single hook event for the debug log.
 type HookLogEntry struct {
-	Timestamp time.Time
-	EventName string
-	SessionID string
-	AgentID   string
-	ToolName  string
-	ToolUseID string
-	Body      string // full raw JSON body
+	Timestamp time.Time `json:"timestamp"`
+	EventName string    `json:"event_name"`
+	SessionID string    `json:"session_id"`
+	AgentID   string    `json:"agent_id"`
+	ToolName  string    `json:"tool_name"`
+	ToolUseID string    `json:"tool_use_id"`
+	Body      string    `json:"body"` // full raw JSON body
 }
 
 // hookLog is a bounded in-memory log of hook events for debugging.
