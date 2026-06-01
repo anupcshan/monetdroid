@@ -597,8 +597,8 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 
 	ch, ok := s.GetPermChan(permID)
 
+	var perms []protocol.PermSuggestion
 	if ok {
-		var perms []protocol.PermSuggestion
 		for _, sJSON := range suggestionJSONs {
 			var suggestion protocol.PermSuggestion
 			if err := json.Unmarshal([]byte(sJSON), &suggestion); err != nil {
@@ -626,8 +626,11 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 	var resultHTML string
 	if allow {
 		label := "Allowed"
-		if len(suggestionJSONs) > 0 {
-			label = "Allowed (with suggestion)"
+		if n := len(perms); n > 0 {
+			label = fmt.Sprintf("Allowed \xc2\xb7 %d rule saved", n)
+			if n > 1 {
+				label += "s"
+			}
 		}
 		resultHTML = fmt.Sprintf(`<span style="color:var(--tool);font-size:12px">✓ %s</span>`, Esc(label))
 	} else {

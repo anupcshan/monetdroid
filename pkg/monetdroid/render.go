@@ -505,25 +505,28 @@ func RenderInlinePermission(msg ServerMsg) string {
 	return b.String()
 }
 
+func permSuggestionLabel(s protocol.PermSuggestion) string {
+	switch s.Type {
+	case "addDirectories":
+		return "Add " + strings.Join(s.Directories, ", ")
+	case "addRules":
+		var parts []string
+		for _, r := range s.Rules {
+			parts = append(parts, r.RuleContent)
+		}
+		return "Always allow: " + strings.Join(parts, "; ")
+	default:
+		return s.Type
+	}
+}
+
 func renderPermSuggestions(msg ServerMsg) string {
 	var checkboxes strings.Builder
 	for _, s := range msg.PermSuggestions {
 		if s.Type == "setMode" {
 			continue
 		}
-		var label string
-		switch s.Type {
-		case "addDirectories":
-			label = "Add " + strings.Join(s.Directories, ", ")
-		case "addRules":
-			var parts []string
-			for _, r := range s.Rules {
-				parts = append(parts, r.RuleContent)
-			}
-			label = "Always allow: " + strings.Join(parts, "; ")
-		default:
-			label = s.Type
-		}
+		label := permSuggestionLabel(s)
 		sJSON, _ := json.Marshal(s)
 		fmt.Fprintf(&checkboxes,
 			`<label class="perm-checkbox-label"><input type="checkbox" name="suggestion" value="%s" form="allow-form-%s"><span>%s</span></label>`,
