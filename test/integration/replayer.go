@@ -918,6 +918,10 @@ var (
 	// Environment block. Containers share the host kernel, so this varies
 	// across developer machines and CI runners.
 	osVersionRe = regexp.MustCompile(`OS Version: [^\n]+`)
+	// The CLI injects the current month into the system prompt for
+	// date-aware instructions. Cassettes recorded in one month fail to
+	// replay in another.
+	currentMonthRe = regexp.MustCompile(`[Cc]urrent month is \w+ \d{4}`)
 )
 
 func normalizeNoisyText(s string) string {
@@ -935,6 +939,7 @@ func normalizeNoisyText(s string) string {
 	s = agentDurationRe.ReplaceAllString(s, "duration_ms: <DUR>")
 	s = userEmailBlockRe.ReplaceAllString(s, "")
 	s = osVersionRe.ReplaceAllString(s, "OS Version: <OS>")
+	s = currentMonthRe.ReplaceAllString(s, "current month is <MONTH>")
 	return s
 }
 
