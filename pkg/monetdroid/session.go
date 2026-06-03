@@ -1,6 +1,7 @@
 package monetdroid
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"sync"
@@ -47,8 +48,11 @@ type Session struct {
 	SubagentSections  map[string]*SubagentSection
 	StreamingText     string // accumulated text from text_delta events
 	StreamingThinking string // accumulated text from thinking_delta events
+	Model             *SessionModel
 	proc              claude.Process
 	mu                sync.Mutex
+	ctx               context.Context
+	cancel            context.CancelFunc
 }
 
 // SubagentSection holds the rendered state of a sub-agent section. Fields
@@ -76,6 +80,10 @@ func (s *Session) Append(msg ServerMsg) {
 // Close kills the session's claude process if running.
 func (s *Session) Close() {
 	s.mu.Lock()
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	proc := s.proc
 	s.mu.Unlock()
 	if proc != nil && !proc.IsDead() {
@@ -108,6 +116,18 @@ func (s *Session) GetLog() []ServerMsg {
 	out := make([]ServerMsg, len(s.Log))
 	copy(out, s.Log)
 	return out
+}
+
+func (s *Session) GetLabel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Label
+}
+
+func (s *Session) GetPermMode() claude.PermissionMode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.PermissionMode
 }
 
 func (s *Session) GetLabelAndCwd() (string, string) {
@@ -268,6 +288,12 @@ func (s *Session) DrainStreaming() (text string, thinking string) {
 	s.StreamingThinking = ""
 	s.mu.Unlock()
 	return
+}
+
+func (s *Session) GetDiffStat() DiffStat {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.DiffStat
 }
 
 func (s *Session) SetDiffStat(ds DiffStat) {
@@ -715,32 +741,6 @@ func (s *Session) DrainQueue() (bool, string) {
 	return interrupted, next
 }
 
-type SeedState struct {
-	Log        []ServerMsg
-	Running    bool
-	PermMode   claude.PermissionMode
-	Label      string
-	AutoLabel  bool
-	Cwd        string
-	QueuedText string
-}
-
-func (s *Session) SeedSnapshot() SeedState {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	log_ := make([]ServerMsg, len(s.Log))
-	copy(log_, s.Log)
-	return SeedState{
-		Log:        log_,
-		Running:    s.Running,
-		PermMode:   s.PermissionMode,
-		Label:      s.Label,
-		AutoLabel:  s.AutoLabel,
-		Cwd:        s.Cwd,
-		QueuedText: s.QueuedText,
-	}
-}
-
 type SessionManager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex
@@ -753,6 +753,7 @@ func NewSessionManager() *SessionManager {
 func (sm *SessionManager) Create(id, cwd string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		ID:                id,
 		Cwd:               cwd,
@@ -760,6 +761,8 @@ func (sm *SessionManager) Create(id, cwd string) *Session {
 		SuppressedToolIDs: make(map[string]string),
 		BgTaskStops:       make(map[string]chan struct{}),
 		PermChans:         make(map[string]chan protocol.PermResponse),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 	sm.sessions[id] = s
 	return s

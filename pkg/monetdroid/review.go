@@ -229,7 +229,6 @@ func (h *Hub) handleReviewSend(w http.ResponseWriter, r *http.Request) {
 	if queued, queuedText := s.EnqueueMessage(msg); queued {
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)), "", "")
 	} else if s.HasPendingPerms() {
-		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: msg})
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: msg})
 		if proc := s.GetProc(); proc != nil {
 			proc.SendUserMessage(msg, nil)

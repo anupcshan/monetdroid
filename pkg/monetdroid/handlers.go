@@ -240,15 +240,55 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 		client.mu.Unlock()
 	}
 
-	// Replay: write all stored events directly, then use seq to dedup live events.
+	// Render page from model state. The model is built from the session log;
+	// if a previous model exists (warm load), it is reused and kept current by
+	// live events. On cold load (seq == 0), bg tasks are marked completed.
 	var lastSeq uint64
 	if sid := client.ActiveSession(); sid != "" {
 		if s := h.Sessions.Get(sid); s != nil {
-			// Seed the EventLog if this is the first client to view this session.
+			// Rebuild the model from the log on every page load. The model
+			// fold is cheap (one log pass) and guarantees the render
+			// reflects all events including those that arrived between the
+			// previous page load and now.
+			isCold := false
 			if _, seq := s.EventLog.Snapshot(); seq == 0 {
-				h.SeedEventLog(s)
+				isCold = true
 			}
-			lastSeq = h.BuildReplay(s, w, flusher)
+			cost, _ := s.GetCostBarInfo()
+			base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost}
+			// Refresh diff stat so the cost bar reflects current repo state.
+			if ds, err := GitDiffStat(NewGitTrace("page-diff-stat"), base.Cwd); err == nil {
+				s.SetDiffStat(ds)
+			}
+			s.Model = BuildModel(base, s.GetLog())
+			s.Model.DiffStat = s.GetDiffStat()
+			_, lastSeq = s.EventLog.Snapshot()
+			if isCold {
+				// On cold load all processes are dead; mark bg tasks
+				// completed. Register paths and commands for the
+				// bg-output stream endpoint.
+				for _, bt := range s.Model.BgTasks {
+					bt.Completed = true
+				}
+				for id, bt := range s.Model.BgTasks {
+					if bt.OutputPath != "" {
+						s.RegisterBgPath(id, bt.OutputPath)
+					}
+					if bt.Command != "" {
+						s.RegisterBgCommand(id, bt.Command)
+					}
+				}
+			}
+			if s.Model != nil {
+				label := s.GetLabel()
+				if label == "" {
+					label = ShortPath(s.GetCwd())
+				}
+				cmds := RenderFull(s.Model, s.ID)
+				event := FormatSSEDOM(cmds, TitleOob(label), FaviconOob(label))
+				fmt.Fprint(w, event)
+				flusher.Flush()
+			}
 		}
 	} else {
 		client.mu.Lock()
@@ -420,10 +460,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			hookBuffered []claude.HookEvent
 		)
 		broadcast := func(msg ServerMsg) {
-			// Streaming deltas are ephemeral and should not be persisted in the session log.
-			if msg.Type != "text_delta" && msg.Type != "thinking_delta" {
-				sess.Append(msg)
-			}
+			// Streaming deltas are ephemeral. Broadcast handles persistence.
 			h.Broadcast(msg)
 		}
 		onEvent := func(event protocol.StreamEvent) {
@@ -533,6 +570,21 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		h.mu.RUnlock()
 
+		// Create the model and render the full page for clients that were
+		// just bound from cwd-based to session-based SSE.
+		base := ModelBase{Cwd: cwd, Label: label, AutoLabel: autoLabel, PermMode: claude.PermDefault}
+		if ds, err := GitDiffStat(NewGitTrace("send-diff-stat"), cwd); err == nil {
+			s.SetDiffStat(ds)
+		}
+		s.Model = BuildModel(base, s.GetLog())
+		s.Model.DiffStat = s.GetDiffStat()
+		cmds := RenderFull(s.Model, s.ID)
+		labelText := label
+		if labelText == "" {
+			labelText = ShortPath(cwd)
+		}
+		h.BroadcastToSession(s.ID, FormatSSEDOM(cmds, TitleOob(labelText), FaviconOob(labelText)), "", "")
+
 		// Send chrome setup (session-id hidden field, label) to bound clients
 		sessionLabel := label
 		if autoLabel {
@@ -551,7 +603,6 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}, "\n")), "", "")
 
 		// Broadcast user message and running state
-		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
@@ -570,7 +621,6 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 	} else if s.HasPendingPerms() {
 		// Permission-blocked: inject message directly into stdin.
 		// The CLI queues it internally and processes it after the current turn.
-		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 		if proc := s.GetProc(); proc != nil {
 			proc.SendUserMessage(text, images)

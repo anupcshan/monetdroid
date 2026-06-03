@@ -3,8 +3,6 @@ package monetdroid
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -252,6 +250,16 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		s.AccumulateCost(msg.Cost)
 	}
 
+	// Persist and apply every non-streaming event. Appending to the log
+	// here makes Broadcast the single funnel; callers do not need to
+	// call s.Append separately.
+	if s != nil && msg.Type != "text_delta" && msg.Type != "thinking_delta" {
+		s.Append(msg)
+		if s.Model != nil {
+			s.Model.Apply(msg)
+		}
+	}
+
 	// Update todos from TodoWrite/TaskCreate/TaskUpdate tool_use events
 	todosChanged := false
 	if msg.Type == "tool_use" && s != nil {
@@ -278,27 +286,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 	}
 
-	msgHTML := RenderMsg(msg)
-
-	var parts []string
-
-	// OOB-swap the todos panel children (summary + body) to preserve open/closed state
-	if todosChanged {
-		todos := s.GetTodosCopy()
-		parts = append(parts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
-		parts = append(parts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
-	}
-
-	if msg.Type == "cost" && s != nil {
-		parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
-	}
-
-	thinkingDots := `<span></span><span></span><span></span>`
-	clearThinking := OobSwap("thinking", "innerHTML", "")
-	clearStreaming := OobSwap("streaming", "innerHTML", "")
-
-	stopBtnHTML := `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`
-
 	// --- Streaming deltas (text_delta, thinking_delta) ---
 	// First delta of a stream creates the container via innerHTML (key "streaming").
 	// Subsequent deltas append text fragments via beforeend (parent "streaming",
@@ -306,10 +293,11 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	if msg.Type == "text_delta" && s != nil {
 		_, first := s.AppendStreamingTextAtomically(msg.Text)
 		if first {
-			parts = append(parts, clearThinking)
-			parts = append(parts, OobSwap("streaming", "innerHTML",
-				fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble streaming-text" id="streaming-detail">%s</div></div>`, Esc(msg.Text))))
-			event := FormatSSE("htmx", strings.Join(parts, "\n"))
+			event := FormatSSE("htmx", strings.Join([]string{
+				OobSwap("thinking", "innerHTML", ""),
+				OobSwap("streaming", "innerHTML",
+					fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble streaming-text" id="streaming-detail">%s</div></div>`, Esc(msg.Text))),
+			}, "\n"))
 			h.BroadcastToSession(sessionID, event, "streaming", "")
 		} else {
 			event := FormatSSE("htmx", OobSwap("streaming-detail", "beforeend", Esc(msg.Text)))
@@ -324,10 +312,11 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			if len(preview) > 120 {
 				preview = preview[:120] + "..."
 			}
-			parts = append(parts, clearThinking)
-			parts = append(parts, OobSwap("streaming", "innerHTML",
-				fmt.Sprintf(`<div class="msg msg-thinking"><details class="thinking-chip" open><summary class="thinking-summary" id="streaming-summary">%s</summary><div class="thinking-detail" id="streaming-detail">%s</div></details></div>`, Esc(preview), Esc(msg.Text))))
-			event := FormatSSE("htmx", strings.Join(parts, "\n"))
+			event := FormatSSE("htmx", strings.Join([]string{
+				OobSwap("thinking", "innerHTML", ""),
+				OobSwap("streaming", "innerHTML",
+					fmt.Sprintf(`<div class="msg msg-thinking"><details class="thinking-chip" open><summary class="thinking-summary" id="streaming-summary">%s</summary><div class="thinking-detail" id="streaming-detail">%s</div></details></div>`, Esc(preview), Esc(msg.Text))),
+			}, "\n"))
 			h.BroadcastToSession(sessionID, event, "streaming", "")
 		} else {
 			preview := accumulated
@@ -368,44 +357,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			Branches:  info.Branches,
 		})
 	}
-	// Inline permission: OOB swap into the tool chip's perm-slot (top-level tools only)
-	if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
-		if s != nil && s.IsTopLevelTool(msg.ToolUseID) {
-			parts = append(parts, OobSwap("perm-slot-"+msg.ToolUseID, "innerHTML", RenderInlinePermission(msg)))
-			// Upgrade the tool chip's detail with richer permission detail.
-			upgraded := false
-			switch msg.PermTool {
-			case "Edit", "FileEdit":
-				if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
-					if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
-						parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", diffHTML))
-						upgraded = true
-					}
-				}
-			case "Write", "FileWrite":
-				if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
-					if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
-						parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", diffHTML))
-						upgraded = true
-					}
-				}
-			case "ExitPlanMode":
-				if msg.PermInput != nil && msg.PermInput.PlanMode != nil && msg.PermInput.PlanMode.Plan != "" {
-					parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", RenderMarkdown(msg.PermInput.PlanMode.Plan)))
-					upgraded = true
-				}
-			}
-			if !upgraded {
-				permDetail := FormatPermDetail(msg.PermTool, msg.PermInput)
-				if permDetail != "" {
-					parts = append(parts, OobSwap("tool-detail-"+msg.ToolUseID, "innerHTML", Esc(permDetail)))
-				}
-			}
-		} else {
-			// Render sub-agent and unknown tool requests as standalone permission chips.
-			msgHTML = RenderPermission(msg)
-		}
-	}
 	if msg.Type == "done" && s != nil {
 		info := s.GetTrackerInfo()
 		result := s.LastAssistantText()
@@ -426,28 +377,19 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		})
 	}
 
-	if msg.Type == "running" {
-		if s != nil {
-			s.ClearStreaming()
-			info := s.GetTrackerInfo()
-			h.Tracker.Track(TrackedSession{
-				ClaudeID:  s.ID,
-				Label:     info.Label,
-				AutoLabel: info.AutoLabel,
-				Status:    "running",
-				Cwd:       info.Cwd,
-				Branches:  info.Branches,
-			})
-		}
-		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
-		parts = append(parts, OobSwap("stop-btn", "outerHTML", stopBtnHTML))
-		parts = append(parts, OobSwap("thinking", "innerHTML", thinkingDots))
+	if msg.Type == "running" && s != nil {
+		s.ClearStreaming()
+		info := s.GetTrackerInfo()
+		h.Tracker.Track(TrackedSession{
+			ClaudeID:  s.ID,
+			Label:     info.Label,
+			AutoLabel: info.AutoLabel,
+			Status:    "running",
+			Cwd:       info.Cwd,
+			Branches:  info.Branches,
+		})
 	}
 	if msg.Type == "done" {
-		parts = append(parts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
-		parts = append(parts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
-		parts = append(parts, clearThinking)
-		parts = append(parts, clearStreaming)
 		// Refresh git diff stat
 		if s != nil {
 			cwd := s.GetCwd()
@@ -455,8 +397,10 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			defer t.Log()
 			if ds, err := GitDiffStat(t, cwd); err == nil {
 				s.SetDiffStat(ds)
+				if s.Model != nil {
+					s.Model.DiffStat = ds
+				}
 			}
-			parts = append(parts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
 		}
 	}
 	// Remove spinner when tool_result arrives
@@ -470,12 +414,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 				s.RegisterBgStop(toolUseID, stopCh)
 				s.RegisterBgPath(toolUseID, bgPath)
 			}
-			// Populate the bg-slot with a lazy-load trigger.
-			// The SSE connection is only made when the user opens the details.
-			// Keep the spinner until task_done arrives, then remove it.
-			parts = append(parts, OobSwap("bg-slot-"+msg.ToolUseID, "innerHTML",
-				RenderBgSlot(sessionID, msg.ToolUseID)))
-			msgHTML = ""
 			// Run an elapsed timer that ticks every second until the task completes.
 			go func() {
 				started := time.Now()
@@ -490,107 +428,94 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 					}
 				}
 			}()
-		} else {
-			parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
-			// Nest the result inside the parent tool chip's result-slot
-			// instead of appending a standalone chip to the timeline.
-			// Applies to both top-level and sub-agent tools, since both
-			// chips render a tool-result-slot-<id> placeholder.
-			if inner := RenderToolResultInner(msg); inner != "" {
-				parts = append(parts, OobSwap("tool-result-slot-"+msg.ToolUseID, "innerHTML", inner))
+		}
+	}
+
+	// Flush accumulated streaming deltas to the permanent log when a
+	// displayable message arrives (text, thinking, tool_use, tool_result).
+	if isStreamingFlushTrigger(msg) && s != nil {
+		streamText, streamThinking := s.DrainStreaming()
+		if streamText != "" {
+			s.Append(ServerMsg{Type: "text", SessionID: s.ID, Text: streamText})
+			flushHTML := RenderMsg(ServerMsg{Type: "text", SessionID: s.ID, Text: streamText})
+			if flushHTML != "" {
+				h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", flushHTML)), "", "")
 			}
-			msgHTML = ""
+		}
+		if streamThinking != "" {
+			s.Append(ServerMsg{Type: "thinking", SessionID: s.ID, Text: streamThinking})
+			flushHTML := RenderMsg(ServerMsg{Type: "thinking", SessionID: s.ID, Text: streamThinking})
+			if flushHTML != "" {
+				h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", flushHTML)), "", "")
+			}
 		}
 	}
-	// On task completion, remove the spinner and show the final elapsed time.
-	if msg.Type == "task_done" && msg.ToolUseID != "" {
-		parts = append(parts, OobSwap("spinner-"+msg.ToolUseID, "outerHTML", ""))
-	}
 
-	// Sub-agent inner events (AgentID set) flow into the section body,
-	// not the main timeline. The section element was created at
-	// SubagentStart and lives at #subagent-section-<AgentID>; appending to
-	// #subagent-body-<AgentID> places the chip inside it.
-	if msgHTML != "" && msg.AgentID != "" && (msg.Type == "tool_use" || msg.Type == "tool_result") {
-		parts = append(parts, OobSwap("subagent-body-"+msg.AgentID, "beforeend", msgHTML))
-		msgHTML = ""
-	}
-
-	// subagent_linked updates the section's heading, stats, and final-text
-	// area in place via OOB swaps. The section's outer element is unchanged.
-	if msg.Type == "subagent_linked" && msg.AgentID != "" {
-		heading := linkedSubagentHeading(msg.Description, msg.AgentID)
-		parts = append(parts, OobSwap("subagent-heading-"+msg.AgentID, "innerHTML", heading))
-		stats := renderSubagentStats(msg.TotalTokens, msg.TotalToolUses, msg.DurationMs)
-		parts = append(parts, OobSwap("subagent-stats-"+msg.AgentID, "innerHTML", stats))
-		if msg.Text != "" {
-			finalHTML := fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`,
-				RenderMarkdown(msg.Text))
-			parts = append(parts, OobSwap("subagent-final-"+msg.AgentID, "innerHTML", finalHTML))
+	// Model-driven rendering produces all OOB swaps.
+	if s != nil && s.Model != nil {
+		cmds := RenderEvent(s.Model, msg, sessionID)
+		if todosChanged {
+			todos := s.GetTodosCopy()
+			cmds = append(cmds,
+				DOMCmd{Target: "todos-summary", Strategy: "innerHTML", Content: RenderTodosSummary(todos)},
+				DOMCmd{Target: "todos-body", Strategy: "innerHTML", Content: RenderTodosBody(todos)},
+			)
 		}
-		parts = append(parts, OobSwap("subagent-spinner-"+msg.AgentID, "outerHTML", ""))
-		msgHTML = ""
-	}
-
-	// subagent_stopped clears the section's spinner without touching the
-	// heading. Link arrives separately and overrides this.
-	if msg.Type == "subagent_stopped" && msg.AgentID != "" {
-		parts = append(parts, OobSwap("subagent-spinner-"+msg.AgentID, "outerHTML", ""))
-		msgHTML = ""
-	}
-
-	if msgHTML != "" {
-		// Flush accumulated streaming text/thinking to the permanent
-		// log before clearing the live zone.
-		if s != nil {
-			streamText, streamThinking := s.DrainStreaming()
-			if streamText != "" {
-				s.Append(ServerMsg{Type: "text", SessionID: s.ID, Text: streamText})
-				flushHTML := RenderMsg(ServerMsg{Type: "text", SessionID: s.ID, Text: streamText})
-				if flushHTML != "" {
-					h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", flushHTML)), "", "")
+		// Permission detail upgrades and standalone chips (session-dependent).
+		if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
+			if s.IsTopLevelTool(msg.ToolUseID) {
+				// Upgrade the tool chip's detail with richer permission detail.
+				upgraded := false
+				switch msg.PermTool {
+				case "Edit", "FileEdit":
+					if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
+						if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
+							cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: diffHTML})
+							upgraded = true
+						}
+					}
+				case "Write", "FileWrite":
+					if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
+						if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
+							cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: diffHTML})
+							upgraded = true
+						}
+					}
+				case "ExitPlanMode":
+					if msg.PermInput != nil && msg.PermInput.PlanMode != nil && msg.PermInput.PlanMode.Plan != "" {
+						cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: RenderMarkdown(msg.PermInput.PlanMode.Plan)})
+						upgraded = true
+					}
+				}
+				if !upgraded {
+					permDetail := FormatPermDetail(msg.PermTool, msg.PermInput)
+					if permDetail != "" {
+						cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: Esc(permDetail)})
+					}
+				}
+			} else {
+				// Render sub-agent and unknown tool requests as standalone permission chips.
+				rendered := RenderPermission(msg)
+				if rendered != "" {
+					cmds = append(cmds, DOMCmd{Target: "msg-content", Strategy: "beforeend", Content: rendered})
 				}
 			}
-			if streamThinking != "" {
-				s.Append(ServerMsg{Type: "thinking", SessionID: s.ID, Text: streamThinking})
-				flushHTML := RenderMsg(ServerMsg{Type: "thinking", SessionID: s.ID, Text: streamThinking})
-				if flushHTML != "" {
-					h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", flushHTML)), "", "")
-				}
-			}
 		}
-		// Clear the live zone (key "streaming"). Supersedes the container and fragments.
-		liveClears := []string{clearStreaming, clearThinking}
-		if msg.Type == "tool_use" || msg.Type == "tool_result" {
-			liveClears = append(liveClears, OobSwap("thinking", "innerHTML", thinkingDots))
+		event := FormatSSEDOM(cmds)
+		if event != "" {
+			h.BroadcastToSession(sessionID, event, "", "")
 		}
-		h.BroadcastToSession(sessionID, FormatSSE("htmx", strings.Join(liveClears, "\n")), "streaming", "")
-		// Append the message to the timeline (beforeend, never compacted).
-		h.BroadcastToSession(sessionID, FormatSSE("htmx", OobSwap("msg-content", "beforeend", msgHTML)), "", "")
 	}
+}
 
-	if msg.Type == "permission_mode" {
-		var modeHTML string
-		if msg.PermMode != "" && msg.PermMode != claude.PermDefault {
-			var label string
-			switch msg.PermMode {
-			case claude.PermAcceptEdits:
-				label = "Auto-accepting edits"
-			default:
-				label = string(msg.PermMode)
-			}
-			modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(label), Esc(sessionID))
-		} else {
-			modeHTML = fmt.Sprintf(`<form hx-post="/mode" hx-swap="none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="acceptEdits"><button type="submit" class="mode-accept-edits">Accept Edits</button></form>`, Esc(sessionID))
-		}
-		parts = append(parts, OobSwap("mode-bar", "innerHTML", modeHTML))
+// isStreamingFlushTrigger reports whether msg should flush accumulated
+// streaming deltas to the permanent log before being displayed.
+func isStreamingFlushTrigger(msg ServerMsg) bool {
+	switch msg.Type {
+	case "text", "thinking", "tool_use", "tool_result":
+		return true
 	}
-
-	if len(parts) == 0 {
-		return
-	}
-	event := FormatSSE("htmx", strings.Join(parts, "\n"))
-	h.BroadcastToSession(sessionID, event, "", "")
+	return false
 }
 
 func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
@@ -599,10 +524,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 	// Ensure process is alive
 	if proc == nil || proc.IsDead() {
 		broadcast := func(msg ServerMsg) {
-			// Streaming deltas are ephemeral and should not be persisted in the session log.
-			if msg.Type != "text_delta" && msg.Type != "thinking_delta" {
-				s.Append(msg)
-			}
+			// Streaming deltas are ephemeral. Broadcast handles persistence.
 			h.Broadcast(msg)
 		}
 		var err error
@@ -632,7 +554,6 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 	s.TryAutoLabel(text)
 
 	s.SetRunning(true)
-	s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
 	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
@@ -667,7 +588,6 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
 		s.SetRunning(true)
-		s.Append(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
 		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
@@ -682,9 +602,10 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 // renderContext holds precomputed metadata for rendering a slice of messages.
 type renderContext struct {
 	lastCompact       int
-	toolResults       map[string]ServerMsg            // tool_use id → tool_result message (presence ⇒ completed)
+	toolResults       map[string]ServerMsg            // tool_use id → tool_result message
 	toolUseIndexes    map[string]int                  // tool_use id → log index of its tool_use entry
 	toolResultIndexes map[string]int                  // tool_use id → log index of its tool_result entry
+	bgTasks           map[string]*BgTaskState         // tool_use id → bg task lifecycle state (nil ⇒ not a bg task)
 	bgTaskResults     map[string]string               // tool_use id → output file path
 	suppressedIDs     map[string]bool                 // tool_use ids for tools whose results are suppressed
 	pendingPerms      map[string]ServerMsg            // tool_use id → unresolved inline permission_request
@@ -706,6 +627,7 @@ func precomputeRenderContext(log []ServerMsg) renderContext {
 		toolResults:       make(map[string]ServerMsg),
 		toolUseIndexes:    make(map[string]int),
 		toolResultIndexes: make(map[string]int),
+		bgTasks:           deriveBgTasks(log),
 		bgTaskResults:     make(map[string]string),
 		suppressedIDs:     make(map[string]bool),
 		pendingPerms:      make(map[string]ServerMsg),
@@ -813,9 +735,14 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 			continue
 		}
 		rendered := RenderMsg(msg)
-		// Strip spinners for tool_use events that already have results
+		// Strip spinners for tool_use events that are complete.
+		// Background tasks complete at task_done, not at tool_result.
 		if msg.Type == "tool_use" {
-			if _, ok := rc.toolResults[msg.ToolUseID]; ok {
+			if bt, ok := rc.bgTasks[msg.ToolUseID]; ok {
+				if bt.Completed {
+					rendered = stripSpinner(rendered, msg.ToolUseID)
+				}
+			} else if _, ok := rc.toolResults[msg.ToolUseID]; ok {
 				rendered = stripSpinner(rendered, msg.ToolUseID)
 			}
 		}
@@ -867,131 +794,4 @@ func renderSentinel(sessionID string, beforeIdx int) string {
 			`hx-trigger="intersect root:#messages threshold:0" hx-swap="outerHTML">`+
 			`<span class="loading-older">Loading older messages...</span></div>`,
 		url.QueryEscape(sessionID), beforeIdx)
-}
-
-// SeedEventLog populates a session's EventLog from its current state.
-// Called once when loading a session from disk or when a new session is
-// created, before any live Broadcast events arrive.
-func (h *Hub) SeedEventLog(s *Session) {
-	snap := s.SeedSnapshot()
-
-	// Refresh git diff stat
-	if snap.Cwd != "" {
-		t := NewGitTrace("seed-diff-stat")
-		defer t.Log()
-		if ds, err := GitDiffStat(t, snap.Cwd); err == nil {
-			s.SetDiffStat(ds)
-		}
-	}
-
-	// Rebuild todos by replaying tool_use events in order. TodoWrite replaces
-	// the list wholesale; TaskCreate appends; TaskUpdate mutates by ID.
-	s.SetTodos(nil)
-	for _, msg := range snap.Log {
-		if msg.Type != "tool_use" {
-			continue
-		}
-		switch msg.Tool {
-		case "TodoWrite":
-			if t := ParseTodos(msg.Input); t != nil {
-				s.SetTodos(t)
-			}
-		case "TaskCreate":
-			if msg.Input != nil {
-				s.AppendTaskFromCreate(msg.Input.TaskCreate)
-			}
-		case "TaskUpdate":
-			if msg.Input != nil {
-				s.UpdateTask(msg.Input.TaskUpdate)
-			}
-		}
-	}
-	todos := s.GetTodosCopy()
-
-	// --- Chrome setup event: session-id, label, running state, cost, mode, todos, queue ---
-	var chromeParts []string
-	sessionLabel := ShortPath(snap.Cwd)
-	if snap.Label != "" {
-		sessionLabel = snap.Label
-		if snap.AutoLabel {
-			sessionLabel = "(auto) " + sessionLabel
-		}
-	}
-	chromeParts = append(chromeParts, OobSwap("session-label", "innerHTML", Esc(sessionLabel)))
-	chromeParts = append(chromeParts, TitleOob(sessionLabel))
-	chromeParts = append(chromeParts, FaviconOob(sessionLabel))
-	chromeParts = append(chromeParts, OobSwap("session-id", "outerHTML",
-		fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))))
-	chromeParts = append(chromeParts, OobSwap("close-btn", "outerHTML",
-		`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`))
-	chromeParts = append(chromeParts, CwdCopyButton(s.GetCwd()))
-
-	if snap.Running {
-		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span class="di-running" id="running-dot"></span>`))
-		chromeParts = append(chromeParts, OobSwap("stop-btn", "outerHTML",
-			`<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`))
-		chromeParts = append(chromeParts, OobSwap("thinking", "innerHTML", `<span></span><span></span><span></span>`))
-	} else {
-		chromeParts = append(chromeParts, OobSwap("running-dot", "outerHTML", `<span id="running-dot" style="display:none"></span>`))
-		chromeParts = append(chromeParts, OobSwap("stop-btn", "outerHTML", `<span id="stop-btn"></span>`))
-	}
-
-	chromeParts = append(chromeParts, OobSwap("cost-bar", "innerHTML", RenderCostBar(s)))
-
-	var modeHTML string
-	if snap.PermMode != "" && snap.PermMode != claude.PermDefault {
-		var ml string
-		switch snap.PermMode {
-		case claude.PermAcceptEdits:
-			ml = "Auto-accepting edits"
-		default:
-			ml = string(snap.PermMode)
-		}
-		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(ml), Esc(s.ID))
-	} else {
-		modeHTML = fmt.Sprintf(`<form hx-post="/mode" hx-swap="none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="acceptEdits"><button type="submit" class="mode-accept-edits">Accept Edits</button></form>`, Esc(s.ID))
-	}
-	chromeParts = append(chromeParts, OobSwap("mode-bar", "innerHTML", modeHTML))
-	chromeParts = append(chromeParts, OobSwap("todos-summary", "innerHTML", RenderTodosSummary(todos)))
-	chromeParts = append(chromeParts, OobSwap("todos-body", "innerHTML", RenderTodosBody(todos)))
-	chromeParts = append(chromeParts, RenderQueueBar(s.ID, snap.QueuedText))
-
-	s.EventLog.Append(FormatSSE("htmx", strings.Join(chromeParts, "\n")), "", "")
-
-	// --- Render messages from the log (paginated) ---
-	rc := precomputeRenderContext(snap.Log)
-	// Register bg paths for lazy-load stream endpoint
-	for id, bgPath := range rc.bgTaskResults {
-		s.RegisterBgPath(id, bgPath)
-	}
-
-	const pageSize = 100
-	start := 0
-	if len(snap.Log) > pageSize {
-		start = len(snap.Log) - pageSize
-		// Don't split inside the compacted region
-		if rc.lastCompact >= 0 && start <= rc.lastCompact {
-			start = 0
-		}
-	}
-
-	var msgsHTML strings.Builder
-	if start > 0 {
-		msgsHTML.WriteString(renderSentinel(s.ID, start))
-	}
-	msgsHTML.WriteString(renderMessages(snap.Log, start, len(snap.Log), rc, s.ID))
-
-	s.EventLog.Append(FormatSSE("htmx", OobSwap("msg-content", "innerHTML", msgsHTML.String())), "", "")
-}
-
-// BuildReplay writes all stored SSE events for the session directly to w
-// and returns the sequence number of the last event written. The caller
-// should drop any live events with seq <= the returned value.
-func (h *Hub) BuildReplay(s *Session, w io.Writer, flusher http.Flusher) uint64 {
-	events, lastSeq := s.EventLog.Snapshot()
-	for _, e := range events {
-		fmt.Fprint(w, e.Event)
-	}
-	flusher.Flush()
-	return lastSeq
 }

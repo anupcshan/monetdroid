@@ -3,12 +3,17 @@ package monetdroid
 import (
 	"encoding/json"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
+
+// bgTaskNotificationPattern extracts tool-use-id and status from
+// <task-notification> XML injected into user prompts on bg task completion.
+var bgTaskNotificationPattern = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>.*?<status>([^<]+)</status>`)
 
 // suppressResultTools lists tools whose tool_result output should not be
 // shown to the user (the tool_use chip is still rendered).
@@ -48,12 +53,33 @@ func handleRawStreamEvent(s *Session, raw *protocol.RawStreamEvent, broadcast fu
 }
 
 // handleStreamEvent processes non-control messages from the CLI and broadcasts them.
+//
+// Event flows by category:
+//
+//   - Agent tasks: task_started / task_progress / task_notification arrive as
+//     stream JSON system events. task_notification fires for agent tasks only,
+//     not for background Bash.
+//
+//   - Background Bash tasks: creation arrives via hooks (PreToolUse →
+//     PostToolUse with backgroundTaskId → PostToolBatch with "Output is
+//     being written to:"). Completion has no dedicated event; the signal is
+//     <task-notification> XML injected into the next UserPromptSubmit prompt
+//     text, parsed by the "user" case below.
+//
+//   - Tool lifecycle: tool_use flows from hookToStreamEvents (PreToolUse hook).
+//     tool_result flows from hookToStreamEvents (PostToolBatch hook) or from
+//     stream JSON user events (for stdout-side non-hook paths). Agent tool
+//     results are routed through handleHookEvent (PostToolUse for Agent) and
+//     never reach this function.
+//
+//   - Assistant text/thinking: "assistant" stream events carry text and
+//     thinking blocks. Streaming deltas arrive as stream_event raw events
+//     (routed through handleRawStreamEvent). MessageDisplay hooks carry
+//     final display text and are not used for streaming.
+//
 // Sub-agent events (parent_tool_use_id non-empty) never reach here: the
 // process.go scan filter drops sidechain stdout events, and inner sub-agent
-// hooks are dispatched through handleHookEvent. Parent's PostToolUse for
-// Agent (the only payload pairing agent_id with parent tool_use_id) is also
-// routed through handleHookEvent, so this function does not see Agent
-// tool_results.
+// hooks are dispatched through handleHookEvent.
 func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(ServerMsg)) {
 	switch event.Type {
 	case "system":
@@ -162,6 +188,24 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
 			}
 		}
+
+		// bg Bash completion: the CLI injects <task-notification> XML
+		// into the next user prompt after a background task finishes.
+		// Example: <task-notification><tool-use-id>call_01_AbC</tool-use-id>
+		// <status>completed</status>...</task-notification>
+		// task_notification stream events (system type) do NOT fire for
+		// bg Bash. The Stop hook's background_tasks list is a snapshot
+		// only and does not signal completion. task_done broadcast here
+		// updates the model (marking the BgTask completed) and removes
+		// the tool chip spinner via RenderEvent.
+		for _, m := range bgTaskNotificationPattern.FindAllStringSubmatch(event.Message.Content.Text, -1) {
+			toolUseID := m[1]
+			status := m[2]
+			if status == "completed" {
+				broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: toolUseID})
+				s.CloseBgStop(toolUseID)
+			}
+		}
 	}
 }
 
@@ -254,6 +298,11 @@ func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
 			used, window, modelName, err = scanTokenUsage(jsonlPath)
 		}
 		if err != nil {
+			return
+		}
+		// If the session was closed while we slept, the cost event would
+		// land on a new session loaded from disk with the same ID.
+		if s.ctx.Err() != nil {
 			return
 		}
 		cost := &CostInfo{}

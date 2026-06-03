@@ -1,3 +1,34 @@
+// Background Bash task lifecycle
+//
+// This file tracks bg Bash tasks through their full lifecycle:
+//
+//   Creation:
+//     PreToolUse hook (run_in_background:true)
+//       → PostToolUse hook (stdout empty, backgroundTaskId set)
+//       → PostToolBatch hook (tool_response: "Output is being written to: PATH")
+//     ParseBgTaskPath extracts the output path. BgTaskState is created in the
+//     model via Apply() with Command and OutputPath set; Completed is false.
+//
+//   Completion:
+//     <task-notification> XML is injected into the next UserPromptSubmit
+//     prompt text with status="completed" and the tool_use_id. Parsed by
+//     bgTaskNotificationPattern in claude.go's "user" handler. Broadcasts
+//     task_done, which marks BgTask.Completed = true and RenderEvent
+//     removes the tool chip spinner.
+//
+//   Output streaming:
+//     handleBgOutputStream polls the .output file every 500ms. The stop
+//     channel created at tool_result time is closed by CloseBgStop (called
+//     from task_done or CloseAllBgStops on process death). The elapsed
+//     timer goroutine runs until the stop channel closes.
+//
+//   Model state:
+//     BgTaskState is derived from the session log by deriveBgTasks() for
+//     cold/warm page loads. BuildModel() calls Apply() for each event.
+//     task_done marks Completed = true, which stripSpinner() reads when
+//     renderMessages() builds the page HTML. On cold load, all bg tasks
+//     are marked completed (processes are dead).
+
 package monetdroid
 
 import (
@@ -7,6 +38,49 @@ import (
 	"os"
 	"regexp"
 )
+
+// BgTaskState tracks the lifecycle of a background Bash task,
+// derived from the session message log by deriveBgTasks.
+type BgTaskState struct {
+	Command    string // the Bash command
+	OutputPath string // the .output file path
+	Completed  bool   // task_done has been seen
+}
+
+// deriveBgTasks scans the message log and builds a BgTaskState for every
+// background Bash task. A task is only tracked once its tool_result confirms
+// it via the "Output is being written to:" marker. ToolUseIDs not in the
+// result map are not background tasks.
+func deriveBgTasks(log []ServerMsg) map[string]*BgTaskState {
+	commands := make(map[string]string) // tool_use id → command for all Bash tool_use
+	bg := make(map[string]*BgTaskState)
+	for _, msg := range log {
+		switch msg.Type {
+		case "tool_use":
+			if msg.Tool == "Bash" && msg.AgentID == "" && msg.Input != nil && msg.Input.Bash != nil {
+				commands[msg.ToolUseID] = msg.Input.Bash.Command
+			}
+		case "tool_result":
+			if msg.ToolUseID == "" || msg.AgentID != "" {
+				continue
+			}
+			if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
+				bg[msg.ToolUseID] = &BgTaskState{
+					Command:    commands[msg.ToolUseID],
+					OutputPath: bgPath,
+				}
+			}
+		case "task_done":
+			if msg.ToolUseID == "" {
+				continue
+			}
+			if st, ok := bg[msg.ToolUseID]; ok {
+				st.Completed = true
+			}
+		}
+	}
+	return bg
+}
 
 var bgTaskPattern = regexp.MustCompile(`Output is being written to: (.+\.output)`)
 

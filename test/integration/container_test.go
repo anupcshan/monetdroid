@@ -3058,3 +3058,53 @@ func TestModelNameInCostBar(t *testing.T) {
 	WaitForText(t, page, "#cost-bar", expectedModelName, 5*time.Second)
 	Screenshot(t, page, "model_name_step3")
 }
+
+// TestDiffStatInCostBar verifies that git diff stats appear in the cost bar
+// after a turn completes and persist across session reload.
+func TestDiffStatInCostBar(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, "diff_stat_cost_bar.jsonl.zst", testMode())
+
+	// Initialize a git repo so GitDiffStat can produce meaningful output.
+	initGitRepo(t, f, containerWorkdir)
+	// Create a tracked file and commit it so git diff HEAD can detect changes.
+	f.WriteFile(containerWorkdir+"/hello.txt", "original content\n")
+	f.DockerExec("git", "-C", containerWorkdir, "add", "hello.txt")
+	f.DockerExec("git", "-C", containerWorkdir, "commit", "-m", "add hello")
+
+	page := f.Page()
+	CreatePlainSession(t, page, containerWorkdir)
+	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+	// Modify the tracked file to create a dirty working tree diff.
+	f.WriteFile(containerWorkdir+"/hello.txt", "modified content\nwith two lines\n")
+
+	// Step 1: Complete a turn so the "done" handler refreshes DiffStat.
+	page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
+
+	// After the turn, the cost bar should show the diff stat (not just "files").
+	costBar := page.MustElement("#cost-bar").MustText()
+	if !strings.Contains(costBar, "+") {
+		Screenshot(t, page, "diff_stat_missing")
+		t.Fatalf("step 1: expected diff stat in cost bar after turn, got: %q", costBar)
+	}
+	Screenshot(t, page, "diff_stat_step1")
+
+	// Step 2: Close session and reload from disk.
+	currentURL := page.MustEval(`() => window.location.href`).String()
+	page.MustElement(`#close-btn button`).MustClick()
+	page.Timeout(10 * time.Second).MustWait(`() => window.location.pathname === '/' && window.location.search === ''`)
+	page.MustNavigate(currentURL).MustWaitStable()
+	WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
+
+	costBar = page.MustElement("#cost-bar").MustText()
+	if !strings.Contains(costBar, "+") {
+		Screenshot(t, page, "diff_stat_missing_after_reload")
+		t.Fatalf("step 2: diff stat lost after session reload, got: %q", costBar)
+	}
+	Screenshot(t, page, "diff_stat_step2")
+}
