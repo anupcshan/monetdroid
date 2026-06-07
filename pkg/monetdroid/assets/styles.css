@@ -443,8 +443,7 @@ details[open] > .history-group-header::before { content: '▼ '; }
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
 }
 .msg-assistant .msg-bubble code {
   font-family: var(--mono);
