@@ -23,6 +23,7 @@ import (
 	gmhtml "github.com/yuin/goldmark/renderer/html"
 
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
+	"github.com/anupcshan/monetdroid/pkg/monetdroid/render"
 )
 
 var md = goldmark.New(
@@ -650,18 +651,7 @@ func RenderCostBar(s *Session) string {
 }
 
 func RenderQueueBar(sessionID, text string) string {
-	if text == "" {
-		return OobSwap("queue-bar", "innerHTML", "")
-	}
-	return OobSwap("queue-bar", "innerHTML", fmt.Sprintf(
-		`<div class="queue-content">`+
-			`<span class="queue-label">queued:</span>`+
-			`<span class="queue-preview">%s</span>`+
-			`<button class="queue-btn" hx-post="/cancel-queue" hx-vals='{"session_id":"%s","edit":"true"}' hx-target="#queue-bar" hx-swap="innerHTML">Edit</button>`+
-			`<button class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
-			`</div>`,
-		Esc(text), Esc(sessionID), Esc(sessionID),
-	))
+	return render.QueueBar(sessionID, text)
 }
 
 func RenderQueueEdit(sessionID, text string) string {
@@ -790,20 +780,7 @@ func RenderTodosBody(todos []protocol.Todo) string {
 // --- SSE format helpers ---
 
 func FormatSSE(event, data string) string {
-	// Strip \r before SSE formatting. Stray CRs from CRLF textarea submissions
-	// would be interpreted as line terminators and silently drop content.
-	data = strings.ReplaceAll(data, "\r", "")
-	var buf strings.Builder
-	buf.WriteString("event: ")
-	buf.WriteString(event)
-	buf.WriteString("\n")
-	for _, line := range strings.Split(data, "\n") {
-		buf.WriteString("data: ")
-		buf.WriteString(line)
-		buf.WriteString("\n")
-	}
-	buf.WriteString("\n")
-	return buf.String()
+	return render.SSE(event, data)
 }
 
 func renderBranchChips(branches []string) string {
@@ -1104,20 +1081,8 @@ func stripSpinner(html, toolUseID string) string {
 	return html
 }
 
-// CwdCopyButton returns the OOB-swappable cwd toggle button and cwd row HTML.
-// Pass empty cwd to hide the button and clear the row.
-func CwdCopyButton(cwd string) string {
-	if cwd == "" {
-		return `<button class="header-btn" id="cwd-copy" hx-swap-oob="outerHTML" style="display:none">📁</button>` +
-			`<div class="cwd-row" id="cwd-row" hx-swap-oob="outerHTML"></div>`
-	}
-	return fmt.Sprintf(`<button class="header-btn" id="cwd-copy" hx-swap-oob="outerHTML" hx-on:click="this.closest('.header').classList.toggle('show-cwd')">📁</button>`+
-		`<div class="cwd-row" id="cwd-row" hx-swap-oob="outerHTML">%s</div>`,
-		Esc(ShortPath(cwd)))
-}
-
 func OobSwap(id, strategy, content string) string {
-	return fmt.Sprintf(`<div id="%s" hx-swap-oob="%s">%s</div>`, id, strategy, content)
+	return render.OOB(id, strategy, content)
 }
 
 // FaviconOob returns an OOB swap that sets a colored SVG favicon based on the label.

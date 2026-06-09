@@ -6,21 +6,16 @@ import (
 
 	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
+	"github.com/anupcshan/monetdroid/pkg/monetdroid/render"
 )
 
-// DOMCmd is an abstract DOM mutation that is independent of the transport
-// (SSE, WebSocket, etc.). The SSE sink converts these to OOB-swap HTML;
-// a future WebSocket sink would convert them to JSON.
-type DOMCmd struct {
-	Target   string
-	Strategy string // "innerHTML", "beforeend", "outerHTML"
-	Content  string
-}
+// DOMCmd is an alias for render.Cmd. See the render package for documentation.
+type DOMCmd = render.Cmd
 
 // RenderFull produces all DOM commands for a full page render. Callers should
 // register bg paths and commands on the session from the model before
 // calling this.
-func RenderFull(m *SessionModel, sessionID string) []DOMCmd {
+func RenderFull(m *SessionModel, sessionID string, reviewCount int) []DOMCmd {
 	var cmds []DOMCmd
 
 	// --- Chrome ---
@@ -46,6 +41,7 @@ func RenderFull(m *SessionModel, sessionID string) []DOMCmd {
 	cmds = append(cmds, modeBarCmd(sessionID, m.PermMode)...)
 	cmds = append(cmds, todoCmds(m.Todos)...)
 	cmds = append(cmds, queueBarCmd(sessionID, m.QueuedText)...)
+	cmds = append(cmds, reviewBarCmd(sessionID, reviewCount)...)
 
 	// --- Messages ---
 	msgsHTML := renderModelMessages(m, sessionID)
@@ -346,6 +342,11 @@ func queueBarCmd(_ /* sessionID */, queuedText string) []DOMCmd {
 	)}}
 }
 
+func reviewBarCmd(sessionID string, count int) []DOMCmd {
+	barHTML := RenderReviewBar(sessionID, count)
+	return []DOMCmd{{Target: "review-bar", Strategy: "outerHTML", Content: barHTML}}
+}
+
 func titleCmd(label string) []DOMCmd {
 	if label == "" {
 		return nil
@@ -361,6 +362,8 @@ func cwdCopyCmd(cwd string) []DOMCmd {
 			Content: fmt.Sprintf(`<input type="hidden" name="cwd" id="session-cwd" value="%s">`, Esc(cwd))},
 		{Target: "cwd-row", Strategy: "innerHTML",
 			Content: fmt.Sprintf(`<span class="cwd-text">%s</span><button class="cwd-copy" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent)">📋</button>`, Esc(ShortPath(cwd)))},
+		{Target: "cwd-copy", Strategy: "outerHTML",
+			Content: `<button class="header-btn" id="cwd-copy" hx-on:click="this.closest('.header').classList.toggle('show-cwd')">📁</button>`},
 	}
 }
 
@@ -369,23 +372,9 @@ func RenderCostBarModel(sessionID string, m *SessionModel) string {
 	return renderCostBarModel(sessionID, m.Cwd, m.Cost, m.DiffStat)
 }
 
-// FormatSSEDOM converts DOM commands to the SSE wire format used by the
-// HTMX SSE extension. Multiple commands are joined into a single SSE event.
-// Extra raw OOB HTML strings (e.g. from TitleOob, FaviconOob) are appended.
+// FormatSSEDOM converts DOM commands to the SSE wire format.
 func FormatSSEDOM(cmds []DOMCmd, extraOOBs ...string) string {
-	var oobs []string
-	for _, c := range cmds {
-		if c.Content == "" && c.Strategy == "outerHTML" {
-			oobs = append(oobs, fmt.Sprintf(`<div id="%s" hx-swap-oob="%s"></div>`, c.Target, c.Strategy))
-		} else {
-			oobs = append(oobs, fmt.Sprintf(`<div id="%s" hx-swap-oob="%s">%s</div>`, c.Target, c.Strategy, c.Content))
-		}
-	}
-	oobs = append(oobs, extraOOBs...)
-	if len(oobs) == 0 {
-		return ""
-	}
-	return FormatSSE("htmx", strings.Join(oobs, "\n"))
+	return render.Format(cmds, extraOOBs...)
 }
 
 // renderCostBarModel is a session-less cost bar render.

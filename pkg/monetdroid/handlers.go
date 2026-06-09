@@ -284,7 +284,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				if label == "" {
 					label = ShortPath(s.GetCwd())
 				}
-				cmds := RenderFull(s.Model, s.ID)
+				cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))
 				event := FormatSSEDOM(cmds, TitleOob(label), FaviconOob(label))
 				fmt.Fprint(w, event)
 				flusher.Flush()
@@ -309,7 +309,11 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf(`<input type="hidden" name="cwd" id="session-cwd" value="%s">`, Esc(cwd))))
 			chromeParts = append(chromeParts, OobSwap("session-label-value", "outerHTML",
 				fmt.Sprintf(`<input type="hidden" name="label" id="session-label-value" value="%s">`, Esc(label))))
-			chromeParts = append(chromeParts, CwdCopyButton(cwd))
+			chromeParts = append(chromeParts,
+				OobSwap("cwd-copy", "outerHTML",
+					`<button class="header-btn" id="cwd-copy" hx-on:click="this.closest('.header').classList.toggle('show-cwd')">📁</button>`),
+				OobSwap("cwd-row", "outerHTML",
+					fmt.Sprintf(`<span class="cwd-text">%s</span><button class="cwd-copy" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent)">📋</button>`, Esc(ShortPath(cwd)))))
 			chromeParts = append(chromeParts, OobSwap("msg-content", "innerHTML", ""))
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
@@ -578,29 +582,12 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Model = BuildModel(base, s.GetLog())
 		s.Model.DiffStat = s.GetDiffStat()
-		cmds := RenderFull(s.Model, s.ID)
+		cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))
 		labelText := label
 		if labelText == "" {
 			labelText = ShortPath(cwd)
 		}
 		h.BroadcastToSession(s.ID, FormatSSEDOM(cmds, TitleOob(labelText), FaviconOob(labelText)), "", "")
-
-		// Send chrome setup (session-id hidden field, label) to bound clients
-		sessionLabel := label
-		if autoLabel {
-			sessionLabel = "(auto) " + sessionLabel
-		}
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", strings.Join([]string{
-			OobSwap("session-id", "outerHTML",
-				fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(s.ID))),
-			OobSwap("session-label", "innerHTML", Esc(sessionLabel)),
-			TitleOob(sessionLabel),
-			FaviconOob(sessionLabel),
-			OobSwap("mode-bar", "innerHTML", fmt.Sprintf(`<form hx-post="/mode" hx-swap="none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="acceptEdits"><button type="submit" class="mode-accept-edits">Accept Edits</button></form>`, Esc(s.ID))),
-			OobSwap("close-btn", "outerHTML",
-				`<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`),
-			CwdCopyButton(s.GetCwd()),
-		}, "\n")), "", "")
 
 		// Broadcast user message and running state
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
