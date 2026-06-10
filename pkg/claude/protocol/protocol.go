@@ -97,7 +97,7 @@ type StreamBlock struct {
 	ID        string          `json:"id,omitempty"`
 	RawInput  json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   BlockContent    `json:"content,omitempty"`
+	Content   BlockContent    `json:"content,omitzero"`
 }
 
 type StreamUsage struct {

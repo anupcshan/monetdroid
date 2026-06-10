@@ -518,8 +518,8 @@ func renderCommitDetail(t *GitTrace, sessionID, cwd, hash string) string {
 	chunks := splitDiffByFile(diffContent)
 	for _, chunk := range chunks {
 		firstLine := chunk
-		if idx := strings.Index(chunk, "\n"); idx >= 0 {
-			firstLine = chunk[:idx]
+		if first, _, ok := strings.Cut(chunk, "\n"); ok {
+			firstLine = first
 		}
 		name := ""
 		if strings.HasPrefix(firstLine, "diff --git ") {

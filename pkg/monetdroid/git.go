@@ -419,7 +419,7 @@ func gitWorktreeList(t *GitTrace, cwd string) []worktreeEntry {
 	}
 	var result []worktreeEntry
 	var current worktreeEntry
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		switch {
 		case strings.HasPrefix(line, "worktree "):
 			current = worktreeEntry{Path: strings.TrimPrefix(line, "worktree ")}
@@ -672,7 +672,7 @@ func localUpstreamMap(t *GitTrace, cwd string) map[string]string {
 
 	// Extract branch names from "branch.<name>.remote ." lines.
 	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		// e.g. "branch.feature-x.remote ."
 		key, _, ok := strings.Cut(line, " ")
 		if !ok {
@@ -696,7 +696,7 @@ func localUpstreamMap(t *GitTrace, cwd string) map[string]string {
 	}
 
 	result := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		// e.g. "branch.feature-x.merge refs/heads/main"
 		key, val, ok := strings.Cut(line, " ")
 		if !ok {
@@ -774,7 +774,7 @@ func GitDiffStat(t *GitTrace, cwd string) (DiffStat, error) {
 		return DiffStat{}, err
 	}
 	var stat DiffStat
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -832,7 +832,7 @@ func GitStatusFiles(t *GitTrace, cwd string) ([]StatusFile, error) {
 		return nil, err
 	}
 	var files []StatusFile
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if len(line) < 4 {
 			continue
 		}
@@ -866,7 +866,7 @@ func splitDiffByFileMap(fullDiff string) map[string]string {
 	result := map[string]string{}
 	var current strings.Builder
 	var currentFile string
-	for _, line := range strings.Split(fullDiff, "\n") {
+	for line := range strings.SplitSeq(fullDiff, "\n") {
 		if strings.HasPrefix(line, "diff --git ") {
 			if currentFile != "" {
 				result[currentFile] = current.String()
@@ -950,13 +950,13 @@ func GitListDir(t *GitTrace, cwd, dir string) ([]FileEntry, error) {
 
 	seen := make(map[string]bool)
 	var entries []FileEntry
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
 		rel := strings.TrimPrefix(line, prefix)
-		if idx := strings.IndexByte(rel, '/'); idx >= 0 {
-			dirName := rel[:idx]
+		if dir, _, ok := strings.Cut(rel, "/"); ok {
+			dirName := dir
 			key := dirName + "/"
 			if !seen[key] {
 				seen[key] = true
@@ -1006,7 +1006,7 @@ func GitGrep(t *GitTrace, cwd, pattern string) ([]SearchMatch, error) {
 	}
 
 	var results []SearchMatch
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
@@ -1045,7 +1045,7 @@ func GitLog(t *GitTrace, cwd string, limit int) ([]CommitEntry, error) {
 		return nil, err
 	}
 	var commits []CommitEntry
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
@@ -1099,7 +1099,7 @@ func GitShowCommitFiles(t *GitTrace, cwd, hash string) ([]string, error) {
 		return nil, err
 	}
 	var files []string
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if line != "" {
 			files = append(files, line)
 		}

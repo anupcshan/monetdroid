@@ -174,10 +174,7 @@ func TestMain(m *testing.M) {
 		}
 		return
 	}
-	p := runtime.NumCPU() / 2
-	if p > 2 {
-		p = 2
-	}
+	p := min(runtime.NumCPU()/2, 2)
 	flag.Set("test.parallel", fmt.Sprintf("%d", p))
 	os.Exit(m.Run())
 }
@@ -2806,7 +2803,7 @@ func TestBashToolForeground(t *testing.T) {
 
 		// Create a file with >2000 chars so `cat` output exceeds the truncation limit.
 		var big strings.Builder
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			fmt.Fprintf(&big, "line %03d: this is padding content to make the file large enough to exceed the two thousand char truncation limit\n", i)
 		}
 		f.WriteFile(containerWorkdir+"/bigfile.txt", big.String())

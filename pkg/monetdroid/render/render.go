@@ -34,7 +34,7 @@ func SSE(event, data string) string {
 	buf.WriteString("event: ")
 	buf.WriteString(event)
 	buf.WriteString("\n")
-	for _, line := range strings.Split(data, "\n") {
+	for line := range strings.SplitSeq(data, "\n") {
 		buf.WriteString("data: ")
 		buf.WriteString(line)
 		buf.WriteString("\n")

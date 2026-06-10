@@ -85,7 +85,7 @@ type contentBlock struct {
 	ID        string          `json:"id,omitempty"`
 	RawInput  json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   blockContent    `json:"content,omitempty"`
+	Content   blockContent    `json:"content,omitzero"`
 	Source    *imageSource    `json:"source,omitempty"`
 }
 

@@ -325,7 +325,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 
 	// Wait for server to be ready
 	ready := false
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		resp, err := http.Get(serverURL)
 		if err == nil {
 			resp.Body.Close()

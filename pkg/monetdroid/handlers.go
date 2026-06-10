@@ -1237,7 +1237,7 @@ func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) renderLanding() string {
 	t := NewGitTrace("landing")
 	defer t.Log()
-	var landingHTML string
+	var landingHTML strings.Builder
 	panels := AllWorkstreams(t)
 	names := make([]string, 0, len(panels))
 	for name := range panels {
@@ -1245,12 +1245,12 @@ func (h *Hub) renderLanding() string {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		landingHTML += RenderWorkstreamStatus(panels[name])
+		landingHTML.WriteString(RenderWorkstreamStatus(panels[name]))
 	}
 	if sessHTML := RenderTrackedSessions(t, h.Tracker.List()); sessHTML != "" {
-		landingHTML += `<div class="queue-header">Sessions</div>` + sessHTML
+		landingHTML.WriteString(`<div class="queue-header">Sessions</div>` + sessHTML)
 	}
-	return landingHTML
+	return landingHTML.String()
 }
 
 func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
@@ -1389,10 +1389,7 @@ func (h *Hub) handleMessagesBefore(w http.ResponseWriter, r *http.Request) {
 	rc := precomputeRenderContext(snap)
 
 	// Determine how far back to render
-	start := idx - 100
-	if start < 0 {
-		start = 0
-	}
+	start := max(idx-100, 0)
 	// Don't split inside the compacted region
 	if rc.lastCompact >= 0 && start > 0 && start <= rc.lastCompact {
 		start = 0

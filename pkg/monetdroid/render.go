@@ -260,7 +260,7 @@ func highlightDiff(diffText string) string {
 func splitDiffByFile(fullDiff string) []string {
 	var chunks []string
 	var current strings.Builder
-	for _, line := range strings.Split(fullDiff, "\n") {
+	for line := range strings.SplitSeq(fullDiff, "\n") {
 		if strings.HasPrefix(line, "diff --git ") && current.Len() > 0 {
 			chunks = append(chunks, current.String())
 			current.Reset()
@@ -321,7 +321,7 @@ func writeDiffFromInput(input *protocol.ToolInput) (filePath, content string, ok
 func editSummary(filePath, oldStr, newStr string) string {
 	diffText := runDiff(filePath, oldStr, newStr, 0)
 	added, removed := 0, 0
-	for _, line := range strings.Split(diffText, "\n") {
+	for line := range strings.SplitSeq(diffText, "\n") {
 		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
 			added++
 		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {

@@ -5,6 +5,7 @@ linters:
     - errcheck
   enable:
     - gocritic
+    - modernize
 output:
   show-stats: false
   formats:

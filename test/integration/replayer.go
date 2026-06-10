@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -176,7 +177,7 @@ func (r *Replayer) loadCassette() {
 	if err != nil {
 		r.t.Fatalf("zstd decode %s: %v", r.cassettePath, err)
 	}
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
@@ -311,9 +312,7 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	interaction := r.interactions[idx]
 	r.learnIDMappings([]byte(interaction.Request.Body), body)
 	idMapCopy := make(map[string]string, len(r.idMap))
-	for k, v := range r.idMap {
-		idMapCopy[k] = v
-	}
+	maps.Copy(idMapCopy, r.idMap)
 	r.mu.Unlock()
 
 	r.t.Logf("replayer: serving interaction %d for %s %s (%d bytes request body)",
@@ -608,9 +607,9 @@ func substituteSSEDeltas(body, old, nw string) string {
 
 // sseDataLine extracts the JSON string after "data: " from an SSE event.
 func sseDataLine(event string) string {
-	for _, line := range strings.Split(event, "\n") {
-		if strings.HasPrefix(line, "data: ") {
-			return strings.TrimPrefix(line, "data: ")
+	for line := range strings.SplitSeq(event, "\n") {
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			return after
 		}
 	}
 	return ""
@@ -637,7 +636,7 @@ func sseReplacePartial(event, newPartial string) string {
 	}
 	// Rebuild: "event: ...\ndata: <new json>"
 	var lines []string
-	for _, line := range strings.Split(event, "\n") {
+	for line := range strings.SplitSeq(event, "\n") {
 		if strings.HasPrefix(line, "data: ") {
 			lines = append(lines, "data: "+string(newData))
 		} else {
@@ -677,11 +676,8 @@ func summarizeRequest(body []byte) (line string, msgs int, lastRole string) {
 }
 
 func commonPrefixLen(a, b string) int {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	for i := 0; i < n; i++ {
+	n := min(len(b), len(a))
+	for i := range n {
 		if a[i] != b[i] {
 			return i
 		}
@@ -690,11 +686,8 @@ func commonPrefixLen(a, b string) int {
 }
 
 func commonSuffixLen(a, b string) int {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	for i := 0; i < n; i++ {
+	n := min(len(b), len(a))
+	for i := range n {
 		if a[len(a)-1-i] != b[len(b)-1-i] {
 			return i
 		}
@@ -713,16 +706,10 @@ func formatLineDiff(live, rec string, ctx int) (string, string) {
 	lmid := live[pre : len(live)-suf]
 	rmid := rec[pre : len(rec)-suf]
 
-	leftStart := pre - ctx
-	if leftStart < 0 {
-		leftStart = 0
-	}
+	leftStart := max(pre-ctx, 0)
 	leftCtx := live[leftStart:pre]
 
-	rightEnd := len(live) - suf + ctx
-	if rightEnd > len(live) {
-		rightEnd = len(live)
-	}
+	rightEnd := min(len(live)-suf+ctx, len(live))
 	rightCtx := live[len(live)-suf : rightEnd]
 
 	leftEllipsis := ""
@@ -762,14 +749,11 @@ func computeBodyDiff(live, recorded []byte, maxLines, ctx int) string {
 	liveLines := strings.Split(lp.String(), "\n")
 	recLines := strings.Split(rp.String(), "\n")
 
-	n := len(liveLines)
-	if len(recLines) < n {
-		n = len(recLines)
-	}
+	n := min(len(recLines), len(liveLines))
 
 	var out strings.Builder
 	written := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if liveLines[i] == recLines[i] {
 			continue
 		}
@@ -833,11 +817,8 @@ func (r *Replayer) learnIDMappings(recorded, live []byte) {
 	for _, re := range patterns {
 		recIDs := extract(recorded, re)
 		liveIDs := extract(live, re)
-		n := len(recIDs)
-		if len(liveIDs) < n {
-			n = len(liveIDs)
-		}
-		for i := 0; i < n; i++ {
+		n := min(len(liveIDs), len(recIDs))
+		for i := range n {
 			if recIDs[i] != liveIDs[i] {
 				r.idMap[recIDs[i]] = liveIDs[i]
 			}

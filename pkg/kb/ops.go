@@ -21,7 +21,7 @@ func (kb *KB) List() ([]string, error) {
 	}
 
 	var files []string
-	for _, entry := range strings.Split(string(out), "\000") {
+	for entry := range strings.SplitSeq(string(out), "\000") {
 		if entry != "" && entry != ".gitignore" {
 			files = append(files, entry)
 		}

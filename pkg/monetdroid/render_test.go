@@ -168,7 +168,7 @@ func TestRenderBranchList_SingleDeepStack(t *testing.T) {
 func branchRows(t *testing.T, html string, want int) []string {
 	t.Helper()
 	var rows []string
-	for _, part := range strings.Split(html, "</div>") {
+	for part := range strings.SplitSeq(html, "</div>") {
 		if strings.Contains(part, "ws-branch-row") {
 			rows = append(rows, part)
 		}
@@ -181,7 +181,7 @@ func branchRows(t *testing.T, html string, want int) []string {
 
 func assertRow(t *testing.T, row, classes, name, status string) {
 	t.Helper()
-	for _, c := range strings.Fields(classes) {
+	for c := range strings.FieldsSeq(classes) {
 		if !strings.Contains(row, c) {
 			t.Errorf("row missing class %q:\n%s", c, row)
 		}
@@ -189,7 +189,7 @@ func assertRow(t *testing.T, row, classes, name, status string) {
 	if !strings.Contains(row, ">"+name+"<") {
 		t.Errorf("row missing name %q:\n%s", name, row)
 	}
-	for _, part := range strings.Fields(status) {
+	for part := range strings.FieldsSeq(status) {
 		if !strings.Contains(row, part) {
 			t.Errorf("row missing status %q:\n%s", part, row)
 		}
