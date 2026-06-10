@@ -15,8 +15,8 @@ import (
 func Screenshot(t *testing.T, page *rod.Page, name string) {
 	t.Helper()
 	dir := filepath.Join(TestdataDir(), "screenshots")
-	os.MkdirAll(dir, 0o755)
 	path := filepath.Join(dir, name+".png")
+	os.MkdirAll(filepath.Dir(path), 0o755)
 	data, err := page.Timeout(10*time.Second).Screenshot(true, &proto.PageCaptureScreenshot{
 		Format: proto.PageCaptureScreenshotFormatPng,
 	})
@@ -24,7 +24,10 @@ func Screenshot(t *testing.T, page *rod.Page, name string) {
 		t.Logf("screenshot failed: %v", err)
 		return
 	}
-	os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Logf("screenshot write failed: %v", err)
+		return
+	}
 	t.Logf("screenshot saved: %s", path)
 }
 
@@ -38,14 +41,17 @@ func ScreenshotOnFailure(t *testing.T, page *rod.Page, name string) {
 func DumpDOM(t *testing.T, page *rod.Page, name string) {
 	t.Helper()
 	dir := filepath.Join(TestdataDir(), "screenshots")
-	os.MkdirAll(dir, 0o755)
 	path := filepath.Join(dir, name+".html")
+	os.MkdirAll(filepath.Dir(path), 0o755)
 	html, err := page.Timeout(10 * time.Second).HTML()
 	if err != nil {
 		t.Logf("DOM dump failed: %v", err)
 		return
 	}
-	os.WriteFile(path, []byte(html), 0o644)
+	if err := os.WriteFile(path, []byte(html), 0o644); err != nil {
+		t.Logf("DOM dump write failed: %v", err)
+		return
+	}
 	t.Logf("DOM dump saved: %s", path)
 }
 

@@ -36,15 +36,56 @@ var (
 	cassetteClaims   = map[string]string{} // cassette filename → owning test name
 )
 
+// SecretSource describes a credential file and how to expose it to the container.
+// In record mode, the host file is read and either bind-mounted or passed as an env
+// var. In replay mode, all secrets are silently skipped (dummy credentials suffice).
+type SecretSource struct {
+	HostPath  string // path on host, ~ is expanded to $HOME
+	EnvVar    string // if set, read file content and pass as this env var
+	MountPath string // if set, bind-mount HostPath to this container path (read-only)
+}
+
+// ProviderConfig bundles the parameters that differ between API providers
+// (Anthropic, DeepSeek, etc.) for recording and replaying cassettes.
+type ProviderConfig struct {
+	Name     string         // used as cassette subdirectory name (e.g. "anthropic", "ds4")
+	Upstream string         // record-mode proxy target (e.g. "https://api.anthropic.com")
+	Model    string         // ANTHROPIC_MODEL value pinned for deterministic request bodies
+	EnvVars  []string       // static env vars passed to the container (e.g. CLAUDE_CODE_SUBAGENT_MODEL)
+	Secrets  []SecretSource // credential files, only used in record mode
+}
+
+// AllProviders lists every provider that integration tests iterate over.
+// The default go test run exercises all providers; -run selects subsets.
+var AllProviders = []ProviderConfig{
+	{
+		Name:     "anthropic",
+		Upstream: "https://api.anthropic.com",
+		Model:    "claude-opus-4-7",
+		Secrets: []SecretSource{
+			{HostPath: "~/.claude/.credentials.json", MountPath: "/root/.claude/.credentials.json"},
+		},
+	},
+	{
+		Name:     "ds4",
+		Upstream: "https://api.deepseek.com/anthropic",
+		Model:    "deepseek-v4-pro[1m]",
+		EnvVars:  []string{"CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash"},
+		Secrets: []SecretSource{
+			{HostPath: "~/.deepseek/api_key", EnvVar: "ANTHROPIC_AUTH_TOKEN"},
+		},
+	},
+}
+
 // SetupWithSharedCassette is for tests that share a cassette owned by another
 // test. In record mode, the test skips so the owner's recording isn't
 // clobbered. In replay mode, it behaves identically to SetupWithContainer.
-func SetupWithSharedCassette(t *testing.T, cassetteName, mode string) *ContainerFixture {
+func SetupWithSharedCassette(t *testing.T, p ProviderConfig, cassetteName, mode string) *ContainerFixture {
 	t.Helper()
 	if mode == "record" {
-		t.Skipf("cassette %s is owned by another test; skipping during record", cassetteName)
+		t.Skipf("cassette %s/%s is owned by another test; skipping during record", p.Name, cassetteName)
 	}
-	return SetupWithContainer(t, cassetteName, mode)
+	return SetupWithContainer(t, p, cassetteName, mode)
 }
 
 // buildDockerImage builds the docker image once per test run.
@@ -146,11 +187,12 @@ func (f *ContainerFixture) KBWithStdin(cwd, stdin string, args ...string) string
 
 // SetupWithContainer starts a docker container running the monetdroid server
 // (the test binary itself in server mode) with claude available as a subprocess,
-// and an API replayer intercepting Anthropic API calls.
+// and an API replayer intercepting API calls.
 //
-// mode is "record" or "replay".
-// cassetteName is the filename under testdata/cassettes/ (e.g. "tool_use.jsonl.zst").
-func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixture {
+// p supplies the provider-specific upstream URL, model name, env vars, and
+// secrets. mode is "record" or "replay". cassetteName is the filename under
+// testdata/cassettes/<provider>/ (e.g. "tool_use.jsonl.zst").
+func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode string) *ContainerFixture {
 	t.Helper()
 
 	// Check docker is available
@@ -161,33 +203,33 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 	// Build docker image (once per test run)
 	buildDockerImage(t)
 
-	cassettesDir := filepath.Join(TestdataDir(), "cassettes")
+	cassettesDir := filepath.Join(TestdataDir(), "cassettes", p.Name)
 	os.MkdirAll(cassettesDir, 0o755)
 	cassettePath := filepath.Join(cassettesDir, cassetteName)
 
 	// In replay mode, cassette must exist
 	if mode == "replay" {
 		if _, err := os.Stat(cassettePath); err != nil {
-			t.Fatalf("cassette %s not found, record it first with -record flag", cassetteName)
+			t.Fatalf("cassette %s/%s not found, record it first with -record flag", p.Name, cassetteName)
 		}
 	}
 
 	// In record mode, guard against two tests claiming the same cassette in
 	// the same run, otherwise the later test's os.Create overwrites the earlier
 	// test's recording. Non-owners should use SetupWithSharedCassette.
+	claimKey := p.Name + "/" + cassetteName
 	if mode == "record" {
 		cassetteClaimsMu.Lock()
-		if owner, taken := cassetteClaims[cassetteName]; taken && owner != t.Name() {
+		if owner, taken := cassetteClaims[claimKey]; taken && owner != t.Name() {
 			cassetteClaimsMu.Unlock()
-			t.Fatalf("cassette %s already claimed by %s in this run; use SetupWithSharedCassette if this test doesn't own the recording", cassetteName, owner)
+			t.Fatalf("cassette %s already claimed by %s in this run; use SetupWithSharedCassette if this test doesn't own the recording", claimKey, owner)
 		}
-		cassetteClaims[cassetteName] = t.Name()
+		cassetteClaims[claimKey] = t.Name()
 		cassetteClaimsMu.Unlock()
 	}
 
 	// Start replayer on the host
-	upstream := "https://api.anthropic.com"
-	replayer := NewReplayer(t, cassettePath, mode, upstream)
+	replayer := NewReplayer(t, cassettePath, mode, p.Upstream)
 	replayerURL := replayer.Start()
 
 	// Get the test binary path so we can bind-mount it into the container.
@@ -211,18 +253,36 @@ func SetupWithContainer(t *testing.T, cassetteName, mode string) *ContainerFixtu
 		"-e", "CLAUDE_CODE_MAX_RETRIES=0",
 		// Pin the model so record and replay send identical request bodies
 		// regardless of the auth type the Claude CLI sees.
-		"-e", "ANTHROPIC_MODEL=claude-opus-4-7",
+		"-e", "ANTHROPIC_MODEL=" + p.Model,
+	}
+
+	for _, ev := range p.EnvVars {
+		dockerArgs = append(dockerArgs, "-e", ev)
 	}
 
 	if mode == "record" {
 		home, _ := os.UserHomeDir()
-		credsFile := filepath.Join(home, ".claude", ".credentials.json")
-		if _, err := os.Stat(credsFile); err == nil {
-			dockerArgs = append(dockerArgs,
-				"-v", credsFile+":/root/.claude/.credentials.json:ro",
-			)
-		} else {
-			t.Logf("warning: credentials file %s not found, recording may fail", credsFile)
+		for _, s := range p.Secrets {
+			hostPath := s.HostPath
+			if strings.HasPrefix(hostPath, "~/") {
+				hostPath = filepath.Join(home, hostPath[2:])
+			}
+			if s.MountPath != "" {
+				if _, err := os.Stat(hostPath); err == nil {
+					dockerArgs = append(dockerArgs,
+						"-v", hostPath+":"+s.MountPath+":ro",
+					)
+				} else {
+					t.Logf("warning: secret file %s not found, recording may fail", hostPath)
+				}
+			}
+			if s.EnvVar != "" {
+				data, err := os.ReadFile(hostPath)
+				if err != nil {
+					t.Fatalf("secret file %s: %v", hostPath, err)
+				}
+				dockerArgs = append(dockerArgs, "-e", s.EnvVar+"="+strings.TrimSpace(string(data)))
+			}
 		}
 	}
 	// Replay mode: no credentials are mounted; the test binary's TestMain

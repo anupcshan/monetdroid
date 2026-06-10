@@ -56,164 +56,165 @@ func main() {
 
 func TestEditReviewComment(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "edit_review.jsonl.zst", testMode())
+	WithProviders(t, "edit_review.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 
-	f.WriteFile(containerWorkdir+"/server.go", serverFile)
+		f.WriteFile(containerWorkdir+"/server.go", serverFile)
 
-	page := f.Page()
+		page := f.Page()
 
-	// Create session.
-	CreatePlainSession(t, page, containerWorkdir)
-	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+		// Create session.
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-	// Ask Claude to edit something in the middle of the file.
-	page.MustElement(`textarea[name="text"]`).MustInput(
-		"In server.go, change the handleGreet function to return 'Greetings, <name>!' instead of 'Hello, <name>!'. Use the Edit tool.")
-	page.MustElement(`.send-btn`).MustClick()
+		// Ask Claude to edit something in the middle of the file.
+		page.MustElement(`textarea[name="text"]`).MustInput(
+			"In server.go, change the handleGreet function to return 'Greetings, <name>!' instead of 'Hello, <name>!'. Use the Edit tool.")
+		page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for permission prompt with diff (inline inside tool chip).
-	WaitForElement(t, page, ".perm-inline", 60*time.Second)
+		// Wait for permission prompt with diff (inline inside tool chip).
+		WaitForElement(t, page, ".perm-inline", 60*time.Second)
 
-	// Diff table with clickable line numbers must be present.
-	WaitForElement(t, page, ".diff-table", 10*time.Second)
-	WaitForElement(t, page, ".diff-line-num", 10*time.Second)
-	Screenshot(t, page, "edit_review_diff")
+		// Diff table with clickable line numbers must be present.
+		WaitForElement(t, page, ".diff-table", 10*time.Second)
+		WaitForElement(t, page, ".diff-line-num", 10*time.Second)
+		Screenshot(t, page, "edit_review_diff")
 
-	// Click the line number on an added line to open the comment form.
-	// There may be multiple Edit tool chips (Claude retries after errors).
-	// Scope to the open one (the one with the perm-inline).
-	activeChip := WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second)
-	activeChip.MustClick()
+		// Click the line number on an added line to open the comment form.
+		// There may be multiple Edit tool chips (Claude retries after errors).
+		// Scope to the open one (the one with the perm-inline).
+		activeChip := WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second)
+		activeChip.MustClick()
 
-	// Fill in the review comment form.
-	WaitForElement(t, page, ".review-form", 5*time.Second)
-	page.MustEval(`() => document.querySelector('.review-form').scrollIntoView({block:'center'})`)
-	Screenshot(t, page, "edit_review_form")
+		// Fill in the review comment form.
+		WaitForElement(t, page, ".review-form", 5*time.Second)
+		page.MustEval(`() => document.querySelector('.review-form').scrollIntoView({block:'center'})`)
+		Screenshot(t, page, "edit_review_form")
 
-	page.MustElement(".review-textarea").MustInput("Consider using log.Printf instead of fmt.Fprintf for consistency with the rest of the file")
-	page.MustElement(".review-submit").MustClick()
+		page.MustElement(".review-textarea").MustInput("Consider using log.Printf instead of fmt.Fprintf for consistency with the rest of the file")
+		page.MustElement(".review-submit").MustClick()
 
-	// Comment chip should appear, and review bar should show 1 comment.
-	WaitForElement(t, page, ".review-comment", 5*time.Second)
-	WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
-	Screenshot(t, page, "edit_review_comment_added")
+		// Comment chip should appear, and review bar should show 1 comment.
+		WaitForElement(t, page, ".review-comment", 5*time.Second)
+		WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
+		Screenshot(t, page, "edit_review_comment_added")
 
-	// Allow the edit permission.
-	page.MustElement(`.perm-allow`).MustClick()
-	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
+		// Allow the edit permission.
+		page.MustElement(`.perm-allow`).MustClick()
+		WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 
-	// Wait for first turn to complete.
-	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
-	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		// Wait for first turn to complete.
+		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Review bar should still be visible with the comment.
-	WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
-	Screenshot(t, page, "edit_review_before_send")
+		// Review bar should still be visible with the comment.
+		WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
+		Screenshot(t, page, "edit_review_before_send")
 
-	// Send the review.
-	page.MustElement(".review-send-btn").MustClick()
+		// Send the review.
+		page.MustElement(".review-send-btn").MustClick()
 
-	// Review message should appear as a user message.
-	_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
-	if err != nil {
-		Screenshot(t, page, "edit_review_send_fail")
-		t.Fatalf("review message never appeared: %v", err)
-	}
-	Screenshot(t, page, "edit_review_sent")
+		// Review message should appear as a user message.
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		if err != nil {
+			Screenshot(t, page, "edit_review_send_fail")
+			t.Fatalf("review message never appeared: %v", err)
+		}
+		Screenshot(t, page, "edit_review_sent")
 
-	// Review bar should be cleared.
-	reviewBarHTML := page.MustEval(`() => document.getElementById('review-bar').innerHTML`).String()
-	if strings.Contains(reviewBarHTML, "comment") {
-		Screenshot(t, page, "edit_review_bar_not_cleared")
-		t.Fatalf("review bar should be empty after send, got: %s", reviewBarHTML)
-	}
+		// Review bar should be cleared.
+		reviewBarHTML := page.MustEval(`() => document.getElementById('review-bar').innerHTML`).String()
+		if strings.Contains(reviewBarHTML, "comment") {
+			Screenshot(t, page, "edit_review_bar_not_cleared")
+			t.Fatalf("review bar should be empty after send, got: %s", reviewBarHTML)
+		}
 
-	// Wait for Claude to respond to the review.
-	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
-	Screenshot(t, page, "edit_review_response")
+		// Wait for Claude to respond to the review.
+		WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+		Screenshot(t, page, "edit_review_response")
+	})
 }
-
 func TestWriteReviewComment(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "write_review.jsonl.zst", testMode())
+	WithProviders(t, "write_review.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 
-	page := f.Page()
+		page := f.Page()
 
-	// Create session.
-	CreatePlainSession(t, page, containerWorkdir)
-	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+		// Create session.
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-	// --- Turn 1: Create a new file (Write to nonexistent path) ---
+		// --- Turn 1: Create a new file (Write to nonexistent path) ---
 
-	page.MustElement(`textarea[name="text"]`).MustInput(
-		"Create a new file called calculator.go with a Calculator struct that has Add, Subtract, Multiply, and Divide methods. Each method should take two float64 arguments and return (float64, error). Divide should return an error for division by zero. Include a package declaration and imports. Use the Write tool.")
-	page.MustElement(`.send-btn`).MustClick()
+		page.MustElement(`textarea[name="text"]`).MustInput(
+			"Create a new file called calculator.go with a Calculator struct that has Add, Subtract, Multiply, and Divide methods. Each method should take two float64 arguments and return (float64, error). Divide should return an error for division by zero. Include a package declaration and imports. Use the Write tool.")
+		page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for permission with all-additions diff.
-	WaitForElement(t, page, ".perm-inline", 60*time.Second)
+		// Wait for permission with all-additions diff.
+		WaitForElement(t, page, ".perm-inline", 60*time.Second)
 
-	// All-additions diff table with clickable line numbers.
-	WaitForElement(t, page, ".diff-table", 10*time.Second)
-	WaitForElement(t, page, ".diff-line-num", 10*time.Second)
+		// All-additions diff table with clickable line numbers.
+		WaitForElement(t, page, ".diff-table", 10*time.Second)
+		WaitForElement(t, page, ".diff-line-num", 10*time.Second)
 
-	// Verify these are all insertion lines (Write diff is all green).
-	insRows := page.MustElements(".diff-ins")
-	if len(insRows) == 0 {
-		Screenshot(t, page, "write_review_no_ins_rows")
-		t.Fatal("expected insertion rows in Write diff, got none")
-	}
-	// No removal lines should exist in a Write diff.
-	delRows := page.MustElements(".diff-del")
-	if len(delRows) > 0 {
-		Screenshot(t, page, "write_review_unexpected_del")
-		t.Fatalf("expected no deletion rows in Write diff, got %d", len(delRows))
-	}
-	Screenshot(t, page, "write_review_new_file_diff")
+		// Verify these are all insertion lines (Write diff is all green).
+		insRows := page.MustElements(".diff-ins")
+		if len(insRows) == 0 {
+			Screenshot(t, page, "write_review_no_ins_rows")
+			t.Fatal("expected insertion rows in Write diff, got none")
+		}
+		// No removal lines should exist in a Write diff.
+		delRows := page.MustElements(".diff-del")
+		if len(delRows) > 0 {
+			Screenshot(t, page, "write_review_unexpected_del")
+			t.Fatalf("expected no deletion rows in Write diff, got %d", len(delRows))
+		}
+		Screenshot(t, page, "write_review_new_file_diff")
 
-	// Click line number on an added line (scope to open tool chip).
-	WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second).MustClick()
+		// Click line number on an added line (scope to open tool chip).
+		WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second).MustClick()
 
-	// Fill review comment.
-	WaitForElement(t, page, ".review-form", 5*time.Second)
-	page.MustElement(".review-textarea").MustInput("Add godoc comments to the exported methods")
-	page.MustElement(".review-submit").MustClick()
+		// Fill review comment.
+		WaitForElement(t, page, ".review-form", 5*time.Second)
+		page.MustElement(".review-textarea").MustInput("Add godoc comments to the exported methods")
+		page.MustElement(".review-submit").MustClick()
 
-	// Verify comment chip and review bar.
-	WaitForElement(t, page, ".review-comment", 5*time.Second)
-	WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
-	Screenshot(t, page, "write_review_new_file_comment")
+		// Verify comment chip and review bar.
+		WaitForElement(t, page, ".review-comment", 5*time.Second)
+		WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
+		Screenshot(t, page, "write_review_new_file_comment")
 
-	// Allow the write.
-	page.MustElement(`.perm-allow`).MustClick()
-	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
+		// Allow the write.
+		page.MustElement(`.perm-allow`).MustClick()
+		WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 
-	// Wait for first turn to complete.
-	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
-	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		// Wait for first turn to complete.
+		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Send the review for the new file.
-	page.MustElement(".review-send-btn").MustClick()
-	_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
-	if err != nil {
-		Screenshot(t, page, "write_review_new_send_fail")
-		t.Fatalf("review message for new file never appeared: %v", err)
-	}
-	Screenshot(t, page, "write_review_new_file_sent")
+		// Send the review for the new file.
+		page.MustElement(".review-send-btn").MustClick()
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		if err != nil {
+			Screenshot(t, page, "write_review_new_send_fail")
+			t.Fatalf("review message for new file never appeared: %v", err)
+		}
+		Screenshot(t, page, "write_review_new_file_sent")
 
-	// Claude acts on the review (reads the file, edits to add godoc comments).
-	// Enable Accept Edits via the mode bar, then allow the current permission.
-	WaitForElement(t, page, ".perm-inline", 120*time.Second)
-	page.MustElement(`.mode-accept-edits`).MustClick()
-	page.MustElement(`.perm-allow`).MustClick()
+		// Claude acts on the review (reads the file, edits to add godoc comments).
+		// Enable Accept Edits via the mode bar, then allow the current permission.
+		WaitForElement(t, page, ".perm-inline", 120*time.Second)
+		page.MustElement(`.mode-accept-edits`).MustClick()
+		page.MustElement(`.perm-allow`).MustClick()
 
-	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
-	Screenshot(t, page, "write_review_response")
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		Screenshot(t, page, "write_review_response")
 
-	// Verify the file was written.
-	content := f.ReadFile(containerWorkdir + "/calculator.go")
-	if !strings.Contains(content, "Calculator") {
-		t.Fatalf("calculator.go should contain Calculator, got: %.200s", content)
-	}
+		// Verify the file was written.
+		content := f.ReadFile(containerWorkdir + "/calculator.go")
+		if !strings.Contains(content, "Calculator") {
+			t.Fatalf("calculator.go should contain Calculator, got: %.200s", content)
+		}
+	})
 }
 
 // calculatorFile is an existing file for the overwrite test.
@@ -254,166 +255,168 @@ func main() {
 
 func TestOverwriteReviewComment(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "overwrite_review.jsonl.zst", testMode())
+	WithProviders(t, "overwrite_review.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 
-	f.WriteFile(containerWorkdir+"/calculator.go", calculatorFile)
+		f.WriteFile(containerWorkdir+"/calculator.go", calculatorFile)
 
-	page := f.Page()
+		page := f.Page()
 
-	// Create session.
-	CreatePlainSession(t, page, containerWorkdir)
-	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+		// Create session.
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-	// Ask Claude to overwrite the file.
-	page.MustElement(`textarea[name="text"]`).MustInput(
-		"Rewrite calculator.go using the Write tool. The new file must: (1) keep the existing Add, Subtract, Multiply, Divide methods unchanged, (2) add a Modulo(a, b int) int method on Calculator that returns a % b, (3) add a one-line godoc comment on each exported type and method.")
-	page.MustElement(`.send-btn`).MustClick()
+		// Ask Claude to overwrite the file.
+		page.MustElement(`textarea[name="text"]`).MustInput(
+			"Rewrite calculator.go using the Write tool. The new file must: (1) keep the existing Add, Subtract, Multiply, Divide methods unchanged, (2) add a Modulo(a, b int) int method on Calculator that returns a % b, (3) add a one-line godoc comment on each exported type and method. Do not verify it compiles or run any build commands.")
+		page.MustElement(`.send-btn`).MustClick()
 
-	// Wait for permission with diff. An overwrite of an existing file should
-	// show a real diff with context lines (old+new line numbers), not all-green.
-	WaitForElement(t, page, ".perm-inline", 60*time.Second)
-	WaitForElement(t, page, ".tool-chip[open] .diff-table", 10*time.Second)
+		// Wait for permission with diff. An overwrite of an existing file should
+		// show a real diff with context lines (old+new line numbers), not all-green.
+		WaitForElement(t, page, ".perm-inline", 60*time.Second)
+		WaitForElement(t, page, ".tool-chip[open] .diff-table", 10*time.Second)
 
-	// Context lines have both old and new gutter numbers, which proves this is a
-	// real diff against the existing file, not the all-additions fallback.
-	ctxRows := page.MustElements(".tool-chip[open] .diff-ctx")
-	if len(ctxRows) == 0 {
-		Screenshot(t, page, "overwrite_review_no_ctx_rows")
-		t.Fatal("overwrite diff should show context rows (real diff against existing file)")
-	}
-	Screenshot(t, page, "overwrite_review_diff")
+		// Context lines have both old and new gutter numbers, which proves this is a
+		// real diff against the existing file, not the all-additions fallback.
+		ctxRows := page.MustElements(".tool-chip[open] .diff-ctx")
+		if len(ctxRows) == 0 {
+			Screenshot(t, page, "overwrite_review_no_ctx_rows")
+			t.Fatal("overwrite diff should show context rows (real diff against existing file)")
+		}
+		Screenshot(t, page, "overwrite_review_diff")
 
-	// Click line number on an added line.
-	WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second).MustClick()
+		// Click line number on an added line.
+		WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second).MustClick()
 
-	// Fill review comment.
-	WaitForElement(t, page, ".review-form", 5*time.Second)
-	page.MustElement(".review-textarea").MustInput("Change the Modulo signature to return (int, error) and return an error on division by zero, matching the Divide pattern.")
-	page.MustElement(".review-submit").MustClick()
+		// Fill review comment.
+		WaitForElement(t, page, ".review-form", 5*time.Second)
+		page.MustElement(".review-textarea").MustInput("Change the Modulo signature to return (int, error) and return an error on division by zero, matching the Divide pattern.")
+		page.MustElement(".review-submit").MustClick()
 
-	// Verify comment chip and review bar.
-	WaitForElement(t, page, ".review-comment", 5*time.Second)
-	WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
-	Screenshot(t, page, "overwrite_review_comment_added")
+		// Verify comment chip and review bar.
+		WaitForElement(t, page, ".review-comment", 5*time.Second)
+		WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
+		Screenshot(t, page, "overwrite_review_comment_added")
 
-	// Allow the overwrite.
-	page.MustElement(`.perm-allow`).MustClick()
-	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
+		// Allow the overwrite.
+		page.MustElement(`.perm-allow`).MustClick()
+		WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 
-	// Wait for turn to complete.
-	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
-	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		// Wait for turn to complete.
+		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Send the review.
-	page.MustElement(".review-send-btn").MustClick()
-	_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
-	if err != nil {
-		Screenshot(t, page, "overwrite_review_send_fail")
-		t.Fatalf("review message never appeared: %v", err)
-	}
-	Screenshot(t, page, "overwrite_review_sent")
+		// Send the review.
+		page.MustElement(".review-send-btn").MustClick()
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		if err != nil {
+			Screenshot(t, page, "overwrite_review_send_fail")
+			t.Fatalf("review message never appeared: %v", err)
+		}
+		Screenshot(t, page, "overwrite_review_sent")
 
-	// Claude acts on the review (adds a division-by-zero check to Modulo).
-	// Enable Accept Edits via the mode bar, then allow the current permission.
-	WaitForElement(t, page, ".perm-inline", 120*time.Second)
-	page.MustElement(`.mode-accept-edits`).MustClick()
-	page.MustElement(`.perm-allow`).MustClick()
+		// Claude acts on the review (adds a division-by-zero check to Modulo).
+		// Enable Accept Edits via the mode bar, then allow the current permission.
+		WaitForElement(t, page, ".perm-inline", 120*time.Second)
+		page.MustElement(`.mode-accept-edits`).MustClick()
+		page.MustElement(`.perm-allow`).MustClick()
 
-	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
-	Screenshot(t, page, "overwrite_review_response")
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		Screenshot(t, page, "overwrite_review_response")
 
-	// Verify the Write in turn 1 actually reached disk.
-	content := f.ReadFile(containerWorkdir + "/calculator.go")
-	if !strings.Contains(content, "Modulo") {
-		t.Fatalf("Write did not reach disk: %.500s", content)
-	}
-	// Verify the follow-up Edit added the division-by-zero check.
-	// Divide already had one in the starting file, so count should be >= 2.
-	if strings.Count(content, "b == 0") < 2 {
-		t.Fatalf("Modulo should have division-by-zero check after review, got: %.500s", content)
-	}
+		// Verify the Write in turn 1 actually reached disk.
+		content := f.ReadFile(containerWorkdir + "/calculator.go")
+		if !strings.Contains(content, "Modulo") {
+			t.Fatalf("Write did not reach disk: %.500s", content)
+		}
+		// Verify the follow-up Edit added the division-by-zero check.
+		// Divide already had one in the starting file, so count should be >= 2.
+		if strings.Count(content, "b == 0") < 2 {
+			t.Fatalf("Modulo should have division-by-zero check after review, got: %.500s", content)
+		}
+	})
 }
 
 func TestFilesPageReviewComment(t *testing.T) {
 	t.Parallel()
-	f := SetupWithContainer(t, "files_review.jsonl.zst", testMode())
+	WithProviders(t, "files_review.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 
-	// Initialize git repo so git status / git diff work on the files page.
-	initGitRepo(t, f, containerWorkdir)
-	f.WriteFile(containerWorkdir+"/server.go", serverFile)
+		// Initialize git repo so git status / git diff work on the files page.
+		initGitRepo(t, f, containerWorkdir)
+		f.WriteFile(containerWorkdir+"/server.go", serverFile)
 
-	page := f.Page()
+		page := f.Page()
 
-	// Create session.
-	CreatePlainSession(t, page, containerWorkdir)
-	WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+		// Create session.
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-	// Ask Claude to edit something in the middle of the file.
-	page.MustElement("textarea[name=\"text\"]").MustInput(
-		"In server.go, change the handleGreet function to return 'Greetings, <name>!' instead of 'Hello, <name>!'. Use the Edit tool.")
-	page.MustElement(".send-btn").MustClick()
+		// Ask Claude to edit something in the middle of the file.
+		page.MustElement("textarea[name=\"text\"]").MustInput(
+			"In server.go, change the handleGreet function to return 'Greetings, <name>!' instead of 'Hello, <name>!'. Use the Edit tool.")
+		page.MustElement(".send-btn").MustClick()
 
-	// Wait for permission prompt with diff.
-	WaitForElement(t, page, ".perm-inline", 60*time.Second)
-	WaitForElement(t, page, ".diff-table", 10*time.Second)
-	WaitForElement(t, page, ".diff-line-num", 10*time.Second)
-	Screenshot(t, page, "files_review_diff")
+		// Wait for permission prompt with diff.
+		WaitForElement(t, page, ".perm-inline", 60*time.Second)
+		WaitForElement(t, page, ".diff-table", 10*time.Second)
+		WaitForElement(t, page, ".diff-line-num", 10*time.Second)
+		Screenshot(t, page, "files_review_diff")
 
-	// Allow the edit immediately. No comment added here.
-	page.MustElement(".perm-allow").MustClick()
-	WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
+		// Allow the edit immediately. No comment added here.
+		page.MustElement(".perm-allow").MustClick()
+		WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
 
-	// Wait for first turn to complete.
-	WaitForElement(t, page, ".msg-assistant", 60*time.Second)
-	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		// Wait for first turn to complete.
+		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-	// Navigate to the files page to see the diff from Claude's edit.
-	sessionID := page.MustEval("() => new URLSearchParams(window.location.search).get('session')").String()
-	page.MustNavigate(f.ServerURL + "/files?session=" + sessionID)
-	WaitForElement(t, page, ".diff-table", 10*time.Second)
-	WaitForElement(t, page, ".diff-ins .diff-line-num", 5*time.Second)
-	Screenshot(t, page, "files_page_diff")
+		// Navigate to the files page to see the diff from Claude's edit.
+		sessionID := page.MustEval("() => new URLSearchParams(window.location.search).get('session')").String()
+		page.MustNavigate(f.ServerURL + "/files?session=" + sessionID)
+		WaitForElement(t, page, ".diff-table", 10*time.Second)
+		WaitForElement(t, page, ".diff-ins .diff-line-num", 5*time.Second)
+		Screenshot(t, page, "files_page_diff")
 
-	// Click a line number on an insertion line to open the comment form.
-	page.MustElement(".diff-ins .diff-line-num").MustClick()
-	WaitForElement(t, page, ".review-form", 5*time.Second)
-	page.MustEval("() => document.querySelector('.review-form').scrollIntoView({block:'center'})")
-	Screenshot(t, page, "files_page_review_form")
+		// Click a line number on an insertion line to open the comment form.
+		page.MustElement(".diff-ins .diff-line-num").MustClick()
+		WaitForElement(t, page, ".review-form", 5*time.Second)
+		page.MustEval("() => document.querySelector('.review-form').scrollIntoView({block:'center'})")
+		Screenshot(t, page, "files_page_review_form")
 
-	// Fill in and submit the comment.
-	page.MustElement(".review-textarea").MustInput("Consider using log.Printf instead of fmt.Fprintf for consistency with the rest of the file")
-	page.MustElement(".review-submit").MustClick()
+		// Fill in and submit the comment.
+		page.MustElement(".review-textarea").MustInput("Consider using log.Printf instead of fmt.Fprintf for consistency with the rest of the file")
+		page.MustElement(".review-submit").MustClick()
 
-	// Comment chip should appear.
-	WaitForElement(t, page, ".review-comment", 5*time.Second)
-	Screenshot(t, page, "files_page_comment_added")
+		// Comment chip should appear.
+		WaitForElement(t, page, ".review-comment", 5*time.Second)
+		Screenshot(t, page, "files_page_comment_added")
 
-	// Click "← back" to return to the main session page. The warm reload
-	// includes reviewCount in RenderFull, so the review bar shows the
-	// pending comment.
-	page.MustElementR("a", "← back").MustClick()
-	WaitForText(t, page, ".review-bar", "1 comment", 10*time.Second)
-	Screenshot(t, page, "files_page_before_send")
+		// Click "← back" to return to the main session page. The warm reload
+		// includes reviewCount in RenderFull, so the review bar shows the
+		// pending comment.
+		page.MustElementR("a", "← back").MustClick()
+		WaitForText(t, page, ".review-bar", "1 comment", 10*time.Second)
+		Screenshot(t, page, "files_page_before_send")
 
-	// Send the review.
-	page.MustElement(".review-send-btn").MustClick()
+		// Send the review.
+		page.MustElement(".review-send-btn").MustClick()
 
-	// Review message should appear as a user message.
-	_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
-	if err != nil {
-		Screenshot(t, page, "files_page_send_fail")
-		t.Fatalf("review message never appeared: %v", err)
-	}
-	Screenshot(t, page, "files_page_sent")
+		// Review message should appear as a user message.
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		if err != nil {
+			Screenshot(t, page, "files_page_send_fail")
+			t.Fatalf("review message never appeared: %v", err)
+		}
+		Screenshot(t, page, "files_page_sent")
 
-	// Review bar should be cleared.
-	reviewBarHTML := page.MustEval("() => document.getElementById('review-bar').innerHTML").String()
-	if strings.Contains(reviewBarHTML, "comment") {
-		Screenshot(t, page, "files_page_bar_not_cleared")
-		t.Fatalf("review bar should be empty after send, got: %s", reviewBarHTML)
-	}
+		// Review bar should be cleared.
+		reviewBarHTML := page.MustEval("() => document.getElementById('review-bar').innerHTML").String()
+		if strings.Contains(reviewBarHTML, "comment") {
+			Screenshot(t, page, "files_page_bar_not_cleared")
+			t.Fatalf("review bar should be empty after send, got: %s", reviewBarHTML)
+		}
 
-	// Wait for Claude to respond to the review.
-	WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
-	Screenshot(t, page, "files_page_response")
+		// Wait for Claude to respond to the review.
+		WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+		Screenshot(t, page, "files_page_response")
+	})
 }
