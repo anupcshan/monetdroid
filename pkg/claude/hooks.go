@@ -35,12 +35,11 @@ type postToolBatchTool struct {
 	ToolResponse toolResultContent `json:"tool_response"`
 }
 
-// stopPayload covers both Stop and StopFailure: both events carry
-// last_assistant_message with the turn's final user-visible text (for
-// StopFailure this is the API error text).
-type stopPayload struct {
-	SessionID    string `json:"session_id"`
-	FinalMessage string `json:"last_assistant_message"`
+// messageDisplayPayload covers MessageDisplay: fires when assistant text is
+// displayed, once per content block. Delta carries the full text.
+type messageDisplayPayload struct {
+	SessionID string `json:"session_id"`
+	Delta     string `json:"delta"`
 }
 
 // toolResultContent is PostToolBatch's tool_response: a serialized string
@@ -116,9 +115,7 @@ type HookEvent struct {
 //	PreToolUse        -> "assistant" event with a single tool_use block
 //	PostToolBatch     -> one "user" event per tool_call, each with a
 //	                     tool_result block carrying the stringified response
-//	Stop / StopFailure -> "assistant" event with a single text block
-//	                     (last_assistant_message; for StopFailure this is
-//	                     the API error text)
+//	MessageDisplay    -> "assistant" event with a single text block (delta)
 //
 // Returns nil for hook events that have no downstream consumer here.
 func hookToStreamEvents(eventName string, body []byte) []protocol.StreamEvent {
@@ -211,13 +208,13 @@ func hookToStreamEvents(eventName string, body []byte) []protocol.StreamEvent {
 		}
 		return events
 
-	case "Stop", "StopFailure":
-		var p stopPayload
+	case "MessageDisplay":
+		var p messageDisplayPayload
 		if err := json.Unmarshal(body, &p); err != nil {
-			log.Printf("[hook] %s parse: %v", eventName, err)
+			log.Printf("[hook] MessageDisplay parse: %v", err)
 			return nil
 		}
-		if p.FinalMessage == "" {
+		if p.Delta == "" {
 			return nil
 		}
 		return []protocol.StreamEvent{{
@@ -228,11 +225,12 @@ func hookToStreamEvents(eventName string, body []byte) []protocol.StreamEvent {
 				Content: protocol.StreamMessageContent{
 					Blocks: []protocol.StreamBlock{{
 						Type: "text",
-						Text: p.FinalMessage,
+						Text: p.Delta,
 					}},
 				},
 			},
 		}}
+
 	}
 	return nil
 }

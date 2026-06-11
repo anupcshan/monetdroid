@@ -255,9 +255,6 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	// call s.Append separately.
 	if s != nil && msg.Type != "text_delta" && msg.Type != "thinking_delta" {
 		s.Append(msg)
-		if s.Model != nil {
-			s.Model.Apply(msg)
-		}
 	}
 
 	// Update todos from TodoWrite/TaskCreate/TaskUpdate tool_use events
@@ -390,7 +387,8 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		})
 	}
 	if msg.Type == "done" {
-		// Refresh git diff stat
+		// Refresh git diff stat before sending to model so the cost bar
+		// rendered by the "done" event reflects the latest diff.
 		if s != nil {
 			cwd := s.GetCwd()
 			t := NewGitTrace("diff-stat")
@@ -451,59 +449,63 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 		}
 	}
 
-	// Model-driven rendering produces all OOB swaps.
-	if s != nil && s.Model != nil {
-		cmds := RenderEvent(s.Model, msg, sessionID)
-		if todosChanged {
-			todos := s.GetTodosCopy()
-			cmds = append(cmds,
-				DOMCmd{Target: "todos-summary", Strategy: "innerHTML", Content: RenderTodosSummary(todos)},
-				DOMCmd{Target: "todos-body", Strategy: "innerHTML", Content: RenderTodosBody(todos)},
-			)
-		}
-		// Permission detail upgrades and standalone chips (session-dependent).
+	// Send event to model for async state mutation and viewer push.
+	// Streaming deltas bypass the model (they don't mutate state).
+	if s != nil && s.Model != nil && msg.Type != "text_delta" && msg.Type != "thinking_delta" {
+		// Build permission upgrade callback (session-dependent logic).
+		var permUpgrades func([]DOMCmd) []DOMCmd
 		if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
-			if s.IsTopLevelTool(msg.ToolUseID) {
-				// Upgrade the tool chip's detail with richer permission detail.
-				upgraded := false
-				switch msg.PermTool {
-				case "Edit", "FileEdit":
-					if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
-						if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
-							cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: diffHTML})
+			toolUseID := msg.ToolUseID
+			sess := s
+			permUpgrades = func(cmds []DOMCmd) []DOMCmd {
+				if sess.IsTopLevelTool(toolUseID) {
+					upgraded := false
+					switch msg.PermTool {
+					case "Edit", "FileEdit":
+						if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
+							if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
+								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
+								upgraded = true
+							}
+						}
+					case "Write", "FileWrite":
+						if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
+							if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
+								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
+								upgraded = true
+							}
+						}
+					case "ExitPlanMode":
+						if msg.PermInput != nil && msg.PermInput.PlanMode != nil && msg.PermInput.PlanMode.Plan != "" {
+							cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: RenderMarkdown(msg.PermInput.PlanMode.Plan)})
 							upgraded = true
 						}
 					}
-				case "Write", "FileWrite":
-					if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
-						if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
-							cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: diffHTML})
-							upgraded = true
+					if !upgraded {
+						permDetail := FormatPermDetail(msg.PermTool, msg.PermInput)
+						if permDetail != "" {
+							cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: Esc(permDetail)})
 						}
 					}
-				case "ExitPlanMode":
-					if msg.PermInput != nil && msg.PermInput.PlanMode != nil && msg.PermInput.PlanMode.Plan != "" {
-						cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: RenderMarkdown(msg.PermInput.PlanMode.Plan)})
-						upgraded = true
+				} else {
+					rendered := RenderPermission(msg)
+					if rendered != "" {
+						cmds = append(cmds, DOMCmd{Target: "msg-content", Strategy: "beforeend", Content: rendered})
 					}
 				}
-				if !upgraded {
-					permDetail := FormatPermDetail(msg.PermTool, msg.PermInput)
-					if permDetail != "" {
-						cmds = append(cmds, DOMCmd{Target: "tool-detail-" + msg.ToolUseID, Strategy: "innerHTML", Content: Esc(permDetail)})
-					}
-				}
-			} else {
-				// Render sub-agent and unknown tool requests as standalone permission chips.
-				rendered := RenderPermission(msg)
-				if rendered != "" {
-					cmds = append(cmds, DOMCmd{Target: "msg-content", Strategy: "beforeend", Content: rendered})
-				}
+				return cmds
 			}
 		}
-		event := FormatSSEDOM(cmds)
-		if event != "" {
-			h.BroadcastToSession(sessionID, event, "", "")
+		push := func(html string) {
+			h.BroadcastToSession(sessionID, html, "", "")
+		}
+		switch {
+		case permUpgrades != nil:
+			s.Model.HandleEventWithUpgrades(msg, todosChanged, permUpgrades, push)
+		case todosChanged:
+			s.Model.HandleEventWithTodos(msg, todosChanged, push)
+		default:
+			s.Model.HandleEvent(msg, push)
 		}
 	}
 }
@@ -553,14 +555,14 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 	// Auto-label from first user message
 	s.TryAutoLabel(text)
 
-	s.SetRunning(true)
+	// Turn start is signalled by the UserPromptSubmit hook, which fires
+	// when proc.SendUserMessage delivers the message. No explicit
+	// "running" broadcast is needed.
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
-	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
 	go func() {
 		if err := proc.SendUserMessage(text, images); err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
-			s.SetRunning(false)
 			return
 		}
 		h.waitAndDrainLoop(s, proc)
@@ -572,10 +574,9 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 // is empty or the session is interrupted.
 func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 	for {
+		// Stop/StopFailure hook already broadcast "done" during the
+		// turn, so the model has already cleared turnActive.
 		proc.WaitForTurnDone(context.Background())
-
-		s.SetRunning(false)
-		h.Broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 
 		if proc.IsDead() {
 			s.CloseAllBgStops()
@@ -586,14 +587,13 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 			break
 		}
 
+		// UserPromptSubmit hook broadcasts "running" when
+		// SendUserMessage delivers the queued message.
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
-		s.SetRunning(true)
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
-		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
 		if err := proc.SendUserMessage(next, nil); err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
-			s.SetRunning(false)
 			return
 		}
 	}

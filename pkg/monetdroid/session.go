@@ -18,7 +18,6 @@ type Session struct {
 	Cwd               string
 	Branches          []string
 	PermissionMode    claude.PermissionMode
-	Running           bool
 	Interrupted       bool
 	CreatedAt         time.Time
 	JSONLPath         string
@@ -238,12 +237,6 @@ func (s *Session) FindPermInput(permID string) *protocol.ToolInput {
 }
 
 // --- Setters ---
-
-func (s *Session) SetRunning(v bool) {
-	s.mu.Lock()
-	s.Running = v
-	s.mu.Unlock()
-}
 
 func (s *Session) SetProc(proc claude.Process) {
 	s.mu.Lock()
@@ -654,11 +647,10 @@ func (s *Session) InitFromHistory(label, jsonlPath string, branches []string, co
 	s.mu.Unlock()
 }
 
-func (s *Session) InitLive(label string, autoLabel, running bool, proc claude.Process) {
+func (s *Session) InitLive(label string, autoLabel bool, proc claude.Process) {
 	s.mu.Lock()
 	s.Label = label
 	s.AutoLabel = autoLabel
-	s.Running = running
 	s.proc = proc
 	s.mu.Unlock()
 }
@@ -718,7 +710,7 @@ func (s *Session) ResetInterruptAndGetProc() claude.Process {
 func (s *Session) EnqueueMessage(text string) (bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.Running || len(s.PermChans) > 0 {
+	if s.Model == nil || !s.Model.CanInterrupt() || len(s.PermChans) > 0 {
 		return false, ""
 	}
 	if s.QueuedText != "" {

@@ -264,11 +264,23 @@ func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg))
 				broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: &CostInfo{ModelName: p.Model}})
 			}
 		}
+		broadcast(ServerMsg{Type: "session_started", SessionID: s.ID})
 	}
 
-	// Token count refresh: Stop/StopFailure signal a completed turn.
+	// UserPromptSubmit signals a turn start. Broadcast "running" so the
+	// model sets turnActive. On the new-session path, StartTurn also
+	// broadcasts "running" (the model does not yet exist when hooks are
+	// replayed). The duplicate is harmless: Apply is idempotent.
+	if env.EventName == "UserPromptSubmit" {
+		broadcast(ServerMsg{Type: "running", SessionID: s.ID})
+	}
+
+	// Stop/StopFailure signal a completed turn. Broadcast "done" so the
+	// model clears turnActive. Duplicate with waitAndDrainLoop's explicit
+	// broadcast is harmless (Apply is idempotent for turnActive).
 	// The JSONL file has been updated with the final assistant usage.
 	if env.EventName == "Stop" || env.EventName == "StopFailure" {
+		broadcast(ServerMsg{Type: "done", SessionID: s.ID})
 		refreshTokenCount(s, broadcast)
 	}
 

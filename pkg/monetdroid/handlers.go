@@ -260,7 +260,10 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if ds, err := GitDiffStat(NewGitTrace("page-diff-stat"), base.Cwd); err == nil {
 				s.SetDiffStat(ds)
 			}
-			s.Model = BuildModel(base, s.GetLog())
+			if s.Model != nil {
+				s.Model.Close()
+			}
+			s.Model = BuildModel(base, s.GetLog(), s.ID)
 			s.Model.DiffStat = s.GetDiffStat()
 			_, lastSeq = s.EventLog.Snapshot()
 			if isCold {
@@ -536,8 +539,33 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Create the session and replay buffered events
+		// Create the session, then build the model BEFORE replaying
+		// buffered events so hook-driven broadcasts (UserPromptSubmit
+		// → "running", SessionStart → "session_started") reach the
+		// model through HandleEvent.
 		s = h.Sessions.Create(claudeID, cwd)
+		autoLabel := label == ""
+		if autoLabel {
+			label = text
+			if len(label) > 60 {
+				label = label[:60] + "..."
+			}
+		}
+		s.InitLive(label, autoLabel, proc)
+
+		if label != "" {
+			h.Labels.Set(claudeID, label)
+		}
+
+		base := ModelBase{Cwd: cwd, Label: label, AutoLabel: autoLabel, PermMode: claude.PermDefault}
+		if ds, err := GitDiffStat(NewGitTrace("send-diff-stat"), cwd); err == nil {
+			s.SetDiffStat(ds)
+		}
+		s.Model = BuildModel(base, s.GetLog(), s.ID)
+		s.Model.DiffStat = s.GetDiffStat()
+
+		// Replay buffered events. The model exists, so hook-driven
+		// broadcasts reach HandleEvent.
 		mu.Lock()
 		sess = s
 		for i := range buffered {
@@ -549,18 +577,6 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		hookBuffered = nil
 		mu.Unlock()
-		autoLabel := label == ""
-		if autoLabel {
-			label = text
-			if len(label) > 60 {
-				label = label[:60] + "..."
-			}
-		}
-		s.InitLive(label, autoLabel, true, proc)
-
-		if label != "" {
-			h.Labels.Set(claudeID, label)
-		}
 
 		// Bind SSE clients that were waiting on this cwd
 		h.mu.RLock()
@@ -574,14 +590,8 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		h.mu.RUnlock()
 
-		// Create the model and render the full page for clients that were
-		// just bound from cwd-based to session-based SSE.
-		base := ModelBase{Cwd: cwd, Label: label, AutoLabel: autoLabel, PermMode: claude.PermDefault}
-		if ds, err := GitDiffStat(NewGitTrace("send-diff-stat"), cwd); err == nil {
-			s.SetDiffStat(ds)
-		}
-		s.Model = BuildModel(base, s.GetLog())
-		s.Model.DiffStat = s.GetDiffStat()
+		// Render the full page for clients that were just bound from
+		// cwd-based to session-based SSE.
 		cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))
 		labelText := label
 		if labelText == "" {
@@ -589,9 +599,10 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		h.BroadcastToSession(s.ID, FormatSSEDOM(cmds, TitleOob(labelText), FaviconOob(labelText)), "", "")
 
-		// Broadcast user message and running state
+		// Broadcast user message. Turn start is signalled by the
+		// UserPromptSubmit hook (already replayed), so no explicit
+		// "running" broadcast is needed.
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
-		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
 		// Wait for turn completion and drain queue in background
 		go func() {

@@ -36,7 +36,7 @@ func RenderFull(m *SessionModel, sessionID string, reviewCount int) []DOMCmd {
 
 	cmds = append(cmds, titleCmd(label)...)
 	cmds = append(cmds, cwdCopyCmd(m.Cwd)...)
-	cmds = append(cmds, runningCmds(m.Running)...)
+	cmds = append(cmds, activeCmds(m.HasActivity(), m.CanInterrupt())...)
 	cmds = append(cmds, costBarCmd(sessionID, m.Cwd, m.Cost, m.DiffStat)...)
 	cmds = append(cmds, modeBarCmd(sessionID, m.PermMode)...)
 	cmds = append(cmds, todoCmds(m.Todos)...)
@@ -56,20 +56,14 @@ func RenderFull(m *SessionModel, sessionID string, reviewCount int) []DOMCmd {
 func RenderEvent(m *SessionModel, msg ServerMsg, sessionID string) []DOMCmd {
 	switch msg.Type {
 	case "running":
-		return runningCmds(true)
+		return streamingClearCmds()
 
 	case "done":
-		var cmds []DOMCmd
-		cmds = append(cmds,
-			DOMCmd{Target: "running-dot", Strategy: "outerHTML",
-				Content: `<span id="running-dot" style="display:none"></span>`},
-			DOMCmd{Target: "stop-btn", Strategy: "outerHTML",
-				Content: `<span id="stop-btn"></span>`},
-			DOMCmd{Target: "thinking", Strategy: "innerHTML", Content: ""},
-			DOMCmd{Target: "streaming", Strategy: "innerHTML", Content: ""},
-			DOMCmd{Target: "cost-bar", Strategy: "innerHTML", Content: RenderCostBarModel(sessionID, m)},
-		)
-		return cmds
+		return []DOMCmd{
+			{Target: "thinking", Strategy: "innerHTML", Content: ""},
+			{Target: "streaming", Strategy: "innerHTML", Content: ""},
+			{Target: "cost-bar", Strategy: "innerHTML", Content: RenderCostBarModel(sessionID, m)},
+		}
 
 	case "cost":
 		if msg.Cost != nil {
@@ -285,22 +279,32 @@ func streamingClearCmds() []DOMCmd {
 	}
 }
 
-func runningCmds(running bool) []DOMCmd {
-	if running {
-		return []DOMCmd{
-			{Target: "running-dot", Strategy: "outerHTML",
+func activeCmds(active, canStop bool) []DOMCmd {
+	var cmds []DOMCmd
+	if active {
+		cmds = append(cmds,
+			DOMCmd{Target: "running-dot", Strategy: "outerHTML",
 				Content: `<span class="di-running" id="running-dot"></span>`},
-			{Target: "stop-btn", Strategy: "outerHTML",
+			DOMCmd{Target: "thinking", Strategy: "innerHTML", Content: `<span></span><span></span><span></span>`},
+		)
+	} else {
+		cmds = append(cmds,
+			DOMCmd{Target: "running-dot", Strategy: "outerHTML",
+				Content: `<span id="running-dot" style="display:none"></span>`},
+		)
+	}
+	if canStop {
+		cmds = append(cmds,
+			DOMCmd{Target: "stop-btn", Strategy: "outerHTML",
 				Content: `<button class="stop-btn" id="stop-btn" hx-post="/stop" hx-swap="none" hx-include="#session-id">◼</button>`},
-			{Target: "thinking", Strategy: "innerHTML", Content: `<span></span><span></span><span></span>`},
-		}
+		)
+	} else {
+		cmds = append(cmds,
+			DOMCmd{Target: "stop-btn", Strategy: "outerHTML",
+				Content: `<span id="stop-btn"></span>`},
+		)
 	}
-	return []DOMCmd{
-		{Target: "running-dot", Strategy: "outerHTML",
-			Content: `<span id="running-dot" style="display:none"></span>`},
-		{Target: "stop-btn", Strategy: "outerHTML",
-			Content: `<span id="stop-btn"></span>`},
-	}
+	return cmds
 }
 
 func costBarCmd(sessionID, cwd string, cost CostInfo, ds DiffStat) []DOMCmd {

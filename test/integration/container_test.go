@@ -878,8 +878,14 @@ func TestBashSpinner(t *testing.T) {
 		WaitForElement(t, page, ".perm-allow", 10*time.Second)
 		page.MustElement(`.perm-allow`).MustClick()
 
-		// Wait for turn to complete (Claude responds after submitting the bg task)
-		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		// Wait for Claude to respond, confirming the bg task was submitted.
+		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+
+		// Stop button should be gone: no active turn to interrupt.
+		if !page.MustHas("#stop-btn:empty") {
+			Screenshot(t, page, "bash_spinner_stop_btn_present")
+			t.Fatal("stop button visible with no active turn")
+		}
 
 		// Spinner should still be present because the bg command is still running.
 		if !page.MustHas(".tool-spinner") {
