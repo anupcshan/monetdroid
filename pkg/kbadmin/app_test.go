@@ -27,9 +27,7 @@ func TestInstallToFile_CreatesNewTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read kb.md: %v", err)
 	}
-	if string(kbMd) != installSnippet {
-		t.Errorf("kb.md content = %q, want snippet", string(kbMd))
-	}
+	assertEmbeddedHelp(t, kbMd)
 }
 
 func TestInstallToFile_AppendsToExistingTarget(t *testing.T) {
@@ -135,9 +133,7 @@ func TestInstallToFile_OverwritesExistingKbMd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read kb.md: %v", err)
 	}
-	if string(kbMd) != installSnippet {
-		t.Errorf("kb.md not overwritten: %q", string(kbMd))
-	}
+	assertEmbeddedHelp(t, kbMd)
 }
 
 func TestInstallToFile_RecognizesExistingIncludeLine(t *testing.T) {
@@ -161,5 +157,54 @@ func TestInstallToFile_RecognizesExistingIncludeLine(t *testing.T) {
 	}
 	if n := strings.Count(string(content), "@kb.md"); n != 1 {
 		t.Errorf("@kb.md appears %d times, want 1", n)
+	}
+}
+
+// assertEmbeddedHelp verifies kb.md carries the usage guide plus the full
+// rendered kb help under a command reference heading.
+func assertEmbeddedHelp(t *testing.T, kbMd []byte) {
+	t.Helper()
+	s := string(kbMd)
+	if !strings.Contains(s, "## KB (Knowledge Base)") {
+		t.Errorf("kb.md missing usage guide")
+	}
+	if !strings.Contains(s, "### Command reference") {
+		t.Errorf("kb.md missing command reference section")
+	}
+	if !strings.Contains(s, renderKbHelp()) {
+		t.Errorf("kb.md does not embed the full rendered kb help")
+	}
+}
+
+func TestRenderKbHelp(t *testing.T) {
+	help := renderKbHelp()
+	if help == "" {
+		t.Fatal("renderKbHelp returned empty; help is not captured to the command writer")
+	}
+	for _, want := range []string{"NAME:", "COMMANDS:", "list", "read", "edit", "write", "append", "rm", "mv", "search"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("renderKbHelp missing %q", want)
+		}
+	}
+	// These only appear in the fully resolved help (driven through Run), not
+	// when rendering an unresolved command tree, so they guard against a
+	// regression to an empty COMMANDS table / missing GLOBAL OPTIONS.
+	for _, want := range []string{"GLOBAL OPTIONS:", "--help, -h  show help", "help, h  Shows a list of commands"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("renderKbHelp missing %q (help not fully resolved)", want)
+		}
+	}
+}
+
+func TestSnippetWithHelp(t *testing.T) {
+	s := snippetWithHelp()
+	if !strings.HasPrefix(s, installSnippet) {
+		t.Error("snippet does not start with the usage guide")
+	}
+	if !strings.Contains(s, "### Command reference") {
+		t.Error("snippet missing command reference section")
+	}
+	if !strings.Contains(s, renderKbHelp()) {
+		t.Error("snippet does not embed the full rendered kb help")
 	}
 }

@@ -1,6 +1,7 @@
 package kbadmin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,12 +9,12 @@ import (
 	"strings"
 
 	"github.com/anupcshan/monetdroid/pkg/kb"
+	"github.com/anupcshan/monetdroid/pkg/kbcli"
 	"github.com/urfave/cli/v3"
 )
 
 const installSnippet = "## KB (Knowledge Base)\n\n" +
 	"This project has a persistent knowledge base accessible via the `kb` CLI.\n" +
-	"Run `kb --help` for usage.\n" +
 	"\n" +
 	"### When to use it\n" +
 	"\n" +
@@ -41,6 +42,30 @@ const installSnippet = "## KB (Knowledge Base)\n\n" +
 
 const includeLine = "@kb.md"
 
+// snippetWithHelp returns the kb.md content: the usage guide followed by the
+// full `kb --help`. Embedding it keeps the command reference in context
+// (kb.md is @-included every session), so the help does not need running at
+// the prompt, where truncation once hid the `edit` subcommand.
+func snippetWithHelp() string {
+	return installSnippet +
+		"\n### Command reference\n\n" +
+		"Full `kb --help` output:\n\n" +
+		"```\n" + renderKbHelp() + "\n```\n"
+}
+
+// renderKbHelp renders the `kb` root help to a string by pointing the
+// command's writer at a buffer and driving the same "--help" path the `kb`
+// binary uses (Run resolves the command tree and flags, so the output
+// matches `kb --help` exactly, including the COMMANDS table).
+func renderKbHelp() string {
+	app := kbcli.NewApp()
+	var buf bytes.Buffer
+	app.Writer = &buf
+	app.ErrWriter = &buf
+	_ = app.Run(context.Background(), []string{"kb", "--help"})
+	return strings.TrimRight(buf.String(), "\n")
+}
+
 func NewApp() *cli.Command {
 	return &cli.Command{
 		Name:  "kbadmin",
@@ -65,7 +90,7 @@ func NewApp() *cli.Command {
 					if cmd.Args().Len() == 0 {
 						fmt.Println("Add the following to your AGENTS.md or CLAUDE.md:")
 						fmt.Println()
-						fmt.Print(installSnippet)
+						fmt.Print(snippetWithHelp())
 						return nil
 					}
 					return InstallToFile(cmd.Args().First())
@@ -92,7 +117,7 @@ func InstallToFile(targetPath string) error {
 	}
 
 	kbMdPath := filepath.Join(filepath.Dir(targetPath), "kb.md")
-	if err := writeAtomic(kbMdPath, []byte(installSnippet)); err != nil {
+	if err := writeAtomic(kbMdPath, []byte(snippetWithHelp())); err != nil {
 		return fmt.Errorf("write %s: %w", kbMdPath, err)
 	}
 
