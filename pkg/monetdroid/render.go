@@ -396,7 +396,7 @@ func RenderMsg(msg ServerMsg) string {
 		detail := FormatToolInput(msg.Tool, msg.Input)
 		extraSlot := ""
 		if msg.Tool == "Bash" {
-			extraSlot = fmt.Sprintf(`<div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID))
+			extraSlot = fmt.Sprintf(`<div id="streaming-bash-%s" hx-get="/bash-stream/connect?session=%s&tool_id=%s" hx-trigger="revealed once" hx-swap="innerHTML"></div><div id="bg-slot-%s"></div>`, Esc(msg.ToolUseID), url.QueryEscape(msg.SessionID), url.QueryEscape(msg.ToolUseID), Esc(msg.ToolUseID))
 		}
 		return fmt.Sprintf(`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s%s</summary><div class="tool-detail" id="tool-detail-%s">%s</div>%s%s%s</details></div>`, Esc(msg.ToolUseID), Esc(summary), spinnerHTML, permStatus, Esc(msg.ToolUseID), Esc(detail), resultSlot, permSlot, extraSlot)
 	case "tool_result":

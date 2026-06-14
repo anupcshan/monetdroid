@@ -78,6 +78,9 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/hooks-log", hub.handleHookLog)
 	mux.HandleFunc("/hooks-log.json", hub.handleHookLogJSON)
 	mux.HandleFunc("/hooks/", hub.handleHook)
+	mux.HandleFunc("/bash-stream/", hub.handleBashStream)
+	mux.HandleFunc("/bash-stream/connect", hub.handleBashStreamConnect)
+	mux.HandleFunc("/bash-stream-sse", hub.handleBashStreamSSE)
 	return mux
 }
 
@@ -498,23 +501,29 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 				handleRawStreamEvent(ss, &raw, broadcast)
 			}
 		}
+		bsEnv, bsDir, bsSignal := NewBashstreamerEnv(h.hookBaseURL)
 		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
 			Command:           h.claudeCommand,
 			PermissionHandler: permHandler,
 			OnRawEvent:        onRawEvent,
 			HookRegistry:      h,
-			OnHookEvent: func(ev claude.HookEvent) {
+			OnHookEvent: func(ev claude.HookEvent) ([]byte, error) {
 				mu.Lock()
 				if sess == nil {
 					hookBuffered = append(hookBuffered, ev)
 					mu.Unlock()
-					return
+					return nil, nil
 				}
 				mu.Unlock()
-				handleHookEvent(sess, ev, broadcast)
+				return handleHookEvent(sess, ev, broadcast, bsSignal)
 			},
+			ExtraEnv:        bsEnv,
+			BashstreamerDir: bsDir,
 		})
 		if err != nil {
+			if bsDir != "" {
+				os.RemoveAll(bsDir)
+			}
 			log.Printf("[send] start process failed: %s", err)
 			w.WriteHeader(500)
 			return
@@ -573,7 +582,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		buffered = nil
 		for i := range hookBuffered {
-			handleHookEvent(s, hookBuffered[i], broadcast)
+			handleHookEvent(s, hookBuffered[i], broadcast, bsSignal)
 		}
 		hookBuffered = nil
 		mu.Unlock()
@@ -1414,6 +1423,191 @@ func (h *Hub) handleMessagesBefore(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, b.String())
+}
+
+// handleBashStream receives a single streamed foreground bash output
+// connection from bashstreamer and appends lines to BashStreamLines
+// for the SSE handler to read.
+// URL format: /bash-stream/<session_id>/<tool_use_id>
+func (h *Hub) handleBashStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/bash-stream/")
+	sid, rest, _ := strings.Cut(path, "/")
+	tid, _, _ := strings.Cut(rest, "/")
+
+	// drainAndDone reads and discards the request body before responding,
+	// so a connection we don't attach to still lets bashstreamer's chunked
+	// POST complete instead of stalling on pipe backpressure.
+	drainAndDone := func() {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}
+	if sid == "" || tid == "" {
+		drainAndDone()
+		return
+	}
+	s := h.Sessions.Get(sid)
+	if s == nil {
+		drainAndDone()
+		return
+	}
+	// ConsumeOutstandingBash verifies tid matches the outstanding Bash; a
+	// stray or mismatched connection is rejected rather than attaching to
+	// whatever happens to be outstanding.
+	id := s.ConsumeOutstandingBash(tid)
+	if id == "" {
+		drainAndDone()
+		return
+	}
+
+	s.mu.Lock()
+	buf := s.BashStreamLines
+	s.mu.Unlock()
+	if buf == nil {
+		drainAndDone()
+		return
+	}
+
+	// Append each line to the buffer. Writes are non-blocking;
+	// the SSE handler drains from its own offset.
+	scanner := bufio.NewScanner(r.Body)
+	scanner.Buffer(make([]byte, 64*1024), maxBashStreamLineBytes)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		buf.Append(line)
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[bash-stream] scan: %v", err)
+		buf.Append("… [stream read error] …")
+	}
+	buf.Close()
+}
+
+// handleBashStreamConnect returns the SSE-connected div for foreground
+// bash output streaming. Called lazily when the tool chip's <details>
+// is opened and the streaming-bash slot becomes visible.
+// When an extractor matches the command, returns a summary + raw toggle
+// layout instead of the simple line-by-line stream.
+func (h *Hub) handleBashStreamConnect(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session")
+	toolID := r.URL.Query().Get("tool_id")
+	w.Header().Set("Content-Type", "text/html")
+
+	if s := h.Sessions.Get(sessionID); s != nil {
+		if cmd := s.BashCmdForTool(toolID); cmd != "" && MatchExtractor("Bash", cmd) != nil {
+			fmt.Fprintf(w, `<div class="tool-bg-output" hx-ext="sse" sse-connect="/bash-stream-sse?session=%s&tool_id=%s" sse-close="done">`+
+				`<div sse-swap="summary" hx-swap="innerHTML" class="bg-summary">`+
+				`<div class="bg-loading">Running...</div>`+
+				`</div>`+
+				`<details class="bg-raw-toggle">`+
+				`<summary>Show raw output</summary>`+
+				`<div sse-swap="raw" hx-swap="beforeend" class="bg-raw"></div>`+
+				`</details>`+
+				`</div>`,
+				url.QueryEscape(sessionID), url.QueryEscape(toolID))
+			return
+		}
+	}
+	fmt.Fprintf(w, `<div class="bash-stream-output" hx-ext="sse" sse-connect="/bash-stream-sse?session=%s&tool_id=%s" sse-swap="line" hx-swap="beforeend" sse-close="done"></div>`,
+		url.QueryEscape(sessionID), url.QueryEscape(toolID))
+}
+
+// handleBashStreamSSE serves foreground bash output as an SSE stream
+// to the browser. The streaming div connects here via sse-connect.
+// When an extractor matches the command, routes through the extractor
+// for summary + raw toggle output; otherwise streams line-by-line.
+func (h *Hub) handleBashStreamSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	sessionID := r.URL.Query().Get("session")
+	toolID := r.URL.Query().Get("tool_id")
+	s := h.Sessions.Get(sessionID)
+	if s == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	// Resolve this tool's stream. If bashstreamer hasn't connected yet
+	// (the tool is still outstanding), wait for it so a client that
+	// attaches during the PreToolUse-to-connect window still receives
+	// output. A different tool_use_id (e.g. an old chip opened after a
+	// newer Bash started streaming) returns ok=false and we don't read
+	// its buffer.
+	buf, cmd, ok := s.AwaitBashStreamForTool(toolID, r.Context())
+	if !ok {
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	// Route through extractor if one matches the command.
+	if ext := MatchExtractor("Bash", cmd); ext != nil {
+		h.streamBashWithExtractor(w, flusher, r.Context(), buf, ext)
+		return
+	}
+
+	var pos int64
+	for {
+		chunk, newPos, done := buf.Read(pos)
+		for _, line := range chunk {
+			fmt.Fprint(w, FormatSSE("line", fmt.Sprintf("<span>%s\n</span>", Esc(line))))
+			flusher.Flush()
+		}
+		pos = newPos
+		if done {
+			fmt.Fprint(w, FormatSSE("done", ""))
+			flusher.Flush()
+			return
+		}
+		if !buf.Wait(r.Context()) {
+			return
+		}
+	}
+}
+
+// streamBashWithExtractor reads lines from the BashStreamBuffer, feeds
+// them to the extractor, and sends summary and raw SSE events to the
+// client. The summary is re-sent whenever it changes; raw lines are sent
+// as they arrive. Closes with "done" when the buffer is done.
+func (h *Hub) streamBashWithExtractor(w http.ResponseWriter, flusher http.Flusher, ctx context.Context, buf *BashStreamBuffer, ext Extractor) {
+	var lastSummary string
+	var seq int64
+	for {
+		chunk, newSeq, done := buf.Read(seq)
+		for _, line := range chunk {
+			ext.Ingest(line + "\n")
+			fmt.Fprint(w, FormatSSE("raw", fmt.Sprintf("<span>%s\n</span>", Esc(line))))
+			flusher.Flush()
+		}
+		seq = newSeq
+		if s := ext.Summary(); s != "" && s != lastSummary {
+			lastSummary = s
+			fmt.Fprint(w, FormatSSE("summary", s))
+			flusher.Flush()
+		}
+		if done {
+			fmt.Fprint(w, FormatSSE("done", ""))
+			flusher.Flush()
+			return
+		}
+		if !buf.Wait(ctx) {
+			return
+		}
+	}
 }
 
 // handleBgOutputConnect returns the SSE-connected div for a bg task.

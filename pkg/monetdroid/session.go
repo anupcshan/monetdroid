@@ -2,6 +2,7 @@ package monetdroid
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"sync"
@@ -32,9 +33,27 @@ type Session struct {
 	DiffStat          DiffStat
 	EventLog          EventLog
 	PermChans         map[string]chan protocol.PermResponse
-	AgentDepth        int                   // nesting depth of active sub-agents
-	AgentToolIDs      map[string]bool       // active Agent tool_use IDs (keyed by parent tool_use_id)
-	AgentStats        map[string]*AgentStat // live stats per Agent tool_use ID (from task_progress)
+	AgentDepth        int             // nesting depth of active sub-agents
+	AgentToolIDs      map[string]bool // active Agent tool_use IDs (keyed by parent tool_use_id)
+	// OutstandingBashID is the tool_use_id of the most recent Bash
+	// PreToolUse that has not yet been connected by bashstreamer.
+	// BashConnected is closed when bashstreamer connects, unblocking
+	// the next PreToolUse.
+	OutstandingBashID string
+	BashConnected     chan struct{}
+	// StreamedBashID is the tool_use_id of a bash command currently
+	// being streamed. Set when bashstreamer connects, cleared at
+	// tool_result time. At most one active at a time (sequential tools).
+	StreamedBashID string
+	// BashStreamCmd is the command string for the currently active
+	// foreground Bash. Set at PreToolUse, consumed by the SSE handlers
+	// to decide whether to route through an extractor.
+	BashStreamCmd string
+	// BashStreamLines holds the streaming buffer for the currently
+	// active foreground Bash. Writes are non-blocking (append to slice);
+	// the SSE handler drains from its own sequence number.
+	BashStreamLines *BashStreamBuffer
+	AgentStats      map[string]*AgentStat // live stats per Agent tool_use ID (from task_progress)
 	// AgentDescriptions stashes the parent Agent tool's `description` from
 	// PreToolUse, keyed by the parent's tool_use_id. Consumed at parent's
 	// PostToolUse for Agent (the only payload that pairs that tool_use_id
@@ -455,6 +474,210 @@ func (s *Session) SuppressTool(id, name string) {
 	s.mu.Lock()
 	s.SuppressedToolIDs[id] = name
 	s.mu.Unlock()
+}
+
+// maxBashStreamLines is the maximum number of lines kept in the
+// in-memory buffer. When exceeded, the oldest half is trimmed.
+const maxBashStreamLines = 5000
+
+// maxBashStreamLineBytes caps a single line read from bashstreamer's POST
+// body. It matches bashstreamer.maxStreamLineBytes so a line the client
+// accepts is never rejected here. A line exceeding it ends the scan and
+// is reported rather than truncating the stream silently.
+const maxBashStreamLineBytes = 1024 * 1024
+
+// BashStreamBuffer is a bounded in-memory buffer for foreground Bash
+// streaming output. Each line gets an implicit sequence number; the
+// reader tracks its position via seq. When the buffer exceeds
+// maxBashStreamLines, the oldest half is dropped and a truncation note
+// is injected on the next reader catch-up. Writes and signals are
+// non-blocking.
+type BashStreamBuffer struct {
+	mu       sync.Mutex
+	lines    []string // newest at the end
+	startSeq int64    // sequence number of lines[0]; also = total lines dropped
+	done     bool
+	ch       chan struct{}
+}
+
+func NewBashStreamBuffer() *BashStreamBuffer {
+	return &BashStreamBuffer{ch: make(chan struct{}, 1)}
+}
+
+func (b *BashStreamBuffer) Append(line string) {
+	b.mu.Lock()
+	b.lines = append(b.lines, line)
+	if len(b.lines) > maxBashStreamLines {
+		drop := len(b.lines) / 2
+		b.startSeq += int64(drop)
+		b.lines = b.lines[drop:]
+	}
+	b.mu.Unlock()
+	select {
+	case b.ch <- struct{}{}:
+	default:
+	}
+}
+
+func (b *BashStreamBuffer) Close() {
+	b.mu.Lock()
+	b.done = true
+	b.mu.Unlock()
+	select {
+	case b.ch <- struct{}{}:
+	default:
+	}
+}
+
+// Read returns lines with sequence number > seq. If seq is behind
+// startSeq (reader fell behind due to trimming), the first returned
+// line is a truncation note. newSeq is the sequence number to pass on
+// the next call. done is true when the buffer is closed and all lines
+// have been returned.
+func (b *BashStreamBuffer) Read(seq int64) (lines []string, newSeq int64, done bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if seq < b.startSeq {
+		dropped := b.startSeq - seq
+		lines = append(lines, fmt.Sprintf("… [%d lines truncated] …", dropped))
+		seq = b.startSeq
+	}
+
+	idx := int(seq - b.startSeq)
+	if idx < len(b.lines) {
+		lines = append(lines, b.lines[idx:]...)
+		newSeq = b.startSeq + int64(len(b.lines))
+	} else {
+		newSeq = seq
+	}
+	return lines, newSeq, b.done
+}
+
+// Wait blocks until new data arrives (or the context is cancelled).
+func (b *BashStreamBuffer) Wait(ctx context.Context) bool {
+	select {
+	case <-b.ch:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// StoreOutstandingBash records the tool_use_id and command of a Bash
+// PreToolUse and creates a buffer that bashstreamer will write lines into.
+func (s *Session) StoreOutstandingBash(id, cmd string) {
+	s.mu.Lock()
+	s.OutstandingBashID = id
+	s.BashStreamCmd = cmd
+	s.BashConnected = make(chan struct{})
+	s.BashStreamLines = NewBashStreamBuffer()
+	s.mu.Unlock()
+}
+
+// ConsumeOutstandingBash records the outstanding bash tool_use_id as
+// StreamedBashID (for later cleanup at tool_result time) and closes
+// BashConnected so a waiting PreToolUse can proceed. expected is the
+// tool_use_id from the connecting bashstreamer; if it doesn't match the
+// outstanding id, nothing is consumed and "" is returned. This guards
+// against a stray connection attaching to the wrong buffer.
+func (s *Session) ConsumeOutstandingBash(expected string) string {
+	s.mu.Lock()
+	id := s.OutstandingBashID
+	if id == "" || id != expected {
+		s.mu.Unlock()
+		return ""
+	}
+	s.OutstandingBashID = ""
+	ch := s.BashConnected
+	s.BashConnected = nil
+	s.StreamedBashID = id
+	s.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+	return id
+}
+
+// WaitForBashConnected blocks until bashstreamer connects (closing the
+// channel) or the timeout elapses. Returns true if connected.
+func (s *Session) WaitForBashConnected(timeout time.Duration) bool {
+	s.mu.Lock()
+	ch := s.BashConnected
+	s.mu.Unlock()
+	if ch == nil {
+		return true
+	}
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// ConsumeStreamedBash returns true and clears the mark if the given
+// tool_use_id was streamed via bashstreamer. Called at tool_result time
+// to decide whether to clear the streaming div.
+func (s *Session) ConsumeStreamedBash(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.StreamedBashID == id {
+		s.StreamedBashID = ""
+		s.BashStreamCmd = ""
+		s.BashStreamLines = nil
+		return true
+	}
+	return false
+}
+
+// BashCmdForTool returns the command for the given Bash tool_use_id if it
+// is the currently streaming or outstanding foreground Bash, else "".
+// handleBashStreamConnect uses this to pick the extractor layout from the
+// same field the SSE handler reads, so the layout and the event stream
+// cannot disagree.
+func (s *Session) BashCmdForTool(toolID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.StreamedBashID == toolID || s.OutstandingBashID == toolID {
+		return s.BashStreamCmd
+	}
+	return ""
+}
+
+// AwaitBashStreamForTool resolves the streaming buffer and command for the
+// given Bash tool_use_id. If bashstreamer has already connected, it returns
+// immediately. If toolID is still the outstanding Bash (bashstreamer has
+// not connected yet), it waits for the connection so an SSE client that
+// attaches during the PreToolUse-to-connect window still receives output.
+// Returns ok=false if toolID is not the active stream.
+func (s *Session) AwaitBashStreamForTool(toolID string, ctx context.Context) (buf *BashStreamBuffer, cmd string, ok bool) {
+	s.mu.Lock()
+	if s.StreamedBashID == toolID && s.BashStreamLines != nil {
+		buf, cmd = s.BashStreamLines, s.BashStreamCmd
+		s.mu.Unlock()
+		return buf, cmd, true
+	}
+	wait := s.OutstandingBashID == toolID
+	ch := s.BashConnected
+	s.mu.Unlock()
+
+	if !wait || ch == nil {
+		return nil, "", false
+	}
+
+	select {
+	case <-ch:
+	case <-ctx.Done():
+		return nil, "", false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.StreamedBashID == toolID && s.BashStreamLines != nil {
+		return s.BashStreamLines, s.BashStreamCmd, true
+	}
+	return nil, "", false
 }
 
 func (s *Session) RemoveSuppressed(id string) bool {

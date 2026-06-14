@@ -112,7 +112,18 @@ type ProcessConfig struct {
 	// OnHookEvent, when set, is called for each hook event received via the
 	// HookRegistry. The receiver pre-extracts the event name; Body is the
 	// raw JSON. Requires HookRegistry to be set.
-	OnHookEvent func(HookEvent)
+	// Returns optional response body (e.g. updatedInput for PreToolUse) and error.
+	OnHookEvent func(HookEvent) ([]byte, error)
+
+	// ExtraEnv is appended to the subprocess environment after the
+	// built-in variables. Each entry is "KEY=VALUE". Use for
+	// session-specific variables (e.g. bashstreamer URL).
+	ExtraEnv []string
+
+	// BashstreamerDir, when set, is removed in Kill().
+	// It contains the per-process CLAUDE_CODE_SHELL_PREFIX wrapper
+	// script and signal file. Set by NewBashstreamerEnv.
+	BashstreamerDir string
 }
 
 // ClaudeProcess owns a long-running claude CLI subprocess.
@@ -134,12 +145,13 @@ type ClaudeProcess struct {
 	permHandler PermissionHandler
 	onEvent     func(protocol.StreamEvent)
 	onRawEvent  func(protocol.RawStreamEvent)
-	onHookEvent func(HookEvent)
+	onHookEvent func(HookEvent) ([]byte, error)
 
 	hookRegistry HookRegistry
 	hookToken    string
 	settingsPath string
 	curlShimPath string
+	bsDir        string // bashstreamer wrapper dir, removed in Kill()
 }
 
 // StartProcess starts a new claude CLI subprocess with default configuration.
@@ -237,6 +249,7 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		// `git` directly when it needs current state.
 		"CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1",
 	)
+	cmd.Env = append(cmd.Env, cfg.ExtraEnv...)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -253,7 +266,7 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 
 	var permHandler PermissionHandler
 	var onRawEvent func(protocol.RawStreamEvent)
-	var onHookEvent func(HookEvent)
+	var onHookEvent func(HookEvent) ([]byte, error)
 	var hookRegistry HookRegistry
 	if cfg != nil {
 		permHandler = cfg.PermissionHandler
@@ -262,6 +275,10 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		hookRegistry = cfg.HookRegistry
 	}
 
+	var bsDir string
+	if cfg != nil {
+		bsDir = cfg.BashstreamerDir
+	}
 	p := &ClaudeProcess{
 		cmd:          cmd,
 		stdin:        stdin,
@@ -277,6 +294,7 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		hookToken:    hookToken,
 		settingsPath: settingsPath,
 		curlShimPath: curlShimPath,
+		bsDir:        bsDir,
 	}
 
 	// Register before cmd.Start so a hook POSTed during claude's startup
@@ -621,20 +639,22 @@ func (p *ClaudeProcess) Kill() {
 	if p.curlShimPath != "" {
 		os.Remove(p.curlShimPath)
 	}
+	if p.bsDir != "" {
+		os.RemoveAll(p.bsDir)
+	}
 }
 
 // HandleHookEvent converts the hook payload into protocol.StreamEvents and
 // dispatches them through onEvent. See hookToStreamEvents for the per-event
-// mapping. Hooks are passive observers; this method never returns a
-// decision body to claude.
-func (p *ClaudeProcess) HandleHookEvent(body []byte) error {
+// mapping. Returns optional response body (e.g. updatedInput for PreToolUse).
+func (p *ClaudeProcess) HandleHookEvent(body []byte) ([]byte, error) {
 	var env struct {
 		EventName string `json:"hook_event_name"`
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
-		return fmt.Errorf("parse hook envelope: %w", err)
+		return nil, fmt.Errorf("parse hook envelope: %w", err)
 	}
 
 	if env.SessionID != "" {
@@ -657,7 +677,11 @@ func (p *ClaudeProcess) HandleHookEvent(body []byte) error {
 	}
 
 	if p.onHookEvent != nil {
-		p.onHookEvent(HookEvent{Name: env.EventName, Body: body})
+		respBody, err := p.onHookEvent(HookEvent{Name: env.EventName, Body: body})
+		if err != nil {
+			return nil, err
+		}
+		return respBody, nil
 	}
-	return nil
+	return nil, nil
 }

@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anupcshan/monetdroid/pkg/bashstreamer"
 	"github.com/anupcshan/monetdroid/pkg/kbadmin"
 	"github.com/anupcshan/monetdroid/pkg/kbcli"
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
@@ -121,6 +122,13 @@ func TestMain(m *testing.M) {
 	case "kbadmin":
 		if err := kbadmin.NewApp().Run(context.Background(), os.Args); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if os.Getenv("BS_CLI_MODE") == "bashstreamer" {
+		if err := bashstreamer.Run(os.Args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "bashstreamer: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -955,6 +963,68 @@ func TestBashSpinner(t *testing.T) {
 			t.Fatalf("expected 0 spinners after reload, got %d", reloadSpinners)
 		}
 		Screenshot(t, page, "bash_spinner_reload")
+	})
+}
+
+func TestBashForegroundStream(t *testing.T) {
+	t.Parallel()
+	WithProviders(t, "bash_foreground_stream.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+		page := f.Page()
+
+		// Create session
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		// Run a foreground Bash command with delays so streaming is observable.
+		page.MustElement(`textarea[name="text"]`).MustInput(
+			`Run this exact Bash command, foreground not background: ` +
+				`echo step 1 && sleep 1 && echo step 2 && sleep 1 && echo step 3 && sleep 1 && ` +
+				`echo step 4 && sleep 1 && echo step 5 && sleep 1 && echo step 6 && sleep 1 && ` +
+				`echo step 7 && sleep 1 && echo step 8 && sleep 1 && echo step 9 && sleep 1 && echo step 10`)
+		page.MustElement(`.send-btn`).MustClick()
+
+		// Wait for tool chip to appear
+		WaitForElement(t, page, ".tool-chip", 60*time.Second)
+
+		// Open the tool chip details so the streaming-bash div becomes
+		// revealed and the SSE connection starts.
+		summary := page.MustElement(".tool-chip summary")
+		details := summary.MustParent()
+		if attr, _ := details.Attribute("open"); attr == nil {
+			summary.MustClick()
+		}
+
+		// The streaming div should receive partial output before the command finishes.
+		// Wait for at least step 2 to appear in the streaming div.
+		WaitForText(t, page, "[id^=streaming-bash-]", "step 2", 30*time.Second)
+		Screenshot(t, page, "bash_fg_stream_partial")
+
+		// Verify step 10 is NOT yet visible (proves we caught it mid-stream).
+		streamText := page.MustEval(`() => { const el = document.querySelector('[id^=streaming-bash-]'); return el ? el.textContent : ''; }`).String()
+		if strings.Contains(streamText, "step 10") {
+			Screenshot(t, page, "bash_fg_stream_not_partial")
+			t.Fatal("step 10 already visible when step 2 first appeared, not partial streaming")
+		}
+
+		// Wait for turn to complete
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		Screenshot(t, page, "bash_fg_stream_complete")
+
+		// After completion, the final output should be in the tool-result-output.
+		resultText := page.MustElement(".tool-result-output").MustText()
+		if !strings.Contains(resultText, "step 1") {
+			t.Fatalf("final result missing step 1: %s", resultText)
+		}
+		if !strings.Contains(resultText, "step 10") {
+			t.Fatalf("final result missing step 10: %s", resultText)
+		}
+
+		// The streaming div should have been cleared after tool_result arrived.
+		streamAfter := page.MustEval(`() => { const el = document.querySelector('[id^=streaming-bash-]'); return el ? el.textContent.trim() : ''; }`).String()
+		if streamAfter != "" {
+			t.Fatalf("streaming div not cleared after completion, still has: %s", streamAfter)
+		}
+		Screenshot(t, page, "bash_fg_stream_cleared")
 	})
 }
 

@@ -3,6 +3,7 @@ package monetdroid
 import (
 	"encoding/json"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -241,11 +242,11 @@ type hookEnvelope struct {
 //     section and broadcasts subagent_started. PreToolUse and PostToolBatch
 //     broadcast inner tool_use / tool_result chips tagged with agent_id.
 //     SubagentStop broadcasts subagent_stopped to clear the section spinner.
-func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg)) {
+func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg), bsSignal string) ([]byte, error) {
 	var env hookEnvelope
 	if err := json.Unmarshal(ev.Body, &env); err != nil {
 		log.Printf("[hook] handleHookEvent envelope: %v", err)
-		return
+		return nil, nil
 	}
 	if env.EventName == "SessionStart" {
 		type sessionStartPayload struct {
@@ -285,11 +286,12 @@ func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg))
 	}
 
 	if env.AgentID == "" {
-		handleParentAgentHook(s, ev, env, broadcast)
-		return
+		respBody, err := handleParentAgentHook(s, ev, env, broadcast, bsSignal)
+		return respBody, err
 	}
 
 	handleSubagentHook(s, ev, env, broadcast)
+	return nil, nil
 }
 
 func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
@@ -337,9 +339,15 @@ func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
 	}()
 }
 
-func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broadcast func(ServerMsg)) {
+func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broadcast func(ServerMsg), bsSignal string) ([]byte, error) {
+	// Bash PreToolUse: store the tool_use_id and write a signal file
+	// so the wrapper script knows to stream output.
+	if env.EventName == "PreToolUse" && env.ToolName == "Bash" && env.ToolUseID != "" {
+		handleBashPreToolUse(s, ev, env, bsSignal)
+	}
+
 	if env.ToolName != "Agent" || env.ToolUseID == "" {
-		return
+		return nil, nil
 	}
 	switch env.EventName {
 	case "PreToolUse":
@@ -351,7 +359,7 @@ func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, br
 		}
 		if err := json.Unmarshal(ev.Body, &p); err != nil {
 			log.Printf("[hook] parent PreToolUse Agent parse: %v", err)
-			return
+			return nil, nil
 		}
 		s.StashAgentDescription(env.ToolUseID, p.ToolInput.Description)
 		// Suppress the eventual Agent tool_result in the main stream: its
@@ -370,11 +378,11 @@ func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, br
 		}
 		if err := json.Unmarshal(ev.Body, &p); err != nil {
 			log.Printf("[hook] parent PostToolUse Agent parse: %v", err)
-			return
+			return nil, nil
 		}
 		agentID := p.ToolResponse.AgentID
 		if agentID == "" {
-			return
+			return nil, nil
 		}
 		description := s.TakeAgentDescription(env.ToolUseID)
 		finalText := decodeToolResponseText(p.ToolResponse.Content)
@@ -400,6 +408,7 @@ func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, br
 			broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: env.ToolUseID})
 		}
 	}
+	return nil, nil
 }
 
 func handleSubagentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broadcast func(ServerMsg)) {
@@ -474,10 +483,42 @@ func handleSubagentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broad
 	}
 }
 
-// decodeToolResponseText extracts the rendered text from a tool_response
-// payload, which per the Claude Code hooks doc (PostToolBatch section) is
-// "a serialized string or content-block array". Falls back to the raw JSON
-// bytes for any other shape.
+// handleBashPreToolUse stores the tool_use_id for bashstreamer
+// connection tracking and writes a signal file so the wrapper script
+// knows to stream. If a previous bash connection is still outstanding,
+// waits up to 2s for it to connect before overwriting.
+// Background tasks are skipped (they stream via the bg-output endpoint).
+func handleBashPreToolUse(s *Session, ev claude.HookEvent, env hookEnvelope, bsSignal string) {
+	var p struct {
+		ToolInput json.RawMessage `json:"tool_input"`
+	}
+	if err := json.Unmarshal(ev.Body, &p); err != nil {
+		return
+	}
+	var input struct {
+		Command         string `json:"command"`
+		RunInBackground *bool  `json:"run_in_background,omitempty"`
+	}
+	if err := json.Unmarshal(p.ToolInput, &input); err != nil || input.Command == "" {
+		return
+	}
+	if input.RunInBackground != nil && *input.RunInBackground {
+		return
+	}
+	if bsSignal == "" {
+		// Foreground streaming is unavailable (no bashstreamer on PATH or
+		// wrapper setup failed); let Claude run the command unstreamed.
+		return
+	}
+	// If a previous bash is still outstanding, wait briefly for its
+	// bashstreamer to connect before overwriting.
+	s.WaitForBashConnected(2 * time.Second)
+	s.StoreOutstandingBash(env.ToolUseID, input.Command)
+	if err := os.WriteFile(bsSignal, []byte(s.ID+" "+env.ToolUseID), 0o644); err != nil {
+		log.Printf("[bs] write signal file for tool %s: %v", env.ToolUseID, err)
+	}
+}
+
 func decodeToolResponseText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""

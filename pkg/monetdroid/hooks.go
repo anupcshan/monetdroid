@@ -129,10 +129,15 @@ func (h *Hub) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := handler(body); err != nil {
+	respBody, err := handler(body)
+	if err != nil {
 		log.Printf("[hook handler][%s] %v", token, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if len(respBody) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(respBody)
 	}
 
 	// Log the hook event for the debug page.
@@ -155,7 +160,9 @@ func (h *Hub) handleHook(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	if len(respBody) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func (h *Hub) GetHookLog() []HookLogEntry {

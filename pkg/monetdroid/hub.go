@@ -203,7 +203,7 @@ func NewHubWithDataDir(hookBaseURL, dataDir string, claudeCommand []string) (*Hu
 		defer t.Log()
 		ScanHistory(t)
 	}()
-	return &Hub{
+	h := &Hub{
 		clients:       make(map[string]*SSEClient),
 		notifyClients: make(map[string]*NotifyClient),
 		Sessions:      NewSessionManager(),
@@ -213,7 +213,52 @@ func NewHubWithDataDir(hookBaseURL, dataDir string, claudeCommand []string) (*Hu
 		hookBaseURL:   hookBaseURL,
 		claudeCommand: append([]string(nil), claudeCommand...),
 		hookLog:       newHookLog(500),
-	}, nil
+	}
+	return h, nil
+}
+
+// NewBashstreamerEnv creates a per-process temp directory containing a
+// CLAUDE_CODE_SHELL_PREFIX wrapper script and signal file. The wrapper
+// reads the session ID from the signal and embeds it in the push URL so
+// the server can route directly to the correct session. Returns the
+// ExtraEnv entry, the temp directory (for cleanup), and the signal path.
+// Returns nil env if bashstreamer is not on PATH or setup fails, so
+// Claude falls back to its default shell without streaming.
+func NewBashstreamerEnv(hookBaseURL string) (env []string, dir string, signal string) {
+	if _, err := exec.LookPath("bashstreamer"); err != nil {
+		return nil, "", ""
+	}
+	dir, err := os.MkdirTemp("", "monetdroid-bs-")
+	if err != nil {
+		return nil, "", ""
+	}
+	pushURL := hookBaseURL + "/bash-stream/"
+	script := filepath.Join(dir, "bashstreamer-wrapper")
+	signalFile := filepath.Join(dir, "signal")
+	// CLAUDE_CODE_SHELL_PREFIX passes the full shell invocation as $1.
+	// The signal file contains "session_id tool_use_id" (space-separated).
+	// The wrapper extracts both and passes them to bashstreamer via the
+	// push URL path, so handleBashStream can route directly. bashstreamer
+	// is verified above, so the wrapper execs it unconditionally; there is
+	// no fallback, since exec replaces the shell (an unreachable ||) and
+	// bashstreamer forwards the child's exit code (a fallback would re-run
+	// failed commands).
+	content := fmt.Sprintf(`#!/bin/sh
+if [ -f %s ]; then
+    sid=$(cut -d' ' -f1 %s)
+    tid=$(cut -d' ' -f2 %s)
+    rm -f %s
+    exec bashstreamer --push-url %s$sid/$tid -- -c "$1"
+fi
+exec /bin/bash -c "$1"
+`, signalFile, signalFile, signalFile, signalFile, pushURL)
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		os.RemoveAll(dir)
+		return nil, "", ""
+	}
+	return []string{
+		"CLAUDE_CODE_SHELL_PREFIX=" + script,
+	}, dir, signalFile
 }
 
 func (h *Hub) RemoveClient(cid string) {
@@ -427,6 +472,12 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 				}
 			}()
 		}
+		// For foreground bash commands that were streamed via bashstreamer,
+		// clear the streaming div now that the final result is available.
+		if s != nil && s.ConsumeStreamedBash(msg.ToolUseID) {
+			h.BroadcastToSession(sessionID, FormatSSE("htmx",
+				OobSwap("streaming-bash-"+msg.ToolUseID, "innerHTML", "")), "", "")
+		}
 	}
 
 	// Flush accumulated streaming deltas to the permanent log when a
@@ -529,6 +580,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 			// Streaming deltas are ephemeral. Broadcast handles persistence.
 			h.Broadcast(msg)
 		}
+		bsEnv, bsDir, bsSignal := NewBashstreamerEnv(h.hookBaseURL)
 		var err error
 		proc, err = claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
 			handleStreamEvent(s, &event, broadcast)
@@ -541,11 +593,16 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 				handleRawStreamEvent(s, &raw, broadcast)
 			},
 			HookRegistry: h,
-			OnHookEvent: func(ev claude.HookEvent) {
-				handleHookEvent(s, ev, broadcast)
+			OnHookEvent: func(ev claude.HookEvent) ([]byte, error) {
+				return handleHookEvent(s, ev, broadcast, bsSignal)
 			},
+			ExtraEnv:        bsEnv,
+			BashstreamerDir: bsDir,
 		})
 		if err != nil {
+			if bsDir != "" {
+				os.RemoveAll(bsDir)
+			}
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return
 		}

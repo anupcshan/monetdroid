@@ -12,4 +12,5 @@ RUN curl -fSL "$GCS_BUCKET/$CLAUDE_VERSION/linux-x64/claude" -o /usr/local/bin/c
 
 RUN printf '#!/bin/sh\nexec env KB_CLI_MODE=kb /test "$@"\n' > /usr/local/bin/kb \
     && printf '#!/bin/sh\nexec env KB_CLI_MODE=kbadmin /test "$@"\n' > /usr/local/bin/kbadmin \
-    && chmod +x /usr/local/bin/kb /usr/local/bin/kbadmin
+    && printf '#!/bin/sh\nexec env BS_CLI_MODE=bashstreamer /test "$@"\n' > /usr/local/bin/bashstreamer \
+    && chmod +x /usr/local/bin/kb /usr/local/bin/kbadmin /usr/local/bin/bashstreamer

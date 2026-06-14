@@ -89,7 +89,9 @@ func (c *toolResultContent) UnmarshalJSON(data []byte) error {
 
 // HookHandlerFunc handles an incoming hook event POST from claude. The body
 // is the raw event JSON. A non-nil error becomes HTTP 500 to the sender.
-type HookHandlerFunc func(body []byte) error
+// respBody, when non-nil, is written as the HTTP response body (used by
+// PreToolUse to return updatedInput).
+type HookHandlerFunc func(body []byte) (respBody []byte, err error)
 
 // HookRegistry is the contract a hook receiver fulfills. ClaudeProcess uses
 // it to register a per-process handler at startup and to resolve the URL
