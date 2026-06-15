@@ -195,7 +195,6 @@ func (r *Replayer) loadCassette() {
 		h := hashRequestBody([]byte(ix.Request.Body))
 		r.hashIndex[h] = append(r.hashIndex[h], i)
 	}
-	r.t.Logf("replayer: loaded %d interactions from %s", len(r.interactions), r.cassettePath)
 }
 
 func (r *Replayer) saveCassette() {
@@ -315,9 +314,6 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	maps.Copy(idMapCopy, r.idMap)
 	r.mu.Unlock()
 
-	r.t.Logf("replayer: serving interaction %d for %s %s (%d bytes request body)",
-		idx, req.Method, req.URL.Path, len(body))
-
 	responseBody := interaction.Response.Body
 
 	// Plan mode: the CLI generates a random plan file name on each run.
@@ -325,7 +321,6 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	// input_json_delta events). Detect the discrepancy and substitute.
 	if old, nw := detectPlanFileSub(interaction.Request.Body, string(body)); old != "" {
 		responseBody = substituteSSEDeltas(responseBody, old, nw)
-		r.t.Logf("replayer: substituted plan file %q -> %q", old, nw)
 	}
 
 	// Cross-turn ID substitution: swap recorded bash task IDs / session
@@ -341,7 +336,6 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 		}
 		responseBody = substituteSSEDeltas(responseBody, rec, live)
 		responseBody = strings.ReplaceAll(responseBody, rec, live)
-		r.t.Logf("replayer: substituted id %q -> %q", rec, live)
 	}
 
 	for k, v := range interaction.Response.Headers {
@@ -488,7 +482,6 @@ func (r *Replayer) Start() string {
 
 	port := listener.Addr().(*net.TCPAddr).Port
 	url := fmt.Sprintf("http://host.docker.internal:%d", port)
-	r.t.Logf("replayer: listening on :%d (mode=%s)", port, r.mode)
 	return url
 }
 

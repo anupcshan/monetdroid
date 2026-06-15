@@ -28,7 +28,6 @@ func Screenshot(t *testing.T, page *rod.Page, name string) {
 		t.Logf("screenshot write failed: %v", err)
 		return
 	}
-	t.Logf("screenshot saved: %s", path)
 }
 
 func ScreenshotOnFailure(t *testing.T, page *rod.Page, name string) {
@@ -52,7 +51,6 @@ func DumpDOM(t *testing.T, page *rod.Page, name string) {
 		t.Logf("DOM dump write failed: %v", err)
 		return
 	}
-	t.Logf("DOM dump saved: %s", path)
 }
 
 // WaitForText waits for an element matching selector to contain text.

@@ -1439,24 +1439,6 @@ func main() {
 		WaitForElement(t, page, ".perm-inline", 120*time.Second)
 		Screenshot(t, page, "plan_mode_edit_permission")
 
-		// Dump the session log so we can inspect the raw ExitPlanMode wire format.
-		msgs := f.SessionLog()
-		for _, msg := range msgs {
-			if msg.Tool == "ExitPlanMode" || msg.Tool == "EnterPlanMode" {
-				raw, _ := json.Marshal(msg)
-				t.Logf("WIRE %s: %s", msg.Tool, string(raw))
-				if msg.Input != nil && msg.Input.Raw != nil {
-					t.Logf("WIRE %s input: %s", msg.Tool, string(msg.Input.Raw))
-				}
-			}
-			if msg.Type == "permission_request" && (msg.PermTool == "ExitPlanMode" || msg.PermTool == "EnterPlanMode") {
-				raw, _ := json.Marshal(msg)
-				t.Logf("WIRE perm %s: %s", msg.PermTool, string(raw))
-				if msg.PermInput != nil && msg.PermInput.Raw != nil {
-					t.Logf("WIRE perm %s input: %s", msg.PermTool, string(msg.PermInput.Raw))
-				}
-			}
-		}
 	})
 }
 
