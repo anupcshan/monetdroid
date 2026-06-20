@@ -8,6 +8,23 @@
 - **Design rationale lives in one canonical place**: pick a single home (file header, dedicated doc) and keep in-place comments to local mechanics. Don't sprinkle the same explanation across multiple sites.
 - **Documentation describes the current state of the code**: not future intent or aspiration. When a change is in flight, update docs alongside the code.
 
+## Running tests
+
+Run tests with `go tool mdrdev test`:
+
+  go tool mdrdev test ./... -count=1 -timeout 600s
+
+Invoke it bare: no pipes, redirects, or shell expansions. Raw `go test` and
+`go run` are denied.
+
+Record integration cassettes with:
+
+  go tool mdrdev record-cassette ./test/integration/ -run TestFoo
+
+Don't preflight-check for Docker or other prerequisites before running tests or
+recording; the test itself reports what's missing. Checking beforehand adds
+noise and guesses at causes.
+
 **Never write to auto-memory unless the user says "write to your memory" verbatim.** Do not infer consent from corrections, preferences, or context.
 
 @kb.md

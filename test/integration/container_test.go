@@ -1,7 +1,7 @@
 package integration
 
-// Test binary flags (e.g. -record) must go after the package path:
-//   go test -v -run TestFoo ./test/integration/ -record
+// Record cassettes (real upstream calls) with mdrdev:
+//   go tool mdrdev record-cassette ./test/integration/ -run TestFoo
 
 import (
 	"context"

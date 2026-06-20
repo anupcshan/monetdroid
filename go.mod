@@ -224,4 +224,7 @@ require (
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )
 
-tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+tool (
+	github.com/anupcshan/monetdroid/cmd/mdrdev
+	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+)

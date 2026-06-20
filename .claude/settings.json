@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go tool mdrdev test:*)"
+    ],
+    "deny": [
+      "Bash(go test:*)",
+      "Bash(go run:*)"
+    ]
+  }
+}
