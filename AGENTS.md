@@ -7,6 +7,7 @@
 - **Commit messages explain WHY, not what**: anything visible in the diff or already commented in code doesn't belong in the message. Keep the body to what the diff can't show.
 - **Design rationale lives in one canonical place**: pick a single home (file header, dedicated doc) and keep in-place comments to local mechanics. Don't sprinkle the same explanation across multiple sites.
 - **Documentation describes the current state of the code**: not future intent or aspiration. When a change is in flight, update docs alongside the code.
+- **Docs and tests describe the invariant, not the fix in progress**: comments, test docs, and assertions must read true after the change lands. State what the code guarantees and why, not the current breakage or the candidate fixes under consideration. "X targets a missing element" describes today's bug and misleads once fixed; "X must target an element that exists" describes the contract and stays accurate. Pin behavior so a test passes under any correct implementation.
 
 ## Running tests
 

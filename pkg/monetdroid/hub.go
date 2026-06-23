@@ -764,7 +764,7 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 				if st == nil {
 					b.WriteString(RenderSubagentSection(msg.AgentID, msg.AgentType, nil))
 				} else {
-					b.WriteString(renderFinalSubagentSection(st))
+					b.WriteString(renderFinalSubagentSection(st, rc.pendingPerms))
 				}
 			case "tool_use", "tool_result", "subagent_linked", "subagent_stopped":
 				// Folded into the section block above.

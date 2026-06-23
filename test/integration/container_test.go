@@ -443,6 +443,49 @@ func TestPermissionFlow(t *testing.T) {
 	})
 }
 
+// TestSubagentPermission verifies that a tool running inside a sub-agent surfaces
+// a reachable permission prompt, both during the live turn and after a page
+// reload re-renders the session through the page-load path. A permission on a
+// sub-agent's inner tool must render its Allow/Deny controls inside the
+// sub-agent section, survive the reload, and resolve when allowed.
+func TestSubagentPermission(t *testing.T) {
+	t.Parallel()
+	WithProviders(t, "subagent_permission.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+		page := f.Page()
+
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		// Delegate a file write to a sub-agent so the sub-agent's own Write tool
+		// is what requires permission, not the parent's.
+		prompt := "Use the Task tool to spawn a sub-agent. The sub-agent must create a new file named done.txt in the current working directory with the contents 'completed'. You must delegate this to the sub-agent and must not write the file yourself. DO NOT try to read the new file's timestamp, especially using ls"
+		page.MustElement(`textarea[name="text"]`).MustInput(prompt)
+		page.MustElement(`.send-btn`).MustClick()
+
+		// Live: the permission prompt must appear inside the sub-agent section.
+		WaitForElement(t, page, ".msg-subagent .perm-inline", 120*time.Second)
+		Screenshot(t, page, "subagent_perm_live")
+
+		// Reload the session through its URL. This re-renders via the page-load
+		// path, not the live event stream, so it exercises replay rendering.
+		sessionURL := page.MustEval(`() => window.location.href`).String()
+		page.MustNavigate(sessionURL).MustWaitStable()
+		WaitForElement(t, page, ".msg-subagent .perm-inline", 60*time.Second)
+		Screenshot(t, page, "subagent_perm_after_reload")
+
+		// Resolve the permission and confirm the sub-agent's write lands.
+		page.MustElement(`.msg-subagent .perm-allow`).MustClick()
+		WaitForText(t, page, ".msg-subagent .tool-name", "Allowed", 30*time.Second)
+		Screenshot(t, page, "subagent_perm_allowed")
+
+		WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+		content := f.ReadFile(containerWorkdir + "/done.txt")
+		if !strings.Contains(content, "completed") {
+			t.Fatalf("done.txt has unexpected content: %s", content)
+		}
+	})
+}
+
 func TestAskUserQuestion(t *testing.T) {
 	t.Parallel()
 	WithProviders(t, "ask_user.jsonl.zst", func(t *testing.T, f *ContainerFixture) {

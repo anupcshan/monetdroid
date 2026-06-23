@@ -80,20 +80,23 @@ func renderSubagentStats(tokens, toolUses, durationMs int) string {
 	return strings.Join(parts, " . ")
 }
 
-// RenderSubagentChip renders an inner tool_use chip for a sub-agent. The
-// markup is intentionally lightweight: no permission slots, no Bash bg
-// slot, no Agent-specific machinery. These chips render inside the
-// section's body container.
+// RenderSubagentChip renders an inner tool_use chip for a sub-agent. It carries
+// the same permission anchors as a top-level tool chip (tool-detail, perm-slot,
+// perm-status, all keyed by ToolUseID) so an inner tool that needs permission
+// surfaces its Allow/Deny prompt inline. It omits the Bash background-task slot
+// and spinner, which are not used inside sub-agent sections.
 func RenderSubagentChip(msg ServerMsg) string {
 	if msg.Tool == "TodoWrite" || msg.Tool == "TaskCreate" || msg.Tool == "TaskUpdate" {
 		return ""
 	}
 	summary := ToolChipSummary(msg.Tool, msg.Input)
 	detail := FormatToolInput(msg.Tool, msg.Input)
+	permStatus := fmt.Sprintf(`<span id="perm-status-%s"></span>`, Esc(msg.ToolUseID))
 	resultSlot := fmt.Sprintf(`<div class="tool-result-content" id="tool-result-slot-%s"></div>`, Esc(msg.ToolUseID))
+	permSlot := fmt.Sprintf(`<div id="perm-slot-%s"></div>`, Esc(msg.ToolUseID))
 	return fmt.Sprintf(
-		`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s</summary><div class="tool-detail">%s</div>%s</details></div>`,
-		Esc(msg.ToolUseID), Esc(summary), Esc(detail), resultSlot)
+		`<div class="msg msg-tool" id="tool-%s"><details class="tool-chip"><summary class="tool-name">⚙ %s%s</summary><div class="tool-detail" id="tool-detail-%s">%s</div>%s%s</details></div>`,
+		Esc(msg.ToolUseID), Esc(summary), permStatus, Esc(msg.ToolUseID), Esc(detail), resultSlot, permSlot)
 }
 
 // RenderSubagentToolResult renders the tool_result text for an inner
@@ -114,7 +117,9 @@ func RenderSubagentToolResult(msg ServerMsg) string {
 // Inner tool_results are nested into their matching tool_use chip's
 // result-slot (same shape as the main timeline). Orphan results whose
 // tool_use is absent from the section fall back to the standalone chip.
-func renderFinalSubagentSection(st *subagentRenderState) string {
+// pendingPerms populates a chip's perm-slot for any inner tool_use with an
+// unresolved permission, matching the top-level replay path.
+func renderFinalSubagentSection(st *subagentRenderState, pendingPerms map[string]ServerMsg) string {
 	base := RenderSubagentSection(st.Section.AgentID, st.Section.AgentType, st.Section)
 	if len(st.InnerEvents) == 0 {
 		return base
@@ -131,6 +136,7 @@ func renderFinalSubagentSection(st *subagentRenderState) string {
 		}
 	}
 
+	hasPendingPerm := false
 	var body strings.Builder
 	for _, msg := range st.InnerEvents {
 		if msg.Type == "tool_result" && msg.ToolUseID != "" && toolUseIDs[msg.ToolUseID] {
@@ -145,8 +151,20 @@ func renderFinalSubagentSection(st *subagentRenderState) string {
 					rendered = strings.Replace(rendered, emptySlot, filledSlot, 1)
 				}
 			}
+			if pm, ok := pendingPerms[msg.ToolUseID]; ok {
+				hasPendingPerm = true
+				emptyPerm := fmt.Sprintf(`<div id="perm-slot-%s"></div>`, Esc(msg.ToolUseID))
+				filledPerm := fmt.Sprintf(`<div id="perm-slot-%s">%s</div>`, Esc(msg.ToolUseID), RenderInlinePermission(pm))
+				rendered = strings.Replace(rendered, emptyPerm, filledPerm, 1)
+				rendered = strings.Replace(rendered, `<details class="tool-chip">`, `<details class="tool-chip" open>`, 1)
+			}
 		}
 		body.WriteString(rendered)
+	}
+	// A pending permission inside a collapsed section is unreachable, so open the
+	// section to surface it. base holds only the outer section at this point.
+	if hasPendingPerm {
+		base = strings.Replace(base, `<details class="tool-chip">`, `<details class="tool-chip" open>`, 1)
 	}
 	emptyBody := fmt.Sprintf(`<div class="subagent-body" id="subagent-body-%s"></div>`, Esc(st.Section.AgentID))
 	filledBody := fmt.Sprintf(`<div class="subagent-body" id="subagent-body-%s">%s</div>`, Esc(st.Section.AgentID), body.String())

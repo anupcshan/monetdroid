@@ -465,6 +465,22 @@ func buildRenderContext(m *SessionModel) renderContext {
 		subagentSections[agentID] = st
 	}
 
+	// Populate each section's inner tool stream from the log. The model tracks
+	// section metadata but not inner events, so scan the log the same way the
+	// log-based replay path (precomputeRenderContext) does.
+	for _, msg := range m.Messages {
+		if msg.AgentID == "" {
+			continue
+		}
+		st := subagentSections[msg.AgentID]
+		if st == nil {
+			continue
+		}
+		if msg.Type == "tool_use" || msg.Type == "tool_result" {
+			st.InnerEvents = append(st.InnerEvents, msg)
+		}
+	}
+
 	return renderContext{
 		lastCompact:       m.LastCompact,
 		toolResults:       m.ToolResults,

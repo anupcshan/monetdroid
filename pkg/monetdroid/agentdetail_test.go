@@ -17,7 +17,7 @@ func TestRenderFinalSubagentSection_NestsResultInChip(t *testing.T) {
 			{Type: "tool_result", ToolUseID: "st1", Output: payload, AgentID: "a1"},
 		},
 	}
-	out := renderFinalSubagentSection(st)
+	out := renderFinalSubagentSection(st, nil)
 
 	if count := strings.Count(out, payload); count != 1 {
 		t.Errorf("payload should appear exactly once; got %d\noutput:\n%s", count, out)
@@ -42,7 +42,7 @@ func TestRenderFinalSubagentSection_OrphanResultStandsAlone(t *testing.T) {
 			{Type: "tool_result", ToolUseID: "missing-tool-use", Output: payload, AgentID: "a1"},
 		},
 	}
-	out := renderFinalSubagentSection(st)
+	out := renderFinalSubagentSection(st, nil)
 
 	if count := strings.Count(out, payload); count != 1 {
 		t.Errorf("orphan payload should appear exactly once standalone; got %d\noutput:\n%s", count, out)
