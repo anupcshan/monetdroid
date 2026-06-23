@@ -182,9 +182,6 @@ func runTest(args []string, record bool) int {
 // caller copy is dropped.
 func buildGoTestArgs(forwarded []string, record bool) ([]string, error) {
 	args := []string{"test", "-v"}
-	if record {
-		args = append(args, "-record")
-	}
 	for _, a := range forwarded {
 		switch {
 		case a == "-v" || a == "-test.v":
@@ -196,6 +193,12 @@ func buildGoTestArgs(forwarded []string, record bool) ([]string, error) {
 			continue
 		}
 		args = append(args, a)
+	}
+	if record {
+		// -record must follow the package argument. Placed before the package,
+		// go test consumes the package path as -record's value and tests the
+		// current directory instead of the requested package.
+		args = append(args, "-record")
 	}
 	return args, nil
 }

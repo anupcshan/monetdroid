@@ -113,7 +113,7 @@ func TestBuildGoTestArgsRecordInjectsAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"test", "-v", "-record", "./test/integration/", "-run", "TestFoo"}
+	want := []string{"test", "-v", "./test/integration/", "-run", "TestFoo", "-record"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("args mismatch:\n got:  %v\n want: %v", got, want)
 	}
