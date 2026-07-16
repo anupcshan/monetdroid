@@ -22,6 +22,11 @@ Record integration cassettes with:
 
   go tool mdrdev record-cassette ./test/integration/ -run TestFoo
 
+Cassettes are recorded API request/response streams, not Claude Code logs or UI
+state. To debug behavior, read the screenshots (`*.png`) and DOM snapshots
+(`*.html`) the test writes to `test/integration/testdata/screenshots/`, not the
+cassettes.
+
 Don't preflight-check for Docker or other prerequisites before running tests or
 recording; the test itself reports what's missing. Checking beforehand adds
 noise and guesses at causes.

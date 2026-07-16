@@ -59,20 +59,12 @@ type ProviderConfig struct {
 // The default go test run exercises all providers; -run selects subsets.
 var AllProviders = []ProviderConfig{
 	{
-		Name:     "anthropic",
-		Upstream: "https://api.anthropic.com",
-		Model:    "claude-opus-4-7",
+		Name:     "mimo",
+		Upstream: "https://api.xiaomimimo.com/anthropic",
+		Model:    "mimo-v2.5",
+		EnvVars:  []string{"CLAUDE_CODE_SUBAGENT_MODEL=mimo-v2.5"},
 		Secrets: []SecretSource{
-			{HostPath: "~/.claude/.credentials.json", MountPath: "/root/.claude/.credentials.json"},
-		},
-	},
-	{
-		Name:     "ds4",
-		Upstream: "https://api.deepseek.com/anthropic",
-		Model:    "deepseek-v4-pro[1m]",
-		EnvVars:  []string{"CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash"},
-		Secrets: []SecretSource{
-			{HostPath: "~/.deepseek/api_key", EnvVar: "ANTHROPIC_AUTH_TOKEN"},
+			{HostPath: "~/.mimo/api_key", EnvVar: "ANTHROPIC_AUTH_TOKEN"},
 		},
 	},
 }

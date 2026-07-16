@@ -151,7 +151,7 @@ func TestKBNewProject(t *testing.T) {
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-		page.MustElement(`textarea[name="text"]`).MustInput("Start a new project: a CLI calculator supporting +, -, *, / on integer args. Walk through a plan. Do not run go or build commands.")
+		page.MustElement(`textarea[name="text"]`).MustInput("Start a new project: a CLI calculator supporting +, -, *, / on integer args. Walk through a plan. Record only the project plan in kb. Do not run go or build commands. Do not write, create, or edit any source code files. This task needs the plan, not an implementation.")
 		page.MustElement(`.send-btn`).MustClick()
 
 		WaitForElement(t, page, ".msg-assistant", 120*time.Second)

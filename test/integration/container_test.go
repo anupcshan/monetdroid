@@ -5,6 +5,8 @@ package integration
 
 import (
 	"context"
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -27,6 +29,11 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 	"github.com/go-rod/rod"
 )
+
+// sampleImage is the PNG fixture embedded for TestReadImage.
+//
+//go:embed testdata/sample.png
+var sampleImage []byte
 
 var record = flag.Bool("record", false, "record new cassettes (requires subscription auth)")
 
@@ -932,11 +939,9 @@ func TestBashSpinner(t *testing.T) {
 		// Wait for Claude to respond, confirming the bg task was submitted.
 		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
 
-		// Stop button should be gone: no active turn to interrupt.
-		if !page.MustHas("#stop-btn:empty") {
-			Screenshot(t, page, "bash_spinner_stop_btn_present")
-			t.Fatal("stop button visible with no active turn")
-		}
+		// The stop button clears when the turn ends. The assistant bubble
+		// appears earlier during streaming, so wait for the clear.
+		WaitForElement(t, page, "#stop-btn:empty", 30*time.Second)
 
 		// Spinner should still be present because the bg command is still running.
 		if !page.MustHas(".tool-spinner") {
@@ -1075,9 +1080,9 @@ func TestReadImage(t *testing.T) {
 	t.Parallel()
 	WithProviders(t, "read_image.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 
-		// Create a minimal 1x1 red PNG (base64) inside the container.
-		// This is a valid 67-byte PNG.
-		pngB64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+		// Write a normal-sized PNG into the container. Some image processors
+		// reject very small images, so use a real fixture instead of a 1x1.
+		pngB64 := base64.StdEncoding.EncodeToString(sampleImage)
 		if out, err := f.DockerExec("sh", "-c", "echo '"+pngB64+"' | base64 -d > "+containerWorkdir+"/test.png"); err != nil {
 			t.Fatalf("create test.png: %v\n%s", err, out)
 		}
@@ -1127,7 +1132,7 @@ func TestReadImage(t *testing.T) {
 		if !strings.HasPrefix(reloadSrc, "data:image/png;base64,") {
 			t.Fatalf("after reload, expected data:image/png;base64,... src, got: %.80s...", reloadSrc)
 		}
-	}, ProviderSkip{"ds4", "DS4 does not support image inputs"})
+	})
 }
 
 // initGitRepo initializes a git repo inside the container at the given path.
@@ -2556,7 +2561,10 @@ func getEnv(key, fallback string) string {
 		// command-type curl shim instead.
 		cmd := fmt.Sprintf("curl -s -X POST --data-binary @- %s", hookURL)
 		cfg := config{Hooks: map[string][]matcherGroup{
-			"PreToolUse": {{Hooks: []hookHandlerT{{Type: "command", Command: cmd, Timeout: 20}}}},
+			// Timeout must outlast the hold. The target is released only after the
+			// other two subagents link, so a shorter timeout lets it finish before
+			// the intermediate-state assertion.
+			"PreToolUse": {{Hooks: []hookHandlerT{{Type: "command", Command: cmd, Timeout: 120}}}},
 		}}
 		settingsJSON, err := json.MarshalIndent(cfg, "", "  ")
 		if err != nil {
@@ -2684,7 +2692,7 @@ func getEnv(key, fallback string) string {
 		// inner tool chips live inside their section's body div (not at top
 		// level), so a leaked chip would show up as an extra msg-tool here.
 		// Extra msg-assistant blocks beyond the first are tolerated.
-		topClasses := topLevelMessageClasses(page)
+		topClasses := dropPreSubagentAssistant(topLevelMessageClasses(page))
 		prefix := []string{"user", "subagent", "subagent", "subagent", "assistant"}
 		if len(topClasses) < len(prefix) {
 			t.Fatalf("top-level message sequence too short:\n  got:      %v\n  expected prefix: %v", topClasses, prefix)
@@ -2831,6 +2839,24 @@ func topLevelMessageClasses(page *rod.Page) []string {
 	return classes
 }
 
+// dropPreSubagentAssistant removes top-level assistant messages the parent
+// emits as a preamble before dispatching its first sub-agent. MiMo and GLM
+// emit one; Claude and DeepSeek dispatch immediately, so this is a no-op for them.
+func dropPreSubagentAssistant(classes []string) []string {
+	out := make([]string, 0, len(classes))
+	seenSubagent := false
+	for _, c := range classes {
+		if c == "subagent" {
+			seenSubagent = true
+		}
+		if c == "assistant" && !seenSubagent {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // assertIntermediateSubagentState verifies the mixed UI state: target is
 // pre-link, the other two are at end state, no parent text yet.
 func assertIntermediateSubagentState(t *testing.T, page *rod.Page, targetID string) {
@@ -2841,7 +2867,7 @@ func assertIntermediateSubagentState(t *testing.T, page *rod.Page, targetID stri
 		t.Fatalf("expected 3 sub-agent sections, got %d", len(sections))
 	}
 
-	topClasses := topLevelMessageClasses(page)
+	topClasses := dropPreSubagentAssistant(topLevelMessageClasses(page))
 	wantTop := []string{"user", "subagent", "subagent", "subagent"}
 	if !slices.Equal(topClasses, wantTop) {
 		t.Fatalf("top-level mismatch: got %v want %v", topClasses, wantTop)
@@ -3211,8 +3237,7 @@ func TestPermissionSuggestions(t *testing.T) {
 }
 
 var expectedModelName = map[string]string{
-	"anthropic": "opus",
-	"ds4":       "deepseek-v4-pro",
+	"mimo": "mimo-v2.5",
 }
 
 func modelNameFromProvider(t *testing.T) string {
