@@ -292,27 +292,55 @@ details[open] > .history-group-header::before { content: '▼ '; }
   min-height: 0;
 }
 .mode-bar:empty { display: none; }
-.mode-label { color: var(--tool); font-weight: 600; }
-.mode-reset {
+.mode-trigger {
   color: var(--text2);
   background: none;
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px 8px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   cursor: pointer;
 }
-.mode-accept-edits {
+.mode-trigger:hover { color: var(--tool); border-color: var(--tool); }
+.mode-trigger-active {
   color: var(--tool);
-  background: none;
-  border: 1px solid var(--tool);
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-family: var(--mono);
-  font-size: 11px;
+  border-color: var(--tool);
   font-weight: 600;
+}
+.mode-picker { min-width: 230px; padding: 4px; }
+.mode-picker-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 8px 4px;
+}
+.mode-option-form { margin: 0; }
+.mode-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
   cursor: pointer;
+}
+.mode-option:hover { background: var(--surface2); }
+.mode-option-current { color: var(--tool); cursor: default; padding: 8px 10px; }
+.mode-option-current:hover { background: none; }
+.mode-option-name { display: block; font-weight: 600; }
+.mode-option-desc {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text2);
+  margin-top: 2px;
 }
 
 /* --- Cost bar --- */

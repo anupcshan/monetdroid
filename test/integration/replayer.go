@@ -503,6 +503,7 @@ var (
 		"context_management": true,
 		"system":             true,
 		"tools":              true,
+		"stop_sequences":     true,
 	}
 
 	// deniedRequestKeys are stripped from the cassette silently. See file

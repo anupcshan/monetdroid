@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -87,4 +88,13 @@ func CreatePlainSession(t *testing.T, page *rod.Page, cwd string) {
 	WaitForElement(t, page, `#new-session-popover details input[name="cwd"]`, 5*time.Second)
 	page.MustElement(`#new-session-popover details input[name="cwd"]`).MustInput(cwd)
 	page.MustElement(`#new-session-popover details .btn-create`).MustClick()
+}
+
+// SelectMode opens the mode picker popover and selects the named permission
+// mode. mode is the raw CLI mode string, e.g. "acceptEdits" or "default".
+func SelectMode(t *testing.T, page *rod.Page, mode string) {
+	t.Helper()
+	page.MustElement(`button[popovertarget="mode-picker-popover"]`).MustClick()
+	btn := WaitForElement(t, page, fmt.Sprintf(`#mode-picker-popover form[data-mode="%s"] button`, mode), 5*time.Second)
+	btn.MustClick()
 }

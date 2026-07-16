@@ -600,8 +600,8 @@ func main() {
 		WaitForElement(t, page, ".perm-inline", 60*time.Second)
 		Screenshot(t, page, "accept_edits_permission")
 
-		// Enable Accept Edits via the mode bar toggle, then allow the current permission
-		page.MustElement(`.mode-accept-edits`).MustClick()
+		// Enable Accept Edits via the mode picker, then allow the current permission
+		SelectMode(t, page, "acceptEdits")
 		page.MustElement(`.perm-allow`).MustClick()
 
 		// Permission should be resolved, with status shown in the tool chip summary.
@@ -645,8 +645,8 @@ func main() {
 		}
 
 		// Reset permission mode back to default
-		page.MustElement(`.mode-reset`).MustClick()
-		page.MustWait(`() => !document.querySelector('.mode-reset')`)
+		SelectMode(t, page, "default")
+		page.MustWait(`() => !document.querySelector('.mode-trigger-active')`)
 		Screenshot(t, page, "accept_edits_mode_reset")
 
 		// Third turn does another edit and should require permission again after the mode reset.
@@ -672,6 +672,70 @@ func main() {
 		if !strings.Contains(content, "howdy") {
 			t.Fatalf("greeting.go should contain 'howdy', got: %s", content)
 		}
+	})
+}
+
+func TestAutoMode(t *testing.T) {
+	t.Parallel()
+	WithProviders(t, "auto_mode.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+
+		page := f.Page()
+
+		// Create session. It starts in default mode.
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		// The probe runs code that only prints. It is neither read-only (so
+		// default prompts) nor a file edit (so acceptEdits prompts). Only
+		// auto's classifier approves it. An edit would not distinguish auto
+		// from acceptEdits, which both auto-approve edits.
+
+		// Turn 1 in default mode: the probe prompts.
+		page.MustElement(`textarea[name="text"]`).MustInput(`Run this exact shell command and tell me its output: python3 -c 'print("probe-one-aaaa")'`)
+		page.MustElement(`.send-btn`).MustClick()
+		WaitForElement(t, page, ".perm-inline", 60*time.Second)
+		Screenshot(t, page, "auto_mode_default_prompt")
+		page.MustElement(`.perm-allow`).MustClick()
+		WaitForText(t, page, ".tool-name", "Allowed", 10*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		Screenshot(t, page, "auto_mode_first_turn")
+
+		// Switch to auto mode.
+		SelectMode(t, page, "auto")
+		page.MustWait(`() => !!document.querySelector('.mode-trigger-active')`)
+		Screenshot(t, page, "auto_mode_enabled")
+
+		// Turn 2 in auto mode: the same probe runs without a prompt. A different
+		// marker keeps the output assertion specific to this turn.
+		prevAssistants := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
+		page.MustElement(`textarea[name="text"]`).MustInput(`Run this exact shell command and tell me its output: python3 -c 'print("probe-two-bbbb")'`)
+		page.MustElement(`.send-btn`).MustClick()
+		// Gate on a new assistant message before #stop-btn:empty, which otherwise
+		// matches the leftover empty span from turn 1's done event.
+		page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
+			`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		Screenshot(t, page, "auto_mode_second_turn")
+
+		// Auto mode auto-approved the command, so no prompt appears. default and
+		// acceptEdits both prompt on this command, so this only passes in auto.
+		prompts, err := page.Elements(".perm-inline")
+		if err != nil {
+			t.Fatalf("failed to query perm-inlines: %v", err)
+		}
+		if len(prompts) > 0 {
+			Screenshot(t, page, "auto_mode_unexpected_perm")
+			t.Fatalf("expected 0 inline permission prompts in auto mode, got %d", len(prompts))
+		}
+
+		// The probe-two chip renders collapsed, hiding its output. Expand it
+		// before asserting so the check sees the command's actual output.
+		chip, err := page.Timeout(10*time.Second).ElementR(".tool-name", "probe-two-bbbb")
+		if err != nil {
+			t.Fatalf("probe-two tool chip not found: %v", err)
+		}
+		chip.MustClick()
+		WaitForText(t, page, ".tool-result-output", "probe-two-bbbb", 10*time.Second)
 	})
 }
 

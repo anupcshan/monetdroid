@@ -311,21 +311,66 @@ func costBarCmd(sessionID, cwd string, cost CostInfo, ds DiffStat) []DOMCmd {
 	return []DOMCmd{{Target: "cost-bar", Strategy: "innerHTML", Content: renderCostBarModel(sessionID, cwd, cost, ds)}}
 }
 
-func modeBarCmd(sessionID string, mode claude.PermissionMode) []DOMCmd {
-	var modeHTML string
-	if mode != "" && mode != claude.PermDefault {
-		var ml string
-		switch mode {
-		case claude.PermAcceptEdits:
-			ml = "Auto-accepting edits"
-		default:
-			ml = string(mode)
+// modeOptions is the set of permission modes surfaced in the mode picker, in
+// display order. Each becomes one entry in the popover. pkg/claude's parser is
+// the authority on which strings are valid modes. This list is the curated
+// subset the UI exposes.
+var modeOptions = []struct {
+	mode  claude.PermissionMode
+	label string
+	desc  string
+}{
+	{claude.PermDefault, "Default", "Ask unless already allowed or denied"},
+	{claude.PermAcceptEdits, "Accept edits", "Auto-approve edits, ask for the rest"},
+	{claude.PermAuto, "Auto", "Classifier auto-approves safe actions, blocks risky ones"},
+}
+
+// modeLabel returns the UI label for a permission mode. Falls back to the raw
+// mode string for anything outside modeOptions.
+func modeLabel(mode claude.PermissionMode) string {
+	for _, o := range modeOptions {
+		if o.mode == mode {
+			return o.label
 		}
-		modeHTML = fmt.Sprintf(`<span class="mode-label">%s</span><form hx-post="/mode" hx-swap="none" style="display:inline"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="default"><button type="submit" class="mode-reset">reset to default</button></form>`, Esc(ml), Esc(sessionID))
-	} else {
-		modeHTML = fmt.Sprintf(`<form hx-post="/mode" hx-swap="none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="acceptEdits"><button type="submit" class="mode-accept-edits">Accept Edits</button></form>`, Esc(sessionID))
 	}
-	return []DOMCmd{{Target: "mode-bar", Strategy: "innerHTML", Content: modeHTML}}
+	return string(mode)
+}
+
+func modeBarCmd(sessionID string, mode claude.PermissionMode) []DOMCmd {
+	return []DOMCmd{{Target: "mode-bar", Strategy: "innerHTML", Content: renderModeBar(sessionID, mode)}}
+}
+
+func renderModeBar(sessionID string, mode claude.PermissionMode) string {
+	// Sessions resumed from history carry no stored permission mode. The CLI
+	// process always starts in default, so an unset mode is effectively default.
+	if mode == "" {
+		mode = claude.PermDefault
+	}
+	triggerClass := "mode-trigger"
+	if mode != claude.PermDefault {
+		triggerClass += " mode-trigger-active"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<button type="button" class="%s" popovertarget="mode-picker-popover">Mode: %s ▾</button>`, triggerClass, Esc(modeLabel(mode)))
+	b.WriteString(`<div popover id="mode-picker-popover" class="mode-picker"><div class="mode-picker-label">Permission mode</div>`)
+	for _, o := range modeOptions {
+		b.WriteString(renderModeOption(sessionID, o.mode, o.label, o.desc, mode))
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func renderModeOption(sessionID string, m claude.PermissionMode, label, desc string, current claude.PermissionMode) string {
+	mark := ""
+	if m == current {
+		mark = " ✓"
+	}
+	inner := fmt.Sprintf(`<span class="mode-option-name">%s%s</span><span class="mode-option-desc">%s</span>`, Esc(label), mark, Esc(desc))
+	if m == current {
+		return fmt.Sprintf(`<div class="mode-option mode-option-current">%s</div>`, inner)
+	}
+	return fmt.Sprintf(`<form class="mode-option-form" data-mode="%s" hx-post="/mode" hx-swap="none" hx-on::after-request="document.getElementById('mode-picker-popover').hidePopover()"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="mode" value="%s"><button type="submit" class="mode-option">%s</button></form>`, Esc(string(m)), Esc(sessionID), Esc(string(m)), inner)
 }
 
 func todoCmds(todos []protocol.Todo) []DOMCmd {

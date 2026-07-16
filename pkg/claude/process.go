@@ -24,6 +24,7 @@ type PermissionMode string
 const (
 	PermDefault     PermissionMode = "default"
 	PermAcceptEdits PermissionMode = "acceptEdits"
+	PermAuto        PermissionMode = "auto"
 )
 
 // PermissionModeFromString converts a string to PermissionMode. Only modes
@@ -34,6 +35,8 @@ func PermissionModeFromString(s string) (PermissionMode, bool) {
 		return PermDefault, true
 	case "acceptEdits":
 		return PermAcceptEdits, true
+	case "auto":
+		return PermAuto, true
 	default:
 		return PermissionMode(""), false
 	}
