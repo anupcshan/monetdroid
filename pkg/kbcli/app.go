@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/anupcshan/monetdroid/pkg/kb"
+	"github.com/anupcshan/monetdroid/pkg/kbmcp"
 	"github.com/urfave/cli/v3"
 )
 
@@ -150,6 +151,13 @@ Example:
 					return cmdSearch(cmd)
 				},
 			},
+			{
+				Name:  "mcp",
+				Usage: "Run the kb MCP server over stdio",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return cmdMcp(cmd)
+				},
+			},
 		},
 	}
 }
@@ -275,4 +283,13 @@ func cmdSearch(cmd *cli.Command) error {
 	}
 	fmt.Print(result)
 	return nil
+}
+
+func cmdMcp(cmd *cli.Command) error {
+	k, _ := kb.Resolve()
+	// A nil store means the working directory is not a git repo, so there
+	// is no kb store. The server still starts and advertises its tools.
+	// Each call reports no store, so a globally registered kb server does
+	// not error out in directories without one.
+	return kbmcp.Serve(k)
 }

@@ -2,71 +2,84 @@ package integration
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 )
 
-// bashCommand extracts the Bash command from a tool_use event by
-// re-parsing Input.Raw. ToolInput's UnmarshalJSON only fills Raw; the
-// per-tool typed field (Input.Bash) needs the tool name to resolve,
-// which generic JSON decode doesn't have.
-func bashCommand(e monetdroid.ServerMsg) string {
-	if e.Input == nil || len(e.Input.Raw) == 0 {
-		return ""
-	}
-	var b protocol.BashInput
-	if err := json.Unmarshal(e.Input.Raw, &b); err != nil {
-		return ""
-	}
-	return b.Command
+// kbMcpServers is dropped at /root/.claude.json so Claude spawns the kb MCP
+// server. User scope is always trusted, so there is no project trust dialog
+// in the non-interactive cassette run. The container's /usr/local/bin/kb
+// shim resolves to the test binary running `kb mcp`.
+const kbMcpServers = `{
+  "mcpServers": {
+    "kb": { "command": "kb", "args": ["mcp"] }
+  }
 }
+`
 
-// kbVerbRe matches a `kb <verb>` invocation inside a Bash command string.
-// The verb set is the full kb CLI surface as of the test's writing.
-var kbVerbRe = regexp.MustCompile(`\bkb\s+(list|read|write|append|edit|rm|mv|search)\b`)
-
-// kbAllowSettings is dropped at `<cwd>/.claude/settings.json` in each test's
-// fixture so Claude auto-approves all kb invocations (including compound
-// commands with stdin pipes used by `kb write` / `kb append` / `kb edit`).
+// kbAllowSettings is dropped at <cwd>/.claude/settings.json so Claude
+// auto-approves every kb MCP tool call. Entries are the namespaced tool
+// names Claude exposes for the kb server.
 const kbAllowSettings = `{
   "permissions": {
     "allow": [
-      "Bash(kb list*)",
-      "Bash(kb read*)",
-      "Bash(kb search*)",
-      "Bash(kb write*)",
-      "Bash(kb append*)",
-      "Bash(kb edit*)",
-      "Bash(kb rm*)",
-      "Bash(kb mv*)",
-      "Bash(kb --help)"
+      "mcp__kb__list",
+      "mcp__kb__search",
+      "mcp__kb__read",
+      "mcp__kb__write",
+      "mcp__kb__edit",
+      "mcp__kb__append",
+      "mcp__kb__rm",
+      "mcp__kb__mv"
     ]
   }
 }
 `
 
-// testOnlyNoQuestionsAddendum is appended to the installed CLAUDE.md
-// in TestKBNewProject only. Real users may want clarifying questions
-// during planning; in a non-interactive cassette run there is no one
-// to answer them, so we suppress them at the test fixture.
-const testOnlyNoQuestionsAddendum = `
-## For this test
+// testOnlyNoQuestionsAddendum is written to CLAUDE.md in TestKBNewProject
+// only. Real users may want clarifying questions during planning; in a
+// non-interactive cassette run there is no one to answer them, so we
+// suppress them at the test fixture.
+const testOnlyNoQuestionsAddendum = `## For this test
 
 When recording a new project plan in kb, do not stop to ask the user
 clarifying questions. Pick reasonable defaults, write them into the
 kb entry, and note any open questions inside the entry itself.
 `
 
-// TestKBResumeProject seeds a KB entry at `projects/foo.md` describing
+// RegisterKBMCP writes the user-scope mcpServers entry so Claude spawns the
+// kb MCP server. Must run before the session starts.
+func (f *ContainerFixture) RegisterKBMCP() {
+	f.WriteFile("/root/.claude.json", kbMcpServers)
+}
+
+// kbWritePath extracts the path argument from an mcp__kb__write tool_use
+// event, or "" when the event is not a kb write or has no path.
+func kbWritePath(e monetdroid.ServerMsg) string {
+	if e.Type != "tool_use" || e.Tool != "mcp__kb__write" {
+		return ""
+	}
+	if e.Input == nil || len(e.Input.Raw) == 0 {
+		return ""
+	}
+	var in struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(e.Input.Raw, &in); err != nil {
+		return ""
+	}
+	return in.Path
+}
+
+// TestKBResumeProject seeds a KB entry at projects/foo.md describing
 // partial project state that is not derivable from the repo contents, then
 // prompts Claude to "resume work on foo" and asserts Claude consulted the
-// KB. Verifies a `kb` invocation appeared in the Bash tool uses, and that
-// the assistant text references a token only present in the seeded entry.
+// KB through the kb MCP tools. Verifies an mcp__kb__* call appeared in the
+// tool uses, and that the assistant text references a token only present
+// in the seeded entry.
 func TestKBResumeProject(t *testing.T) {
 	t.Parallel()
 	WithProviders(t, "kb_resume_project.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
@@ -81,7 +94,7 @@ func main() {
 `)
 		f.WriteFile(containerWorkdir+"/.claude/settings.json", kbAllowSettings)
 		f.DockerExec("git", "init", containerWorkdir)
-		f.DockerExec("kbadmin", "install", containerWorkdir+"/CLAUDE.md")
+		f.RegisterKBMCP()
 
 		f.KBWithStdin(containerWorkdir, `# Foo
 
@@ -105,13 +118,12 @@ func main() {
 
 		events := f.SessionLog()
 		kbCalls := 0
+		var toolNames []string
 		var assistantText strings.Builder
-		var bashCmds []string
 		for _, e := range events {
-			if e.Type == "tool_use" && e.Tool == "Bash" {
-				cmd := bashCommand(e)
-				bashCmds = append(bashCmds, cmd)
-				if kbVerbRe.MatchString(cmd) {
+			if e.Type == "tool_use" {
+				toolNames = append(toolNames, e.Tool)
+				if strings.HasPrefix(e.Tool, "mcp__kb__") {
 					kbCalls++
 				}
 			}
@@ -122,7 +134,7 @@ func main() {
 		}
 
 		if kbCalls == 0 {
-			t.Fatalf("expected at least one kb invocation; bash commands seen:\n%s", strings.Join(bashCmds, "\n---\n"))
+			t.Fatalf("expected at least one mcp__kb__* call; tools seen:\n%s", strings.Join(toolNames, "\n"))
 		}
 
 		text := assistantText.String()
@@ -133,19 +145,19 @@ func main() {
 }
 
 // TestKBNewProject starts from an empty KB and asks Claude to plan a new
-// project. Asserts Claude created an entry under `projects/`, matching
-// the "track new work" guidance in the installed kb.md. Checkpoint
-// behavior (append/edit) is not asserted here because the prompt only
-// asks for a plan; checkpointing applies during implementation.
+// project. Asserts Claude created an entry under projects/ via the kb MCP
+// write tool, matching the "track new work" guidance in that tool's
+// description. Checkpoint behavior (append/edit) is not asserted here
+// because the prompt only asks for a plan.
 func TestKBNewProject(t *testing.T) {
 	t.Parallel()
 	WithProviders(t, "kb_new_project.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 
 		f.WriteFile(containerWorkdir+"/go.mod", "module calc\n\ngo 1.23\n")
 		f.WriteFile(containerWorkdir+"/.claude/settings.json", kbAllowSettings)
+		f.WriteFile(containerWorkdir+"/CLAUDE.md", testOnlyNoQuestionsAddendum)
 		f.DockerExec("git", "init", containerWorkdir)
-		f.DockerExec("kbadmin", "install", containerWorkdir+"/CLAUDE.md")
-		f.WriteFile(containerWorkdir+"/CLAUDE.md", f.ReadFile(containerWorkdir+"/CLAUDE.md")+testOnlyNoQuestionsAddendum)
+		f.RegisterKBMCP()
 
 		page := f.Page()
 		CreatePlainSession(t, page, containerWorkdir)
@@ -159,20 +171,19 @@ func TestKBNewProject(t *testing.T) {
 
 		events := f.SessionLog()
 		var kbWritesProjects int
-		var bashCmds []string
+		var toolNames []string
 		for _, e := range events {
-			if e.Type != "tool_use" || e.Tool != "Bash" {
+			if e.Type != "tool_use" {
 				continue
 			}
-			cmd := bashCommand(e)
-			bashCmds = append(bashCmds, cmd)
-			if strings.Contains(cmd, "kb write projects/") || strings.Contains(cmd, `kb write "projects/`) || strings.Contains(cmd, "kb write 'projects/") {
+			toolNames = append(toolNames, e.Tool)
+			if strings.HasPrefix(kbWritePath(e), "projects/") {
 				kbWritesProjects++
 			}
 		}
 
 		if kbWritesProjects == 0 {
-			t.Fatalf("expected at least one `kb write projects/…` call; bash commands seen:\n%s", strings.Join(bashCmds, "\n---\n"))
+			t.Fatalf("expected an mcp__kb__write to projects/...; tools seen:\n%s", strings.Join(toolNames, "\n"))
 		}
 
 		list := f.KB(containerWorkdir, "list")
