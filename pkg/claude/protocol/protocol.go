@@ -185,6 +185,8 @@ type ToolInput struct {
 	Ask        *AskInput
 	Agent      *AgentInput
 	PlanMode   *PlanModeInput
+	KBEdit     *KBEditInput
+	KBWrite    *KBWriteInput
 }
 
 func (t ToolInput) MarshalJSON() ([]byte, error) {
@@ -245,6 +247,12 @@ func ParseToolInput(tool string, raw json.RawMessage) *ToolInput {
 	case "ExitPlanMode":
 		t.PlanMode = &PlanModeInput{}
 		json.Unmarshal(raw, t.PlanMode)
+	case "mcp__kb__edit":
+		t.KBEdit = &KBEditInput{}
+		json.Unmarshal(raw, t.KBEdit)
+	case "mcp__kb__write":
+		t.KBWrite = &KBWriteInput{}
+		json.Unmarshal(raw, t.KBWrite)
 	}
 	return t
 }
@@ -272,6 +280,22 @@ type EditInput struct {
 	OldString  string `json:"old_string,omitempty"`
 	NewString  string `json:"new_string,omitempty"`
 	ReplaceAll *bool  `json:"replace_all,omitempty"`
+}
+
+// KBEditInput is kb's edit input. It mirrors EditInput but binds kb's
+// "path" argument, a kb store path rather than a filesystem file_path,
+// so it needs its own type.
+type KBEditInput struct {
+	Path       string `json:"path,omitempty"`
+	OldString  string `json:"old_string,omitempty"`
+	NewString  string `json:"new_string,omitempty"`
+	ReplaceAll *bool  `json:"replace_all,omitempty"`
+}
+
+// KBWriteInput is kb's write input.
+type KBWriteInput struct {
+	Path    string `json:"path,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 type GrepInput struct {

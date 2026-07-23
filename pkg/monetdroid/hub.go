@@ -526,6 +526,22 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 								upgraded = true
 							}
 						}
+					case "mcp__kb__edit":
+						if fp, old, new_, replAll, ok := kbEditDiffFromInput(msg.PermInput); ok {
+							original, readOK := readKBFile(sess.GetCwd(), fp)
+							if diffHTML := renderEditDiff(fp, original, old, new_, replAll, msg.SessionID, true, readOK); diffHTML != "" {
+								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
+								upgraded = true
+							}
+						}
+					case "mcp__kb__write":
+						if fp, content, ok := kbWriteDiffFromInput(msg.PermInput); ok {
+							original, readOK := readKBFile(sess.GetCwd(), fp)
+							if diffHTML := renderWriteDiff(fp, original, content, readOK, msg.SessionID, true); diffHTML != "" {
+								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
+								upgraded = true
+							}
+						}
 					case "ExitPlanMode":
 						if msg.PermInput != nil && msg.PermInput.PlanMode != nil && msg.PermInput.PlanMode.Plan != "" {
 							cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: RenderMarkdown(msg.PermInput.PlanMode.Plan)})

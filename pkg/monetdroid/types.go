@@ -15,6 +15,7 @@ type ServerMsg struct {
 	Images          []protocol.ImageData      `json:"images,omitempty"`
 	Tool            string                    `json:"tool,omitempty"`
 	ToolUseID       string                    `json:"tool_use_id,omitempty"`
+	Cwd             string                    `json:"cwd,omitempty"`
 	Input           *protocol.ToolInput       `json:"input,omitempty"`
 	Output          string                    `json:"output,omitempty"`
 	Error           string                    `json:"error,omitempty"`

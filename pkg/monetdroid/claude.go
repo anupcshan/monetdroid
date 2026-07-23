@@ -136,7 +136,7 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				// Parent Agent tool_use blocks are filtered out at the hook
 				// layer (see hookToStreamEvents PreToolUse). Sub-agent
 				// sections render in the main timeline instead.
-				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput)})
+				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Cwd: s.GetCwd(), Input: protocol.ParseToolInput(b.Name, b.RawInput)})
 			}
 		}
 		if u := event.Message.Usage; u != nil {

@@ -402,6 +402,7 @@ func (s *Session) HandlePermission(req protocol.PermissionRequest, broadcast fun
 	msg := ServerMsg{
 		Type:            "permission_request",
 		SessionID:       s.ID,
+		Cwd:             s.GetCwd(),
 		ToolUseID:       req.ToolUseID,
 		PermID:          req.RequestID,
 		PermTool:        req.ToolName,

@@ -55,9 +55,16 @@ func highlightLines(lexer chroma.Lexer, content string) []string {
 // file already exists on disk, it shows a real diff (additions and removals).
 // Otherwise it shows all-additions for a new file.
 func RenderWriteDiffTable(filePath, content, sessionID string, reviewEnabled bool) string {
-	// If the file exists, diff against the current content.
-	if original, err := os.ReadFile(filePath); err == nil && string(original) != content {
-		return renderFullFileDiff(filePath, string(original), content, sessionID, reviewEnabled)
+	original, err := os.ReadFile(filePath)
+	return renderWriteDiff(filePath, string(original), content, err == nil, sessionID, reviewEnabled)
+}
+
+// renderWriteDiff renders a write diff given the file's current content.
+// When the file exists (readOK) and differs, it shows a full diff against
+// the existing content. Otherwise it shows the content as all-additions.
+func renderWriteDiff(filePath, original, content string, readOK bool, sessionID string, reviewEnabled bool) string {
+	if readOK && original != content {
+		return renderFullFileDiff(filePath, original, content, sessionID, reviewEnabled)
 	}
 
 	// New file: render as all-additions.
@@ -90,17 +97,25 @@ func RenderWriteDiffTable(filePath, content, sessionID string, reviewEnabled boo
 // and language-specific syntax highlighting. It reads the file from disk to
 // produce a diff with absolute line numbers.
 func RenderEditDiffTable(filePath, oldStr, newStr string, replaceAll bool, sessionID string, reviewEnabled bool) string {
-	// Try to read the file and produce a full-file diff with correct line numbers.
-	if original, err := os.ReadFile(filePath); err == nil {
-		content := string(original)
+	original, err := os.ReadFile(filePath)
+	return renderEditDiff(filePath, string(original), oldStr, newStr, replaceAll, sessionID, reviewEnabled, err == nil)
+}
+
+// renderEditDiff renders an edit diff given the file's current content.
+// readOK reports whether the file was read successfully. When false, or when
+// oldStr is not present in the content, the edit falls back to an isolated
+// old/new snippet diff.
+func renderEditDiff(filePath, original, oldStr, newStr string, replaceAll bool, sessionID string, reviewEnabled bool, readOK bool) string {
+	// Produce a full-file diff with correct line numbers when the file is readable.
+	if readOK {
 		var modified string
 		if replaceAll {
-			modified = strings.ReplaceAll(content, oldStr, newStr)
+			modified = strings.ReplaceAll(original, oldStr, newStr)
 		} else {
-			modified = strings.Replace(content, oldStr, newStr, 1)
+			modified = strings.Replace(original, oldStr, newStr, 1)
 		}
-		if modified != content {
-			return renderFullFileDiff(filePath, content, modified, sessionID, reviewEnabled)
+		if modified != original {
+			return renderFullFileDiff(filePath, original, modified, sessionID, reviewEnabled)
 		}
 	}
 

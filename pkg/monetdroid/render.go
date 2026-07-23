@@ -23,6 +23,7 @@ import (
 	gmhtml "github.com/yuin/goldmark/renderer/html"
 
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
+	"github.com/anupcshan/monetdroid/pkg/kb"
 	"github.com/anupcshan/monetdroid/pkg/monetdroid/render"
 )
 
@@ -106,6 +107,16 @@ func ToolChipSummary(tool string, input *protocol.ToolInput) string {
 		return "Agent"
 	case input.PlanMode != nil:
 		return "ExitPlanMode"
+	case input.KBEdit != nil:
+		if input.KBEdit.Path != "" {
+			return "Edit " + short(input.KBEdit.Path)
+		}
+		return "Edit"
+	case input.KBWrite != nil:
+		if input.KBWrite.Path != "" {
+			return "Write " + short(input.KBWrite.Path)
+		}
+		return "Write"
 	}
 	return tool
 }
@@ -149,6 +160,22 @@ func FormatToolInput(tool string, input *protocol.ToolInput) string {
 		}
 	case input.PlanMode != nil:
 		return input.PlanMode.Plan
+	case input.KBEdit != nil:
+		var lines []string
+		lines = append(lines, input.KBEdit.Path)
+		if input.KBEdit.OldString != "" {
+			lines = append(lines, "--- old ---", input.KBEdit.OldString)
+		}
+		if input.KBEdit.NewString != "" {
+			lines = append(lines, "+++ new +++", input.KBEdit.NewString)
+		}
+		return strings.Join(lines, "\n")
+	case input.KBWrite != nil:
+		content := input.KBWrite.Content
+		if len(content) > 200 {
+			content = content[:200]
+		}
+		return input.KBWrite.Path + "\n" + content
 	}
 	// Fallback: pretty-print raw JSON (works for unknown tools)
 	if input.Raw != nil {
@@ -181,6 +208,18 @@ func FormatPermDetail(tool string, input *protocol.ToolInput) string {
 		return strings.Join(lines, "\n")
 	case input.Write != nil:
 		return input.Write.FilePath + "\n\n" + input.Write.Content
+	case input.KBEdit != nil:
+		var lines []string
+		lines = append(lines, input.KBEdit.Path)
+		if input.KBEdit.OldString != "" {
+			lines = append(lines, "--- old ---", input.KBEdit.OldString)
+		}
+		if input.KBEdit.NewString != "" {
+			lines = append(lines, "+++ new +++", input.KBEdit.NewString)
+		}
+		return strings.Join(lines, "\n")
+	case input.KBWrite != nil:
+		return input.KBWrite.Path + "\n\n" + input.KBWrite.Content
 	case input.Read != nil:
 		return input.Read.FilePath
 	}
@@ -292,6 +331,21 @@ func renderToolDiff(msg ServerMsg) (string, string) {
 				return diffHTML, fmt.Sprintf("Write %s +%d", filepath.Base(fp), lines)
 			}
 		}
+	case "mcp__kb__edit":
+		if fp, old, new_, replAll, ok := kbEditDiffFromInput(msg.Input); ok {
+			original, readOK := readKBFile(msg.Cwd, fp)
+			if diffHTML := renderEditDiff(fp, original, old, new_, replAll, msg.SessionID, true, readOK); diffHTML != "" {
+				return diffHTML, editSummary(fp, old, new_)
+			}
+		}
+	case "mcp__kb__write":
+		if fp, content, ok := kbWriteDiffFromInput(msg.Input); ok {
+			original, readOK := readKBFile(msg.Cwd, fp)
+			if diffHTML := renderWriteDiff(fp, original, content, readOK, msg.SessionID, true); diffHTML != "" {
+				lines := strings.Count(content, "\n") + 1
+				return diffHTML, fmt.Sprintf("Write %s +%d", filepath.Base(fp), lines)
+			}
+		}
 	}
 	return "", ""
 }
@@ -316,6 +370,46 @@ func writeDiffFromInput(input *protocol.ToolInput) (filePath, content string, ok
 	content = input.Write.Content
 	ok = filePath != "" && content != ""
 	return
+}
+
+func kbEditDiffFromInput(input *protocol.ToolInput) (path, oldStr, newStr string, replaceAll, ok bool) {
+	if input == nil || input.KBEdit == nil {
+		return
+	}
+	path = input.KBEdit.Path
+	oldStr = input.KBEdit.OldString
+	newStr = input.KBEdit.NewString
+	replaceAll = input.KBEdit.ReplaceAll != nil && *input.KBEdit.ReplaceAll
+	ok = true
+	return
+}
+
+func kbWriteDiffFromInput(input *protocol.ToolInput) (path, content string, ok bool) {
+	if input == nil || input.KBWrite == nil {
+		return
+	}
+	path = input.KBWrite.Path
+	content = input.KBWrite.Content
+	ok = path != "" && content != ""
+	return
+}
+
+// readKBFile reads a kb store entry's current content for diffing. It uses
+// the same backend-agnostic read as the kb HTTP handler rather than assuming
+// kb files live on disk at a known path.
+func readKBFile(cwd, path string) (string, bool) {
+	if cwd == "" || path == "" {
+		return "", false
+	}
+	k, err := kb.Resolve(cwd)
+	if err != nil {
+		return "", false
+	}
+	content, err := k.Read(path, 0, 0)
+	if err != nil {
+		return "", false
+	}
+	return content, true
 }
 
 func editSummary(filePath, oldStr, newStr string) string {
@@ -469,6 +563,18 @@ func RenderPermission(msg ServerMsg) string {
 	if msg.PermTool == "Write" || msg.PermTool == "FileWrite" {
 		if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
 			detailHTML = RenderWriteDiffTable(fp, content, msg.SessionID, true)
+		}
+	}
+	if msg.PermTool == "mcp__kb__edit" {
+		if fp, old, new_, replAll, ok := kbEditDiffFromInput(msg.PermInput); ok {
+			original, readOK := readKBFile(msg.Cwd, fp)
+			detailHTML = renderEditDiff(fp, original, old, new_, replAll, msg.SessionID, true, readOK)
+		}
+	}
+	if msg.PermTool == "mcp__kb__write" {
+		if fp, content, ok := kbWriteDiffFromInput(msg.PermInput); ok {
+			original, readOK := readKBFile(msg.Cwd, fp)
+			detailHTML = renderWriteDiff(fp, original, content, readOK, msg.SessionID, true)
 		}
 	}
 	if detailHTML == "" {
