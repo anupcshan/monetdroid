@@ -410,7 +410,6 @@ func (s *Session) HandlePermission(req protocol.PermissionRequest, broadcast fun
 		PermReason:      req.DecisionReason,
 		PermSuggestions: req.Suggestions,
 	}
-	s.Append(msg)
 	broadcast(msg)
 	resp := <-ch
 	s.DeletePermChan(req.RequestID)

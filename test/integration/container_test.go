@@ -447,6 +447,17 @@ func TestPermissionFlow(t *testing.T) {
 		if !strings.Contains(content, "Hello") {
 			t.Fatalf("hello.txt has unexpected content: %s", content)
 		}
+
+		// Reload re-renders the session from the log. An approved permission
+		// must not re-prompt, so no inline permission prompt may remain.
+		page.MustNavigate(currentURL).MustWaitStable()
+		WaitForElement(t, page, ".msg-assistant", 5*time.Second)
+		reprompts := page.MustEval(`() => document.querySelectorAll('.perm-inline').length`).Int()
+		if reprompts != 0 {
+			Screenshot(t, page, "permission_reprompts_after_reload")
+			t.Fatalf("expected 0 pending permission prompts after reload, got %d", reprompts)
+		}
+		Screenshot(t, page, "permission_resolved_after_reload")
 	})
 }
 
@@ -490,6 +501,17 @@ func TestSubagentPermission(t *testing.T) {
 		if !strings.Contains(content, "completed") {
 			t.Fatalf("done.txt has unexpected content: %s", content)
 		}
+
+		// Reload re-renders the session from the log. A resolved permission
+		// must not re-prompt, so no inline permission prompt may remain.
+		page.MustNavigate(sessionURL).MustWaitStable()
+		WaitForElement(t, page, ".msg-assistant", 5*time.Second)
+		reprompts := page.MustEval(`() => document.querySelectorAll('.perm-inline').length`).Int()
+		if reprompts != 0 {
+			Screenshot(t, page, "subagent_perm_reprompts_after_reload")
+			t.Fatalf("expected 0 pending permission prompts after reload, got %d", reprompts)
+		}
+		Screenshot(t, page, "subagent_perm_resolved_after_reload")
 	})
 }
 
@@ -1068,6 +1090,14 @@ func TestBashSpinner(t *testing.T) {
 		currentURL = page.MustEval(`() => window.location.href`).String()
 		page.MustNavigate(currentURL).MustWaitStable()
 		WaitForElement(t, page, ".msg-assistant", 10*time.Second)
+
+		// Reload re-renders the session from the log. A resolved permission
+		// must not re-prompt, so no inline permission prompt may remain.
+		bashReprompts := page.MustEval(`() => document.querySelectorAll('.perm-inline').length`).Int()
+		if bashReprompts != 0 {
+			Screenshot(t, page, "bash_perm_reprompts_after_reload")
+			t.Fatalf("expected 0 pending bash permission prompts after reload, got %d", bashReprompts)
+		}
 
 		reloadSpinners := page.MustEval(`() => document.querySelectorAll('.tool-spinner').length`).Int()
 		if reloadSpinners != 0 {
