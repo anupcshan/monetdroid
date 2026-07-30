@@ -366,6 +366,9 @@ func scanTokenUsage(fpath string) (used, window int, modelName string, err error
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
+		if entry.IsSidechain {
+			continue
+		}
 		if entry.Type == "assistant" {
 			if u := entry.Message.Usage; u != nil {
 				ctx := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens

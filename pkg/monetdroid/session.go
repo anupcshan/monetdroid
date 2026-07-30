@@ -25,6 +25,7 @@ type Session struct {
 	Log               []ServerMsg
 	QueuedText        string
 	CostAccum         CostInfo
+	StreamContext     bool // true when the assistant stream carried a non-zero context-used this turn
 	Todos             []protocol.Todo
 	SuppressedToolIDs map[string]string        // tool_use id → tool name, for suppressing results
 	BgTaskStops       map[string]chan struct{} // tool_use id → stop channel for bg tailers
@@ -36,36 +37,30 @@ type Session struct {
 	AgentDepth        int             // nesting depth of active sub-agents
 	AgentToolIDs      map[string]bool // active Agent tool_use IDs (keyed by parent tool_use_id)
 	// OutstandingBashID is the tool_use_id of the most recent Bash
-	// PreToolUse that has not yet been connected by bashstreamer.
+	// tool_use that has not yet been connected by bashstreamer.
 	// BashConnected is closed when bashstreamer connects, unblocking
-	// the next PreToolUse.
+	// the next tool_use.
 	OutstandingBashID string
 	BashConnected     chan struct{}
 	// StreamedBashID is the tool_use_id of a bash command currently
 	// being streamed. Set when bashstreamer connects, cleared at
 	// tool_result time. At most one active at a time (sequential tools).
 	StreamedBashID string
+	// BashSignalPath is the path to the signal file that triggers
+	// bashstreamer for foreground Bash commands. Written by
+	// handleStreamEvent when a foreground Bash tool_use arrives.
+	BashSignalPath string
 	// BashStreamCmd is the command string for the currently active
-	// foreground Bash. Set at PreToolUse, consumed by the SSE handlers
-	// to decide whether to route through an extractor.
+	// foreground Bash. Set when the Bash tool_use arrives, consumed by
+	// the SSE handlers to decide whether to route through an extractor.
 	BashStreamCmd string
 	// BashStreamLines holds the streaming buffer for the currently
 	// active foreground Bash. Writes are non-blocking (append to slice);
 	// the SSE handler drains from its own sequence number.
-	BashStreamLines *BashStreamBuffer
-	AgentStats      map[string]*AgentStat // live stats per Agent tool_use ID (from task_progress)
-	// AgentDescriptions stashes the parent Agent tool's `description` from
-	// PreToolUse, keyed by the parent's tool_use_id. Consumed at parent's
-	// PostToolUse for Agent (the only payload that pairs that tool_use_id
-	// with the sub-agent's agent_id).
-	AgentDescriptions map[string]string
-	// SubagentSections tracks sub-agent section state for log replay. Keyed
-	// by agent_id (from SubagentStart). Each section is created live and
-	// progressively populated. The replay path uses this state to render the
-	// section in its final form on initial page load.
-	SubagentSections  map[string]*SubagentSection
-	StreamingText     string // accumulated text from text_delta events
-	StreamingThinking string // accumulated text from thinking_delta events
+	BashStreamLines   *BashStreamBuffer
+	AgentStats        map[string]*AgentStat // live stats per Agent tool_use ID (from task_progress)
+	StreamingText     string                // accumulated text from text_delta events
+	StreamingThinking string                // accumulated text from thinking_delta events
 	Model             *SessionModel
 	proc              claude.Process
 	mu                sync.Mutex
@@ -73,20 +68,21 @@ type Session struct {
 	cancel            context.CancelFunc
 }
 
-// SubagentSection holds the rendered state of a sub-agent section. Fields
-// are filled in progressively: AgentID at SubagentStart, the rest at the
-// parent's PostToolUse for Agent (link). Stopped flips at SubagentStop.
+// SubagentSection holds the rendered state of a sub-agent section. AgentID
+// is the parent's Agent tool_use ID, which is how every sub-agent event on
+// stdout identifies its section. AgentID, AgentType and Description all
+// arrive together on task_started, so the section renders its real heading
+// from the start. Finished flips when the parent's tool_result for the Agent
+// arrives, which is also when FinalText and the totals are known.
 type SubagentSection struct {
-	AgentID         string
-	AgentType       string
-	Linked          bool
-	ParentToolUseID string
-	Description     string
-	FinalText       string
-	TotalTokens     int
-	TotalToolUses   int
-	DurationMs      int
-	Stopped         bool
+	AgentID       string
+	AgentType     string
+	Description   string
+	Finished      bool
+	FinalText     string
+	TotalTokens   int
+	TotalToolUses int
+	DurationMs    int
 }
 
 func (s *Session) Append(msg ServerMsg) {
@@ -565,7 +561,7 @@ func (b *BashStreamBuffer) Wait(ctx context.Context) bool {
 }
 
 // StoreOutstandingBash records the tool_use_id and command of a Bash
-// PreToolUse and creates a buffer that bashstreamer will write lines into.
+// tool_use and creates a buffer that bashstreamer will write lines into.
 func (s *Session) StoreOutstandingBash(id, cmd string) {
 	s.mu.Lock()
 	s.OutstandingBashID = id
@@ -577,7 +573,7 @@ func (s *Session) StoreOutstandingBash(id, cmd string) {
 
 // ConsumeOutstandingBash records the outstanding bash tool_use_id as
 // StreamedBashID (for later cleanup at tool_result time) and closes
-// BashConnected so a waiting PreToolUse can proceed. expected is the
+// BashConnected so a waiting tool_use can proceed. expected is the
 // tool_use_id from the connecting bashstreamer; if it doesn't match the
 // outstanding id, nothing is consumed and "" is returned. This guards
 // against a stray connection attaching to the wrong buffer.
@@ -649,7 +645,7 @@ func (s *Session) BashCmdForTool(toolID string) string {
 // given Bash tool_use_id. If bashstreamer has already connected, it returns
 // immediately. If toolID is still the outstanding Bash (bashstreamer has
 // not connected yet), it waits for the connection so an SSE client that
-// attaches during the PreToolUse-to-connect window still receives output.
+// attaches during the tool_use-to-connect window still receives output.
 // Returns ok=false if toolID is not the active stream.
 func (s *Session) AwaitBashStreamForTool(toolID string, ctx context.Context) (buf *BashStreamBuffer, cmd string, ok bool) {
 	s.mu.Lock()
@@ -766,80 +762,6 @@ func (s *Session) GetAgentDepth() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.AgentDepth
-}
-
-// StashAgentDescription stores the parent Agent tool's `description` from
-// PreToolUse, keyed by the parent's tool_use_id. Consumed by
-// TakeAgentDescription at parent's PostToolUse for Agent.
-func (s *Session) StashAgentDescription(parentToolUseID, description string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.AgentDescriptions == nil {
-		s.AgentDescriptions = make(map[string]string)
-	}
-	s.AgentDescriptions[parentToolUseID] = description
-}
-
-// TakeAgentDescription returns and removes the stashed description for a
-// parent Agent tool_use_id.
-func (s *Session) TakeAgentDescription(parentToolUseID string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	desc := s.AgentDescriptions[parentToolUseID]
-	delete(s.AgentDescriptions, parentToolUseID)
-	return desc
-}
-
-// StartSubagent records a sub-agent section by agent_id (from SubagentStart).
-// Idempotent on repeated calls with the same agent_id.
-func (s *Session) StartSubagent(agentID, agentType string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.SubagentSections == nil {
-		s.SubagentSections = make(map[string]*SubagentSection)
-	}
-	if _, ok := s.SubagentSections[agentID]; ok {
-		return
-	}
-	s.SubagentSections[agentID] = &SubagentSection{AgentID: agentID, AgentType: agentType}
-}
-
-// LinkSubagent fills in the link-time fields on a sub-agent section. The
-// hook contract guarantees SubagentStart (which creates the section) fires
-// before the parent's PostToolUse for Agent (which triggers this call), so
-// the section is always present.
-func (s *Session) LinkSubagent(agentID, parentToolUseID, description, finalText string, tokens, toolUses, durationMs int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sec := s.SubagentSections[agentID]
-	sec.Linked = true
-	sec.ParentToolUseID = parentToolUseID
-	sec.Description = description
-	sec.FinalText = finalText
-	sec.TotalTokens = tokens
-	sec.TotalToolUses = toolUses
-	sec.DurationMs = durationMs
-}
-
-// MarkSubagentStopped flips the Stopped bit on a sub-agent section.
-func (s *Session) MarkSubagentStopped(agentID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if sec := s.SubagentSections[agentID]; sec != nil {
-		sec.Stopped = true
-	}
-}
-
-// GetSubagentSection returns a copy of the section state for agent_id.
-func (s *Session) GetSubagentSection(agentID string) *SubagentSection {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sec := s.SubagentSections[agentID]
-	if sec == nil {
-		return nil
-	}
-	cp := *sec
-	return &cp
 }
 
 // --- Compound operations ---

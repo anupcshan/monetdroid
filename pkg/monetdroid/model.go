@@ -1,6 +1,7 @@
 package monetdroid
 
 import (
+	"log"
 	"strconv"
 	"sync"
 
@@ -35,7 +36,7 @@ type SessionModel struct {
 	ToolResults       map[string]ServerMsg        // tool_use id -> tool_result message
 	SuppressedIDs     map[string]bool             // tool_use ids for suppressed tools
 	PendingPerms      map[string]ServerMsg        // unresolved inline permission_request
-	SubagentSections  map[string]*SubagentSection // agent_id -> section state
+	SubagentSections  map[string]*SubagentSection // parent Agent tool_use_id -> section state
 	LastCompact       int                         // index of last compact_boundary, -1 if none
 	QueuedText        string                      // next user message queued for sending
 
@@ -50,9 +51,10 @@ type SessionModel struct {
 	pendingCommands map[string]string
 
 	// Activity tracking: derived from event observations. turnActive is set by
-	// "running"/"done" ServerMsgs (which map to UserPromptSubmit/Stop hook
-	// observations). processAlive is set true on SessionStart and false when
-	// the process dies.
+	// the "running" broadcast, emitted from handleSend (a new session's first
+	// turn), StartTurn, and waitAndDrainLoop. It is cleared by "done" (the
+	// result event handler). processAlive is set true on session_started and
+	// false on session_ended.
 	turnActive   bool
 	processAlive bool
 
@@ -143,6 +145,9 @@ func (m *SessionModel) sendEvent(ev serverMsgEvent) {
 		// Channel full; drop event. The model will be rebuilt on next
 		// page load, so this is safe (no state corruption, just a
 		// transient rendering gap).
+		if ev.msg.Type == "task_done" {
+			log.Printf("[model] DROPPED task_done for %s (channel full)", ev.msg.ToolUseID)
+		}
 	}
 }
 
@@ -216,7 +221,7 @@ func (m *SessionModel) HasActivity() bool {
 		}
 	}
 	for _, s := range m.SubagentSections {
-		if !s.Stopped {
+		if !s.Finished {
 			return true
 		}
 	}
@@ -372,28 +377,23 @@ func (m *SessionModel) Apply(msg ServerMsg) {
 	case "subagent_started":
 		if msg.AgentID != "" {
 			m.SubagentSections[msg.AgentID] = &SubagentSection{
-				AgentID:   msg.AgentID,
-				AgentType: msg.AgentType,
+				AgentID:     msg.AgentID,
+				AgentType:   msg.AgentType,
+				Description: msg.Description,
 			}
 		}
 
-	case "subagent_stopped":
+	case "subagent_finished":
 		if msg.AgentID != "" {
 			if s, ok := m.SubagentSections[msg.AgentID]; ok {
-				s.Stopped = true
-			}
-		}
-
-	case "subagent_linked":
-		if msg.AgentID != "" {
-			if s, ok := m.SubagentSections[msg.AgentID]; ok {
-				s.Linked = true
-				s.ParentToolUseID = msg.ParentToolUseID
-				s.Description = msg.Description
+				s.Finished = true
 				s.FinalText = msg.Text
 				s.TotalTokens = msg.TotalTokens
 				s.TotalToolUses = msg.TotalToolUses
 				s.DurationMs = msg.DurationMs
+				if msg.Description != "" {
+					s.Description = msg.Description
+				}
 			}
 		}
 	}

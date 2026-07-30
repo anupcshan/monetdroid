@@ -3,11 +3,10 @@
 // This file tracks bg Bash tasks through their full lifecycle:
 //
 //   Creation:
-//     PreToolUse hook (run_in_background:true)
-//       → PostToolUse hook (stdout empty, backgroundTaskId set)
-//       → PostToolBatch hook (tool_response: "Output is being written to: PATH")
-//     ParseBgTaskPath extracts the output path. BgTaskState is created in the
-//     model via Apply() with Command and OutputPath set; Completed is false.
+//     A Bash tool_use with run_in_background produces a parent tool_result on
+//     stdout whose text carries the output path. ParseBgTaskPath extracts it.
+//     BgTaskState is created in the model via Apply() with Command (stashed
+//     from the tool_use) and OutputPath set; Completed is false.
 //
 //   Completion:
 //     <task-notification> XML is injected into the next UserPromptSubmit

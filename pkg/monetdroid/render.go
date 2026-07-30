@@ -509,10 +509,12 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		return fmt.Sprintf(`<div class="msg msg-tool"><details class="tool-result-chip"><summary class="tool-result-summary">result</summary><div class="tool-result-full">%s</div></details></div>`, Esc(msg.Output))
 	case "subagent_started":
-		return RenderSubagentSection(msg.AgentID, msg.AgentType, nil)
-	case "subagent_linked":
-		return ""
-	case "subagent_stopped":
+		return RenderSubagentSection(&SubagentSection{
+			AgentID:     msg.AgentID,
+			AgentType:   msg.AgentType,
+			Description: msg.Description,
+		})
+	case "subagent_finished":
 		return ""
 	case "error":
 		return fmt.Sprintf(`<div class="msg"><div class="msg-error">✗ %s</div></div>`, Esc(msg.Error))
@@ -522,7 +524,7 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		return RenderPermission(msg)
 	case "agent_started", "agent_progress":
-		return "" // handled via OOB swap / timer in hub.go
+		return "" // Not rendered as a standalone message. The agent_progress stat is stored via UpdateAgentStat.
 	case "compact_boundary":
 		return `<div class="compact-boundary"><span>context compacted</span></div>`
 	case "result":

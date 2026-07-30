@@ -20,7 +20,6 @@ type ServerMsg struct {
 	Output          string                    `json:"output,omitempty"`
 	Error           string                    `json:"error,omitempty"`
 	Cost            *CostInfo                 `json:"cost,omitempty"`
-	ParentToolUseID string                    `json:"parent_tool_use_id,omitempty"`
 	AgentID         string                    `json:"agent_id,omitempty"`
 	AgentType       string                    `json:"agent_type,omitempty"`
 	Description     string                    `json:"description,omitempty"`

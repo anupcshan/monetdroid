@@ -38,11 +38,11 @@ type StreamEvent struct {
 	Result          string                    `json:"result,omitempty"`
 	TotalCost       float64                   `json:"total_cost_usd,omitempty"`
 	ModelUsage      map[string]ModelUsageInfo `json:"modelUsage,omitempty"`
-	ToolUseResult   *ToolUseResult            `json:"tool_use_result,omitempty"`
 
 	// Agent task fields
 	TaskID       string     `json:"task_id,omitempty"`
 	TaskType     string     `json:"task_type,omitempty"`
+	SubagentType string     `json:"subagent_type,omitempty"`
 	Description  string     `json:"description,omitempty"`
 	Summary      string     `json:"summary,omitempty"`
 	LastToolName string     `json:"last_tool_name,omitempty"`
@@ -53,21 +53,6 @@ type TaskUsage struct {
 	TotalTokens int `json:"total_tokens"`
 	ToolUses    int `json:"tool_uses"`
 	DurationMs  int `json:"duration_ms"`
-}
-
-type ToolUseResult struct {
-	Stdout string `json:"stdout"`
-	Stderr string `json:"stderr"`
-}
-
-func (r *ToolUseResult) UnmarshalJSON(data []byte) error {
-	var s string
-	if json.Unmarshal(data, &s) == nil {
-		r.Stdout = s
-		return nil
-	}
-	type raw ToolUseResult
-	return json.Unmarshal(data, (*raw)(r))
 }
 
 type StreamMessage struct {

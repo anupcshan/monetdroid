@@ -200,7 +200,11 @@ func RenderEvent(m *SessionModel, msg ServerMsg, sessionID string) []DOMCmd {
 		return modeBarCmd(sessionID, msg.PermMode)
 
 	case "subagent_started":
-		rendered := RenderSubagentSection(msg.AgentID, msg.AgentType, nil)
+		rendered := RenderSubagentSection(&SubagentSection{
+			AgentID:     msg.AgentID,
+			AgentType:   msg.AgentType,
+			Description: msg.Description,
+		})
 		if rendered == "" {
 			return nil
 		}
@@ -210,24 +214,21 @@ func RenderEvent(m *SessionModel, msg ServerMsg, sessionID string) []DOMCmd {
 			Content:  rendered,
 		}}
 
-	case "subagent_linked":
+	case "subagent_finished":
 		if msg.AgentID == "" {
 			return nil
 		}
+		// The heading is already correct: it was rendered from the
+		// description at subagent_started.
 		var cmds []DOMCmd
-		if st, ok := m.SubagentSections[msg.AgentID]; ok {
-			heading := linkedSubagentHeading(msg.Description, msg.AgentID)
-			cmds = append(cmds,
-				DOMCmd{Target: "subagent-heading-" + msg.AgentID, Strategy: "innerHTML", Content: heading},
-				DOMCmd{Target: "subagent-stats-" + msg.AgentID, Strategy: "innerHTML",
-					Content: renderSubagentStats(msg.TotalTokens, msg.TotalToolUses, msg.DurationMs)},
-			)
+		if _, ok := m.SubagentSections[msg.AgentID]; ok {
+			cmds = append(cmds, DOMCmd{Target: "subagent-stats-" + msg.AgentID, Strategy: "innerHTML",
+				Content: renderSubagentStats(msg.TotalTokens, msg.TotalToolUses, msg.DurationMs)})
 			if msg.Text != "" {
 				cmds = append(cmds, DOMCmd{Target: "subagent-final-" + msg.AgentID, Strategy: "innerHTML",
 					Content: fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`,
 						RenderMarkdown(msg.Text))})
 			}
-			_ = st // confirm section exists in the map
 		}
 		cmds = append(cmds, DOMCmd{
 			Target:   "subagent-spinner-" + msg.AgentID,
@@ -235,16 +236,6 @@ func RenderEvent(m *SessionModel, msg ServerMsg, sessionID string) []DOMCmd {
 			Content:  "",
 		})
 		return cmds
-
-	case "subagent_stopped":
-		if msg.AgentID == "" {
-			return nil
-		}
-		return []DOMCmd{{
-			Target:   "subagent-spinner-" + msg.AgentID,
-			Strategy: "outerHTML",
-			Content:  "",
-		}}
 
 	case "user_message":
 		rendered := RenderMsg(msg)
@@ -496,16 +487,14 @@ func buildRenderContext(m *SessionModel) renderContext {
 	subagentSections := make(map[string]*subagentRenderState)
 	for agentID, s := range m.SubagentSections {
 		st := &subagentRenderState{Section: &SubagentSection{
-			AgentID:         s.AgentID,
-			AgentType:       s.AgentType,
-			Linked:          s.Linked,
-			ParentToolUseID: s.ParentToolUseID,
-			Description:     s.Description,
-			FinalText:       s.FinalText,
-			TotalTokens:     s.TotalTokens,
-			TotalToolUses:   s.TotalToolUses,
-			DurationMs:      s.DurationMs,
-			Stopped:         s.Stopped,
+			AgentID:       s.AgentID,
+			AgentType:     s.AgentType,
+			Description:   s.Description,
+			Finished:      s.Finished,
+			FinalText:     s.FinalText,
+			TotalTokens:   s.TotalTokens,
+			TotalToolUses: s.TotalToolUses,
+			DurationMs:    s.DurationMs,
 		}}
 		subagentSections[agentID] = st
 	}

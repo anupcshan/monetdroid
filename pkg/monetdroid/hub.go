@@ -136,14 +136,12 @@ type Hub struct {
 	Tracker       *SessionTracker
 	Labels        *LabelStore
 	Reviews       *ReviewStore
-	// hookBaseURL is the http://host:port that prefixes every hook URL.
-	hookBaseURL string
-	hooks       hookRegistry
+	// baseURL is the http://host:port that prefixes bashstreamer push URLs.
+	baseURL string
 	// claudeCommand overrides the claude CLI invocation. Nil/empty means
 	// use the default "claude" in PATH (resolved by
 	// claude.StartProcessWithConfig). Set at construction; read-only after.
 	claudeCommand []string
-	hookLog       *hookLog
 	mu            sync.RWMutex
 }
 
@@ -188,11 +186,11 @@ func defaultDataDir() string {
 // invocation; nil/empty uses the default "claude" in PATH. When non-empty,
 // claudeCommand[0] is validated with exec.LookPath so a missing binary
 // fails here rather than at session start.
-func NewHub(hookBaseURL string, claudeCommand []string) (*Hub, error) {
-	return NewHubWithDataDir(hookBaseURL, defaultDataDir(), claudeCommand)
+func NewHub(baseURL string, claudeCommand []string) (*Hub, error) {
+	return NewHubWithDataDir(baseURL, defaultDataDir(), claudeCommand)
 }
 
-func NewHubWithDataDir(hookBaseURL, dataDir string, claudeCommand []string) (*Hub, error) {
+func NewHubWithDataDir(baseURL, dataDir string, claudeCommand []string) (*Hub, error) {
 	if len(claudeCommand) > 0 {
 		if _, err := exec.LookPath(claudeCommand[0]); err != nil {
 			return nil, fmt.Errorf("claude binary %q: %w", claudeCommand[0], err)
@@ -210,9 +208,8 @@ func NewHubWithDataDir(hookBaseURL, dataDir string, claudeCommand []string) (*Hu
 		Tracker:       NewSessionTracker(dataDir),
 		Labels:        NewLabelStore(dataDir),
 		Reviews:       NewReviewStore(),
-		hookBaseURL:   hookBaseURL,
+		baseURL:       baseURL,
 		claudeCommand: append([]string(nil), claudeCommand...),
-		hookLog:       newHookLog(500),
 	}
 	return h, nil
 }
@@ -224,7 +221,7 @@ func NewHubWithDataDir(hookBaseURL, dataDir string, claudeCommand []string) (*Hu
 // ExtraEnv entry, the temp directory (for cleanup), and the signal path.
 // Returns nil env if bashstreamer is not on PATH or setup fails, so
 // Claude falls back to its default shell without streaming.
-func NewBashstreamerEnv(hookBaseURL string) (env []string, dir string, signal string) {
+func NewBashstreamerEnv(baseURL string) (env []string, dir string, signal string) {
 	if _, err := exec.LookPath("bashstreamer"); err != nil {
 		return nil, "", ""
 	}
@@ -232,7 +229,7 @@ func NewBashstreamerEnv(hookBaseURL string) (env []string, dir string, signal st
 	if err != nil {
 		return nil, "", ""
 	}
-	pushURL := hookBaseURL + "/bash-stream/"
+	pushURL := baseURL + "/bash-stream/"
 	script := filepath.Join(dir, "bashstreamer-wrapper")
 	signalFile := filepath.Join(dir, "signal")
 	// CLAUDE_CODE_SHELL_PREFIX passes the full shell invocation as $1.
@@ -593,10 +590,9 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 	// Ensure process is alive
 	if proc == nil || proc.IsDead() {
 		broadcast := func(msg ServerMsg) {
-			// Streaming deltas are ephemeral. Broadcast handles persistence.
 			h.Broadcast(msg)
 		}
-		bsEnv, bsDir, bsSignal := NewBashstreamerEnv(h.hookBaseURL)
+		bsEnv, bsDir, bsSignal := NewBashstreamerEnv(h.baseURL)
 		var err error
 		proc, err = claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
 			handleStreamEvent(s, &event, broadcast)
@@ -607,10 +603,6 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 			},
 			OnRawEvent: func(raw protocol.RawStreamEvent) {
 				handleRawStreamEvent(s, &raw, broadcast)
-			},
-			HookRegistry: h,
-			OnHookEvent: func(ev claude.HookEvent) ([]byte, error) {
-				return handleHookEvent(s, ev, broadcast, bsSignal)
 			},
 			ExtraEnv:        bsEnv,
 			BashstreamerDir: bsDir,
@@ -623,15 +615,15 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 			return
 		}
 		s.SetProc(proc)
+		s.BashSignalPath = bsSignal
+		h.Broadcast(ServerMsg{Type: "session_started", SessionID: s.ID})
 	}
 
 	// Auto-label from first user message
 	s.TryAutoLabel(text)
 
-	// Turn start is signalled by the UserPromptSubmit hook, which fires
-	// when proc.SendUserMessage delivers the message. No explicit
-	// "running" broadcast is needed.
 	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
 	go func() {
 		if err := proc.SendUserMessage(text, images); err != nil {
@@ -647,8 +639,6 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 // is empty or the session is interrupted.
 func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 	for {
-		// Stop/StopFailure hook already broadcast "done" during the
-		// turn, so the model has already cleared turnActive.
 		proc.WaitForTurnDone(context.Background())
 
 		if proc.IsDead() {
@@ -660,10 +650,9 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 			break
 		}
 
-		// UserPromptSubmit hook broadcasts "running" when
-		// SendUserMessage delivers the queued message.
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
 		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
+		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
 		if err := proc.SendUserMessage(next, nil); err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
@@ -737,16 +726,16 @@ func precomputeRenderContext(log []ServerMsg) renderContext {
 		switch msg.Type {
 		case "subagent_started":
 			st.Section.AgentType = msg.AgentType
-		case "subagent_stopped":
-			st.Section.Stopped = true
-		case "subagent_linked":
-			st.Section.Linked = true
-			st.Section.ParentToolUseID = msg.ParentToolUseID
 			st.Section.Description = msg.Description
+		case "subagent_finished":
+			st.Section.Finished = true
 			st.Section.FinalText = msg.Text
 			st.Section.TotalTokens = msg.TotalTokens
 			st.Section.TotalToolUses = msg.TotalToolUses
 			st.Section.DurationMs = msg.DurationMs
+			if msg.Description != "" {
+				st.Section.Description = msg.Description
+			}
 		case "tool_use", "tool_result":
 			st.InnerEvents = append(st.InnerEvents, msg)
 		}
@@ -771,18 +760,22 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 			continue
 		}
 		// Sub-agent inner events (AgentID set on tool_use/tool_result) and
-		// section lifecycle updates (subagent_linked/stopped) are folded
-		// into the section block rendered at the subagent_started event.
+		// subagent_finished are folded into the section block rendered at
+		// the subagent_started event.
 		if msg.AgentID != "" {
 			switch msg.Type {
 			case "subagent_started":
 				st := rc.subagentSections[msg.AgentID]
 				if st == nil {
-					b.WriteString(RenderSubagentSection(msg.AgentID, msg.AgentType, nil))
+					b.WriteString(RenderSubagentSection(&SubagentSection{
+						AgentID:     msg.AgentID,
+						AgentType:   msg.AgentType,
+						Description: msg.Description,
+					}))
 				} else {
 					b.WriteString(renderFinalSubagentSection(st, rc.pendingPerms))
 				}
-			case "tool_use", "tool_result", "subagent_linked", "subagent_stopped":
+			case "tool_use", "tool_result", "subagent_finished":
 				// Folded into the section block above.
 			}
 			continue

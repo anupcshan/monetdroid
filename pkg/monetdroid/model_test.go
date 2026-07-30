@@ -64,7 +64,7 @@ func TestActivityStateTransitions(t *testing.T) {
 				{ServerMsg{Type: "running"}, true, true},
 				{ServerMsg{Type: "subagent_started", AgentID: "agent1"}, true, true},
 				{ServerMsg{Type: "done"}, true, false},
-				{ServerMsg{Type: "subagent_stopped", AgentID: "agent1"}, false, false},
+				{ServerMsg{Type: "subagent_finished", AgentID: "agent1"}, false, false},
 			},
 		},
 		{
@@ -85,7 +85,7 @@ func TestActivityStateTransitions(t *testing.T) {
 				{ServerMsg{Type: "running"}, true, true},
 				{ServerMsg{Type: "subagent_started", AgentID: "agent1"}, true, true},
 				{ServerMsg{Type: "done"}, true, false},
-				// New session starts without subagent_stopped arriving.
+				// New session starts without subagent_finished arriving.
 				{ServerMsg{Type: "session_started"}, false, false},
 			},
 		},

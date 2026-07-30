@@ -6,33 +6,28 @@ import (
 )
 
 // RenderSubagentSection renders the outer block for a sub-agent section. It
-// is rendered once at SubagentStart with empty body and spinner running.
-// The body fills in live via OOB swaps as inner tool_use/tool_result events
-// arrive. At link time the heading and stats line update via OOB swaps.
+// is rendered once when the sub-agent starts, with its real heading, an
+// empty body and the spinner running. The body fills in live via OOB swaps
+// as inner tool_use/tool_result events arrive.
 //
-// section may be nil during the initial live broadcast (no link info yet).
-// On replay, section is populated with whatever final state was reached. The
-// spinner span is omitted entirely once the section is linked or stopped,
-// matching the live OOB swap that sets outerHTML="" on those transitions.
-func RenderSubagentSection(agentID, agentType string, section *SubagentSection) string {
-	heading := defaultSubagentHeading(agentID, agentType)
+// On replay, section carries whatever final state was reached. The spinner
+// span is omitted entirely once the section is finished, matching the live
+// OOB swap that sets outerHTML="" at that transition.
+func RenderSubagentSection(section *SubagentSection) string {
+	agentID := section.AgentID
+	heading := subagentHeading(section)
 	stats := ""
 	finalTextHTML := ""
 	spinnerHTML := fmt.Sprintf(
 		` <span class="tool-spinner" id="subagent-spinner-%s"><span class="spinner-dots"><span></span><span></span><span></span></span></span>`,
 		Esc(agentID))
-	if section != nil {
-		if section.Linked {
-			heading = linkedSubagentHeading(section.Description, agentID)
-			stats = renderSubagentStats(section.TotalTokens, section.TotalToolUses, section.DurationMs)
-		}
-		if section.FinalText != "" {
-			finalTextHTML = fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`,
-				RenderMarkdown(section.FinalText))
-		}
-		if section.Stopped || section.Linked {
-			spinnerHTML = ""
-		}
+	if section.Finished {
+		stats = renderSubagentStats(section.TotalTokens, section.TotalToolUses, section.DurationMs)
+		spinnerHTML = ""
+	}
+	if section.FinalText != "" {
+		finalTextHTML = fmt.Sprintf(`<div class="msg msg-assistant"><div class="msg-bubble">%s</div></div>`,
+			RenderMarkdown(section.FinalText))
 	}
 	return fmt.Sprintf(
 		`<div class="msg msg-subagent" id="subagent-section-%s">`+
@@ -52,18 +47,17 @@ func RenderSubagentSection(agentID, agentType string, section *SubagentSection) 
 	)
 }
 
-func defaultSubagentHeading(agentID, agentType string) string {
-	if agentType != "" {
-		return fmt.Sprintf("subagent %s (%s)", Esc(agentType), Esc(agentID))
+// subagentHeading names the section. The description comes in on
+// task_started, so the fallbacks only apply to a sub-agent the CLI started
+// without one.
+func subagentHeading(section *SubagentSection) string {
+	if section.Description != "" {
+		return fmt.Sprintf("Agent: %s", Esc(section.Description))
 	}
-	return fmt.Sprintf("subagent (%s)", Esc(agentID))
-}
-
-func linkedSubagentHeading(description, agentID string) string {
-	if description != "" {
-		return fmt.Sprintf("Agent: %s", Esc(description))
+	if section.AgentType != "" {
+		return fmt.Sprintf("subagent %s (%s)", Esc(section.AgentType), Esc(section.AgentID))
 	}
-	return fmt.Sprintf("Agent (%s)", Esc(agentID))
+	return fmt.Sprintf("subagent (%s)", Esc(section.AgentID))
 }
 
 func renderSubagentStats(tokens, toolUses, durationMs int) string {
@@ -111,7 +105,7 @@ func RenderSubagentToolResult(msg ServerMsg) string {
 }
 
 // renderFinalSubagentSection emits the section block with its inner chips
-// inlined and its final state (link, stats, stopped). Used on replay so the
+// inlined and its final state (stats, final text). Used on replay so the
 // initial server-rendered HTML matches what live OOB swaps would have built.
 //
 // Inner tool_results are nested into their matching tool_use chip's
@@ -120,7 +114,7 @@ func RenderSubagentToolResult(msg ServerMsg) string {
 // pendingPerms populates a chip's perm-slot for any inner tool_use with an
 // unresolved permission, matching the top-level replay path.
 func renderFinalSubagentSection(st *subagentRenderState, pendingPerms map[string]ServerMsg) string {
-	base := RenderSubagentSection(st.Section.AgentID, st.Section.AgentType, st.Section)
+	base := RenderSubagentSection(st.Section)
 	if len(st.InnerEvents) == 0 {
 		return base
 	}

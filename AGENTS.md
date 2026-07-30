@@ -8,6 +8,7 @@
 - **Design rationale lives in one canonical place**: pick a single home (file header, dedicated doc) and keep in-place comments to local mechanics. Don't sprinkle the same explanation across multiple sites.
 - **Documentation describes the current state of the code**: not future intent or aspiration. When a change is in flight, update docs alongside the code.
 - **Docs and tests describe the invariant, not the fix in progress**: comments, test docs, and assertions must read true after the change lands. State what the code guarantees and why, not the current breakage or the candidate fixes under consideration. "X targets a missing element" describes today's bug and misleads once fixed; "X must target an element that exists" describes the contract and stays accurate. Pin behavior so a test passes under any correct implementation.
+- **Test real features end to end against real Claude**: monetdroid's value is that it works on the UI with real Claude, so every real feature is covered by an integration test that drives the real claude binary through the UI against a recorded cassette. Unit tests are reserved for pure logic that touches neither Claude nor the UI, such as parsing and extraction, and should be rare. When a feature lacks coverage, add the integration test and record a cassette. Do not fill the gap with a unit test against fabricated input. A test's value in this project comes from its fidelity, so a low-fidelity test is worse than none.
 
 ## Running tests
 

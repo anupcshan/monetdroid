@@ -5,10 +5,9 @@ import (
 	"log"
 	"os"
 	"regexp"
-	"strings"
+	"sort"
 	"time"
 
-	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
@@ -53,41 +52,31 @@ func handleRawStreamEvent(s *Session, raw *protocol.RawStreamEvent, broadcast fu
 	}
 }
 
+// parentID extracts the parent tool_use ID from a stream event, or "" if none.
+func parentID(event *protocol.StreamEvent) string {
+	if event.ParentToolUseID != nil {
+		return *event.ParentToolUseID
+	}
+	return ""
+}
+
 // handleStreamEvent processes non-control messages from the CLI and broadcasts them.
-//
-// Event flows by category:
-//
-//   - Agent tasks: task_started / task_progress / task_notification arrive as
-//     stream JSON system events. task_notification fires for agent tasks only,
-//     not for background Bash.
-//
-//   - Background Bash tasks: creation arrives via hooks (PreToolUse →
-//     PostToolUse with backgroundTaskId → PostToolBatch with "Output is
-//     being written to:"). Completion has no dedicated event; the signal is
-//     <task-notification> XML injected into the next UserPromptSubmit prompt
-//     text, parsed by the "user" case below.
-//
-//   - Tool lifecycle: tool_use flows from hookToStreamEvents (PreToolUse hook).
-//     tool_result flows from hookToStreamEvents (PostToolBatch hook) or from
-//     stream JSON user events (for stdout-side non-hook paths). Agent tool
-//     results are routed through handleHookEvent (PostToolUse for Agent) and
-//     never reach this function.
-//
-//   - Assistant text/thinking: "assistant" stream events carry text and
-//     thinking blocks. Streaming deltas arrive as stream_event raw events
-//     (routed through handleRawStreamEvent). MessageDisplay hooks carry
-//     final display text and are not used for streaming.
-//
-// Sub-agent events (parent_tool_use_id non-empty) never reach here: the
-// process.go scan filter drops sidechain stdout events, and inner sub-agent
-// hooks are dispatched through handleHookEvent.
 func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(ServerMsg)) {
+	pid := parentID(event)
+
 	switch event.Type {
 	case "system":
 		switch event.Subtype {
 		case "task_started":
 			if event.TaskType == "local_agent" && event.ToolUseID != "" {
 				s.StartAgent(event.ToolUseID, event.Description)
+				broadcast(ServerMsg{
+					Type:        "subagent_started",
+					SessionID:   s.ID,
+					AgentID:     event.ToolUseID,
+					AgentType:   event.SubagentType,
+					Description: event.Description,
+				})
 			}
 		case "task_progress":
 			if event.ToolUseID != "" {
@@ -102,12 +91,14 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				if event.TaskUsage != nil {
 					s.UpdateAgentStat(event.ToolUseID, event.TaskUsage, event.Summary, "")
 				}
-				// Background Bash tasks aren't tracked as agents (no
-				// task_started arrival), so they finalize here.
-				// Agent tasks finalize at parent's PostToolUse for Agent
-				// (routed via handleHookEvent), which is the only payload
-				// pairing the sub-agent's agent_id with the parent
-				// tool_use_id.
+				// For local_agent tasks (tracked via StartAgent at
+				// task_started, so GetAgentStat returns non-nil),
+				// task_notification is not the last word. claude can still
+				// flush the parent's tool_result for this Agent on stdout
+				// afterwards, so FinishAgent and the section's finished
+				// state are deferred to the "user" branch that handles that
+				// tool_result. Background Bash tasks aren't tracked as
+				// agents, so they emit task_done here.
 				if s.GetAgentStat(event.ToolUseID) == nil {
 					broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: event.ToolUseID})
 				}
@@ -116,6 +107,27 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 		}
 
 	case "assistant":
+		// Sub-agent assistant events: route inner tool_use into the
+		// section body. The sub-agent's answer text is not streamed here.
+		// It arrives as the parent's Agent tool_result and renders via
+		// subagent_finished, so streaming it would duplicate the final
+		// text and leak into the main timeline.
+		if pid != "" {
+			for _, b := range event.Message.Content.Blocks {
+				if b.Type == "tool_use" {
+					if suppressResultTools[b.Name] {
+						s.SuppressTool(b.ID, b.Name)
+					}
+					if b.Name == "AskUserQuestion" {
+						continue
+					}
+					broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput), AgentID: pid})
+				}
+			}
+			return
+		}
+
+		// Parent assistant events: broadcast normally
 		for _, b := range event.Message.Content.Blocks {
 			switch b.Type {
 			case "thinking":
@@ -131,17 +143,28 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 					s.SuppressTool(b.ID, b.Name)
 				}
 				if b.Name == "AskUserQuestion" {
-					continue // rendered by the permission prompt UI
+					continue
 				}
-				// Parent Agent tool_use blocks are filtered out at the hook
-				// layer (see hookToStreamEvents PreToolUse). Sub-agent
-				// sections render in the main timeline instead.
+				// The sub-agent section rendered from task_started stands in
+				// for the parent Agent chip, so Agent gets no tool_use of its
+				// own. Registration still happens here: it precedes
+				// task_started, and the parent tool_result below finalizes
+				// whatever is registered.
+				if b.Name == "Agent" {
+					s.StartAgent(b.ID, "")
+					continue
+				}
 				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Cwd: s.GetCwd(), Input: protocol.ParseToolInput(b.Name, b.RawInput)})
+				// Bash foreground: trigger bashstreamer by writing the signal file.
+				if b.Name == "Bash" {
+					handleBashToolUse(s, b.ID, b.RawInput)
+				}
 			}
 		}
 		if u := event.Message.Usage; u != nil {
 			contextUsed := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
 			if contextUsed > 0 {
+				s.StreamContext = true
 				broadcast(ServerMsg{
 					Type: "cost", SessionID: s.ID,
 					Cost: &CostInfo{ContextUsed: contextUsed},
@@ -157,20 +180,89 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 		if event.TotalCost > 0 {
 			cost.TotalCostUSD = event.TotalCost
 		}
-		for _, info := range event.ModelUsage {
+		// ModelUsage is a map. Pick the lexicographically first key so
+		// the name shown for a multi-model turn is stable rather than
+		// dependent on Go's randomized map iteration.
+		models := make([]string, 0, len(event.ModelUsage))
+		for name := range event.ModelUsage {
+			models = append(models, name)
+		}
+		sort.Strings(models)
+		if len(models) > 0 {
+			name := models[0]
+			info := event.ModelUsage[name]
 			if info.ContextWindow > 0 {
 				cost.ContextWindow = info.ContextWindow
 			}
-			break
+			if name != "" {
+				cost.ModelName = name
+			}
 		}
 		if cost.TotalCostUSD > 0 || cost.ContextWindow > 0 {
 			broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: cost})
 		}
+		// Turn done. The scan loop also signals turnDone on result.
+		broadcast(ServerMsg{Type: "done", SessionID: s.ID})
+		// The assistant stream is the primary context source on providers that
+		// carry usage. Fall back to the JSONL scan only when the stream did not
+		// report context this turn (providers whose stream omits usage).
+		if !s.StreamContext {
+			refreshTokenCount(s, broadcast)
+		}
+		s.StreamContext = false
 
 	case "user":
+		// Sub-agent user events: broadcast with AgentID so the render
+		// routes them into the subagent-body container.
+		if pid != "" {
+			for _, b := range event.Message.Content.Blocks {
+				if b.Type == "tool_result" {
+					suppressed := s.RemoveSuppressed(b.ToolUseID)
+					if len(b.Content.Images) > 0 {
+						broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Images: b.Content.Images, AgentID: pid})
+						continue
+					}
+					if suppressed {
+						continue
+					}
+					output := b.Content.String()
+					if !isBoringResult(output) {
+						broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output, AgentID: pid})
+					}
+				}
+			}
+			return
+		}
+
+		// Parent user events: broadcast normally
 		for _, b := range event.Message.Content.Blocks {
 			if b.Type == "tool_result" {
 				suppressed := s.RemoveSuppressed(b.ToolUseID)
+
+				// Agent tool_results finalize the sub-agent. This is the
+				// deterministic "no more events for this Agent" point;
+				// FinishAgent + task_done fire here rather than at
+				// task_notification.
+				if s.GetAgentStat(b.ToolUseID) != nil {
+					output := b.Content.String()
+					s.FinishAgent(b.ToolUseID)
+					stat := s.GetAgentStat(b.ToolUseID)
+					finished := ServerMsg{
+						Type:      "subagent_finished",
+						SessionID: s.ID,
+						AgentID:   b.ToolUseID,
+						Text:      output,
+					}
+					if stat != nil {
+						finished.TotalTokens = stat.TotalTokens
+						finished.TotalToolUses = stat.ToolUses
+						finished.DurationMs = stat.DurationMs
+						finished.Description = stat.Description
+					}
+					broadcast(finished)
+					broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: b.ToolUseID})
+					continue
+				}
 
 				// Always show images even for suppressed tools (e.g. Read on screenshots).
 				if len(b.Content.Images) > 0 {
@@ -184,21 +276,15 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 						output = out
 					}
 				}
-				// Always broadcast tool_result (empty output when suppressed/boring)
-				// so the tool chip's spinner is stripped on result arrival.
+				// Always broadcast tool_result, with empty output when the
+				// result is suppressed or boring, so the tool chip's spinner
+				// is stripped on result arrival.
 				broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
 			}
 		}
 
 		// bg Bash completion: the CLI injects <task-notification> XML
 		// into the next user prompt after a background task finishes.
-		// Example: <task-notification><tool-use-id>call_01_AbC</tool-use-id>
-		// <status>completed</status>...</task-notification>
-		// task_notification stream events (system type) do NOT fire for
-		// bg Bash. The Stop hook's background_tasks list is a snapshot
-		// only and does not signal completion. task_done broadcast here
-		// updates the model (marking the BgTask completed) and removes
-		// the tool chip spinner via RenderEvent.
 		for _, m := range bgTaskNotificationPattern.FindAllStringSubmatch(event.Message.Content.Text, -1) {
 			toolUseID := m[1]
 			status := m[2]
@@ -210,88 +296,34 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 	}
 }
 
+// handleBashToolUse triggers bashstreamer for a foreground Bash tool_use
+// by writing the signal file. Background Bash is skipped.
+func handleBashToolUse(s *Session, toolUseID string, rawInput json.RawMessage) {
+	if s.BashSignalPath == "" {
+		return
+	}
+	var input struct {
+		Command         string `json:"command"`
+		RunInBackground *bool  `json:"run_in_background,omitempty"`
+	}
+	if err := json.Unmarshal(rawInput, &input); err != nil || input.Command == "" {
+		return
+	}
+	if input.RunInBackground != nil && *input.RunInBackground {
+		return
+	}
+	s.WaitForBashConnected(2 * time.Second)
+	s.StoreOutstandingBash(toolUseID, input.Command)
+	if err := os.WriteFile(s.BashSignalPath, []byte(s.ID+" "+toolUseID), 0o644); err != nil {
+		log.Printf("[bs] write signal file for tool %s: %v", toolUseID, err)
+	}
+}
+
 func Truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
 	return s[:n] + "... (truncated)"
-}
-
-// hookEnvelope holds the common fields decoded from every hook payload.
-// Type-specific fields are decoded by the individual handler from ev.Body.
-type hookEnvelope struct {
-	EventName string `json:"hook_event_name"`
-	AgentID   string `json:"agent_id"`
-	AgentType string `json:"agent_type"`
-	ToolName  string `json:"tool_name"`
-	ToolUseID string `json:"tool_use_id"`
-}
-
-// handleHookEvent routes raw hook payloads received via OnHookEvent. Two
-// flows live here:
-//
-//  1. Parent-side Agent bookkeeping (agent_id empty, tool_name == "Agent"):
-//     PreToolUse stashes the description and marks the parent's tool_use_id
-//     suppressed so the eventual Agent tool_result is hidden from the main
-//     stream. PostToolUse broadcasts subagent_linked, renaming the section
-//     heading and filling in totals + final text. Parent's PostToolUse is
-//     also the deterministic completion signal for the Agent invocation in
-//     AgentStats, so FinishAgent + task_done fire here.
-//
-//  2. Sub-agent inner events (agent_id non-empty): SubagentStart creates the
-//     section and broadcasts subagent_started. PreToolUse and PostToolBatch
-//     broadcast inner tool_use / tool_result chips tagged with agent_id.
-//     SubagentStop broadcasts subagent_stopped to clear the section spinner.
-func handleHookEvent(s *Session, ev claude.HookEvent, broadcast func(ServerMsg), bsSignal string) ([]byte, error) {
-	var env hookEnvelope
-	if err := json.Unmarshal(ev.Body, &env); err != nil {
-		log.Printf("[hook] handleHookEvent envelope: %v", err)
-		return nil, nil
-	}
-	if env.EventName == "SessionStart" {
-		type sessionStartPayload struct {
-			TranscriptPath string `json:"transcript_path"`
-			Model          string `json:"model"`
-		}
-		var p sessionStartPayload
-		if err := json.Unmarshal(ev.Body, &p); err != nil {
-			log.Printf("[hook] SessionStart parse error: %v", err)
-		} else {
-			if p.TranscriptPath != "" {
-				s.JSONLPath = p.TranscriptPath
-			}
-			if p.Model != "" {
-				s.AccumulateCost(&CostInfo{ModelName: p.Model})
-				broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: &CostInfo{ModelName: p.Model}})
-			}
-		}
-		broadcast(ServerMsg{Type: "session_started", SessionID: s.ID})
-	}
-
-	// UserPromptSubmit signals a turn start. Broadcast "running" so the
-	// model sets turnActive. On the new-session path, StartTurn also
-	// broadcasts "running" (the model does not yet exist when hooks are
-	// replayed). The duplicate is harmless: Apply is idempotent.
-	if env.EventName == "UserPromptSubmit" {
-		broadcast(ServerMsg{Type: "running", SessionID: s.ID})
-	}
-
-	// Stop/StopFailure signal a completed turn. Broadcast "done" so the
-	// model clears turnActive. Duplicate with waitAndDrainLoop's explicit
-	// broadcast is harmless (Apply is idempotent for turnActive).
-	// The JSONL file has been updated with the final assistant usage.
-	if env.EventName == "Stop" || env.EventName == "StopFailure" {
-		broadcast(ServerMsg{Type: "done", SessionID: s.ID})
-		refreshTokenCount(s, broadcast)
-	}
-
-	if env.AgentID == "" {
-		respBody, err := handleParentAgentHook(s, ev, env, broadcast, bsSignal)
-		return respBody, err
-	}
-
-	handleSubagentHook(s, ev, env, broadcast)
-	return nil, nil
 }
 
 func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
@@ -337,208 +369,4 @@ func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
 			broadcast(ServerMsg{Type: "cost", SessionID: s.ID, Cost: cost})
 		}
 	}()
-}
-
-func handleParentAgentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broadcast func(ServerMsg), bsSignal string) ([]byte, error) {
-	// Bash PreToolUse: store the tool_use_id and write a signal file
-	// so the wrapper script knows to stream output.
-	if env.EventName == "PreToolUse" && env.ToolName == "Bash" && env.ToolUseID != "" {
-		handleBashPreToolUse(s, ev, env, bsSignal)
-	}
-
-	if env.ToolName != "Agent" || env.ToolUseID == "" {
-		return nil, nil
-	}
-	switch env.EventName {
-	case "PreToolUse":
-		var p struct {
-			ToolInput struct {
-				Description  string `json:"description"`
-				SubagentType string `json:"subagent_type"`
-			} `json:"tool_input"`
-		}
-		if err := json.Unmarshal(ev.Body, &p); err != nil {
-			log.Printf("[hook] parent PreToolUse Agent parse: %v", err)
-			return nil, nil
-		}
-		s.StashAgentDescription(env.ToolUseID, p.ToolInput.Description)
-		// Suppress the eventual Agent tool_result in the main stream: its
-		// final content arrives via subagent_linked instead.
-		s.SuppressTool(env.ToolUseID, "Agent")
-
-	case "PostToolUse":
-		var p struct {
-			ToolResponse struct {
-				AgentID           string          `json:"agentId"`
-				Content           json.RawMessage `json:"content"`
-				TotalTokens       int             `json:"totalTokens"`
-				TotalToolUseCount int             `json:"totalToolUseCount"`
-				TotalDurationMs   int             `json:"totalDurationMs"`
-			} `json:"tool_response"`
-		}
-		if err := json.Unmarshal(ev.Body, &p); err != nil {
-			log.Printf("[hook] parent PostToolUse Agent parse: %v", err)
-			return nil, nil
-		}
-		agentID := p.ToolResponse.AgentID
-		if agentID == "" {
-			return nil, nil
-		}
-		description := s.TakeAgentDescription(env.ToolUseID)
-		finalText := decodeToolResponseText(p.ToolResponse.Content)
-		s.LinkSubagent(agentID, env.ToolUseID, description, finalText,
-			p.ToolResponse.TotalTokens, p.ToolResponse.TotalToolUseCount, p.ToolResponse.TotalDurationMs)
-		broadcast(ServerMsg{
-			Type:            "subagent_linked",
-			SessionID:       s.ID,
-			AgentID:         agentID,
-			ParentToolUseID: env.ToolUseID,
-			ToolUseID:       env.ToolUseID,
-			Description:     description,
-			Text:            finalText,
-			TotalTokens:     p.ToolResponse.TotalTokens,
-			TotalToolUses:   p.ToolResponse.TotalToolUseCount,
-			DurationMs:      p.ToolResponse.TotalDurationMs,
-		})
-		// Finalize the Agent invocation in AgentStats. Stdout's
-		// task_notification doesn't finalize local_agent tasks (its handler
-		// keys off GetAgentStat); this is the deterministic terminator.
-		if s.GetAgentStat(env.ToolUseID) != nil {
-			s.FinishAgent(env.ToolUseID)
-			broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: env.ToolUseID})
-		}
-	}
-	return nil, nil
-}
-
-func handleSubagentHook(s *Session, ev claude.HookEvent, env hookEnvelope, broadcast func(ServerMsg)) {
-	switch env.EventName {
-	case "SubagentStart":
-		s.StartSubagent(env.AgentID, env.AgentType)
-		broadcast(ServerMsg{
-			Type:      "subagent_started",
-			SessionID: s.ID,
-			AgentID:   env.AgentID,
-			AgentType: env.AgentType,
-		})
-
-	case "SubagentStop":
-		s.MarkSubagentStopped(env.AgentID)
-		broadcast(ServerMsg{
-			Type:      "subagent_stopped",
-			SessionID: s.ID,
-			AgentID:   env.AgentID,
-		})
-
-	case "PreToolUse":
-		if env.ToolUseID == "" || env.ToolName == "" {
-			return
-		}
-		var p struct {
-			ToolInput json.RawMessage `json:"tool_input"`
-		}
-		if err := json.Unmarshal(ev.Body, &p); err != nil {
-			log.Printf("[hook] sub-agent PreToolUse parse: %v", err)
-			return
-		}
-		if suppressResultTools[env.ToolName] {
-			s.SuppressTool(env.ToolUseID, env.ToolName)
-		}
-		broadcast(ServerMsg{
-			Type:      "tool_use",
-			SessionID: s.ID,
-			AgentID:   env.AgentID,
-			Tool:      env.ToolName,
-			ToolUseID: env.ToolUseID,
-			Input:     protocol.ParseToolInput(env.ToolName, p.ToolInput),
-		})
-
-	case "PostToolBatch":
-		var p struct {
-			ToolCalls []struct {
-				ToolUseID       string          `json:"tool_use_id"`
-				ToolResponseRaw json.RawMessage `json:"tool_response"`
-			} `json:"tool_calls"`
-		}
-		if err := json.Unmarshal(ev.Body, &p); err != nil {
-			log.Printf("[hook] sub-agent PostToolBatch parse: %v", err)
-			return
-		}
-		for _, tc := range p.ToolCalls {
-			output := decodeToolResponseText(tc.ToolResponseRaw)
-			if s.RemoveSuppressed(tc.ToolUseID) {
-				continue
-			}
-			if isBoringResult(output) {
-				continue
-			}
-			broadcast(ServerMsg{
-				Type:      "tool_result",
-				SessionID: s.ID,
-				AgentID:   env.AgentID,
-				ToolUseID: tc.ToolUseID,
-				Output:    output,
-			})
-		}
-	}
-}
-
-// handleBashPreToolUse stores the tool_use_id for bashstreamer
-// connection tracking and writes a signal file so the wrapper script
-// knows to stream. If a previous bash connection is still outstanding,
-// waits up to 2s for it to connect before overwriting.
-// Background tasks are skipped (they stream via the bg-output endpoint).
-func handleBashPreToolUse(s *Session, ev claude.HookEvent, env hookEnvelope, bsSignal string) {
-	var p struct {
-		ToolInput json.RawMessage `json:"tool_input"`
-	}
-	if err := json.Unmarshal(ev.Body, &p); err != nil {
-		return
-	}
-	var input struct {
-		Command         string `json:"command"`
-		RunInBackground *bool  `json:"run_in_background,omitempty"`
-	}
-	if err := json.Unmarshal(p.ToolInput, &input); err != nil || input.Command == "" {
-		return
-	}
-	if input.RunInBackground != nil && *input.RunInBackground {
-		return
-	}
-	if bsSignal == "" {
-		// Foreground streaming is unavailable (no bashstreamer on PATH or
-		// wrapper setup failed); let Claude run the command unstreamed.
-		return
-	}
-	// If a previous bash is still outstanding, wait briefly for its
-	// bashstreamer to connect before overwriting.
-	s.WaitForBashConnected(2 * time.Second)
-	s.StoreOutstandingBash(env.ToolUseID, input.Command)
-	if err := os.WriteFile(bsSignal, []byte(s.ID+" "+env.ToolUseID), 0o644); err != nil {
-		log.Printf("[bs] write signal file for tool %s: %v", env.ToolUseID, err)
-	}
-}
-
-func decodeToolResponseText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(raw, &blocks); err == nil {
-		var parts []string
-		for _, b := range blocks {
-			if b.Type == "text" && b.Text != "" {
-				parts = append(parts, b.Text)
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-	return string(raw)
 }

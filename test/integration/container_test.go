@@ -2073,17 +2073,19 @@ func TestBranchTree(t *testing.T) {
 // sub-agent it sees an inner PreToolUse from as the target and hangs the
 // target's nth inner PreToolUse. Other sub-agents' hooks return immediately
 // so their tool loops keep advancing while the target is held. The
-// returned channel fires with the target's agent_id once the hold engages.
+// returned channel fires once the hold engages. It carries no ID: the
+// hook payload names the sub-agent by the CLI's agent_id, which the UI does
+// not use, and callers identify the held sub-agent by its state instead.
 // The returned release func lets the held sub-agent continue. Release is
 // also registered as a test cleanup so a held curl shim never outlives
 // the test.
-func pauseFirstSubagentAtN(t *testing.T, n int) (http.HandlerFunc, <-chan string, func()) {
+func pauseFirstSubagentAtN(t *testing.T, n int) (http.HandlerFunc, <-chan struct{}, func()) {
 	t.Helper()
 	var (
 		mu      sync.Mutex
 		target  string
 		counts  = map[string]int{}
-		fired   = make(chan string, 1)
+		fired   = make(chan struct{}, 1)
 		release = make(chan struct{})
 		once    sync.Once
 	)
@@ -2115,14 +2117,13 @@ func pauseFirstSubagentAtN(t *testing.T, n int) (http.HandlerFunc, <-chan string
 		}
 		counts[env.AgentID]++
 		hold := counts[env.AgentID] >= n
-		picked := target
 		mu.Unlock()
 		if !hold {
 			w.WriteHeader(200)
 			return
 		}
 		select {
-		case fired <- picked:
+		case fired <- struct{}{}:
 		default:
 		}
 		<-release
@@ -2685,21 +2686,18 @@ func getEnv(key, fallback string) string {
 		Screenshot(t, page, "agent_first_tool")
 
 		// Wait for the hold to engage (target sub-agent's 2nd inner PreToolUse).
-		var targetID string
 		select {
-		case targetID = <-hookFired:
+		case <-hookFired:
 		case <-time.After(90 * time.Second):
 			t.Fatal("hook pause never engaged")
 		}
 
-		// Wait for Y and Z to fully reach end state. While the target is held,
-		// the other two sub-agents complete on their own. We detect "linked"
-		// by the section's heading text starting with "Agent: " (placeholder
-		// reads "subagent ..."). Both must be linked before we assert.
-		waitForTwoLinkedExcept(t, page, targetID, 120*time.Second)
+		// While the target is held, the other two sub-agents complete on
+		// their own. Both must reach end state before we assert.
+		waitForFinishedSubagents(t, page, 2, 120*time.Second)
 
-		// Assert the intermediate state: target pre-link, other two end-state.
-		assertIntermediateSubagentState(t, page, targetID)
+		// Assert the intermediate state: one still running, two at end state.
+		assertIntermediateSubagentState(t, page)
 		Screenshot(t, page, "agent_paused_intermediate")
 
 		// Release the held hook. Target completes, parent finishes the turn.
@@ -2712,6 +2710,10 @@ func getEnv(key, fallback string) string {
 		// Wait for turn to complete
 		WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
 		Screenshot(t, page, "agent_complete")
+
+		// The released sub-agent converges on the same end state as the two
+		// that were never held.
+		waitForFinishedSubagents(t, page, 3, 120*time.Second)
 
 		// Scroll to top and open every sub-agent section's details so the inner
 		// tool chips are visible to the assertion below.
@@ -2768,9 +2770,8 @@ func getEnv(key, fallback string) string {
 		// --- Assertions ---
 
 		// subagent_started events should be present (one per Agent invocation).
-		// Replaces the old check on tool_use+Tool=Agent: with the hooks-only
-		// design the parent Agent chip is retired in favor of sub-agent sections,
-		// so no parent tool_use ServerMsg is emitted for Agent.
+		// The sub-agent section stands in for the parent Agent chip, so no
+		// parent tool_use ServerMsg is emitted for Agent.
 		agentCount := 0
 		for _, e := range events {
 			if e.Type == "subagent_started" {
@@ -2782,10 +2783,10 @@ func getEnv(key, fallback string) string {
 		}
 
 		// Top-level entries in the message timeline must match the expected
-		// sequence. With the hooks-only sub-agent design, sub-agent
-		// inner tool chips live inside their section's body div (not at top
-		// level), so a leaked chip would show up as an extra msg-tool here.
-		// Extra msg-assistant blocks beyond the first are tolerated.
+		// sequence. Sub-agent inner tool chips live inside their section's
+		// body div (not at top level), so a leaked chip would show up as an
+		// extra msg-tool here. Extra msg-assistant blocks beyond the first
+		// are tolerated.
 		topClasses := dropPreSubagentAssistant(topLevelMessageClasses(page))
 		prefix := []string{"user", "subagent", "subagent", "subagent", "assistant"}
 		if len(topClasses) < len(prefix) {
@@ -2882,33 +2883,26 @@ func readSubagentSections(page *rod.Page) []subagentSectionInfo {
 	return out
 }
 
-// waitForTwoLinkedExcept polls until two sub-agent sections other than
-// excludeID have reached linked end-state: heading rewritten, stats filled,
-// final-text filled, spinner gone. All four conditions must hold so the
-// caller's assertion isn't racing the OOB swaps emitted in the same SSE
-// event as the heading swap (heading lands first in HTMX's processing
-// order, but the assertion may read fields that haven't been swapped yet).
-func waitForTwoLinkedExcept(t *testing.T, page *rod.Page, excludeID string, timeout time.Duration) {
+// waitForFinishedSubagents polls until want sub-agent sections have reached
+// end state: stats filled, final-text filled, spinner gone. All three
+// conditions must hold so the caller's assertion isn't racing the OOB swaps
+// emitted in the same SSE event (they land in HTMX's processing order, but
+// the assertion may read a field that hasn't been swapped yet).
+func waitForFinishedSubagents(t *testing.T, page *rod.Page, want int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
-		linked := 0
+		finished := 0
 		for _, s := range readSubagentSections(page) {
-			if s.agentID == excludeID {
-				continue
-			}
-			if strings.HasPrefix(s.heading, "Agent: ") &&
-				!s.spinnerPresent &&
-				s.stats != "" &&
-				s.finalRendered {
-				linked++
+			if !s.spinnerPresent && s.stats != "" && s.finalRendered {
+				finished++
 			}
 		}
-		if linked >= 2 {
+		if finished >= want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for two sub-agents (excluding %s) to reach linked state", excludeID)
+			t.Fatalf("timed out waiting for %d sub-agents to finish, got %d", want, finished)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -2951,9 +2945,18 @@ func dropPreSubagentAssistant(classes []string) []string {
 	return out
 }
 
-// assertIntermediateSubagentState verifies the mixed UI state: target is
-// pre-link, the other two are at end state, no parent text yet.
-func assertIntermediateSubagentState(t *testing.T, page *rod.Page, targetID string) {
+// assertIntermediateSubagentState verifies the mixed UI state while one
+// sub-agent is held: every section names itself from the start, exactly one
+// is still running, the other two are at end state, and no parent text has
+// arrived yet.
+//
+// The held sub-agent is identified by state rather than by ID. A sub-agent
+// blocked in its PreToolUse hook cannot produce a result, so it cannot be
+// one of the two showing final text: "exactly one unfinished" entails that
+// the unfinished one is the held one. The CLI's agent_id, which is what the
+// hook reports, does not appear in the UI because sections are keyed by the
+// parent's Agent tool_use ID.
+func assertIntermediateSubagentState(t *testing.T, page *rod.Page) {
 	t.Helper()
 
 	sections := readSubagentSections(page)
@@ -2967,54 +2970,35 @@ func assertIntermediateSubagentState(t *testing.T, page *rod.Page, targetID stri
 		t.Fatalf("top-level mismatch: got %v want %v", topClasses, wantTop)
 	}
 
-	var target *subagentSectionInfo
-	var others []subagentSectionInfo
-	for i, s := range sections {
-		if s.agentID == targetID {
-			target = &sections[i]
-		} else {
-			others = append(others, s)
+	var running []subagentSectionInfo
+	for _, s := range sections {
+		// The description arrives with the sub-agent, so a section names
+		// itself before it has produced anything.
+		if !strings.HasPrefix(s.heading, "Agent: ") {
+			t.Errorf("heading should be 'Agent: ...' from the start, got %q (agentID=%s)", s.heading, s.agentID)
+		}
+		if s.innerChips < 1 {
+			t.Errorf("section should have at least 1 inner chip (agentID=%s)", s.agentID)
+		}
+		if s.finalRendered {
+			if s.spinnerPresent {
+				t.Errorf("finished section should have no spinner (agentID=%s)", s.agentID)
+			}
+			if s.stats == "" {
+				t.Errorf("finished section should have stats filled (agentID=%s)", s.agentID)
+			}
+			continue
+		}
+		running = append(running, s)
+		if !s.spinnerPresent {
+			t.Errorf("running section should still show its spinner (agentID=%s)", s.agentID)
+		}
+		if s.stats != "" {
+			t.Errorf("running section should have no stats, got %q (agentID=%s)", s.stats, s.agentID)
 		}
 	}
-	if target == nil {
-		t.Fatalf("target section %s not in snapshot: %+v", targetID, sections)
-	}
-	if len(others) != 2 {
-		t.Fatalf("expected 2 non-target sections, got %d", len(others))
-	}
-
-	if !strings.HasPrefix(target.heading, "subagent ") {
-		t.Errorf("target heading should be placeholder, got %q", target.heading)
-	}
-	if !target.spinnerPresent {
-		t.Errorf("target spinner should be visible")
-	}
-	if target.stats != "" {
-		t.Errorf("target stats should be empty, got %q", target.stats)
-	}
-	if target.finalRendered {
-		t.Errorf("target final-text should be empty")
-	}
-	if target.innerChips < 1 {
-		t.Errorf("target should have at least 1 inner chip, got %d", target.innerChips)
-	}
-
-	for _, o := range others {
-		if !strings.HasPrefix(o.heading, "Agent: ") {
-			t.Errorf("non-target heading should be 'Agent: ...', got %q", o.heading)
-		}
-		if o.spinnerPresent {
-			t.Errorf("non-target spinner should be gone, but element still present (agentID=%s)", o.agentID)
-		}
-		if o.stats == "" {
-			t.Errorf("non-target stats should be filled (agentID=%s)", o.agentID)
-		}
-		if !o.finalRendered {
-			t.Errorf("non-target final-text should be filled (agentID=%s)", o.agentID)
-		}
-		if o.innerChips < 1 {
-			t.Errorf("non-target should have at least 1 inner chip (agentID=%s)", o.agentID)
-		}
+	if len(running) != 1 {
+		t.Fatalf("expected exactly 1 running sub-agent while one is held, got %d: %+v", len(running), sections)
 	}
 }
 
