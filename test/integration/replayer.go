@@ -854,14 +854,16 @@ var (
 	billingCchRe  = regexp.MustCompile(`cch=[A-Za-z0-9]+;`)
 	currentDateRe = regexp.MustCompile(`Today's date is \d{4}-\d{2}-\d{2}\.`)
 	toolUseIDRe   = regexp.MustCompile(`toolu_[A-Za-z0-9]+`)
-	// Per-run IDs leaked into tool_result text by Claude Code's
-	// Bash-background spawns. Observed shapes:
+	// Per-run IDs leaked into tool_result text by Claude Code's background
+	// spawns. Bash background uses 9-char ids (bmyvedpdd). Background Agent
+	// tasks use the longer agent-id format (a + 16 hex). The id length is
+	// unbounded to cover both. Observed shapes:
 	//   "Command running in background with ID: bmyvedpdd"
-	//   "tasks/bmyvedpdd.output"
-	//   "<task-id>bmyvedpdd</task-id>"
+	//   "tasks/<id>.output"
+	//   "<task-id><id></task-id>"
 	//   "/tmp/claude-0/-work/cba6ec33-bc88-4d03-b249-9e293b87a920/..."
-	bgTaskIDPrefixRe = regexp.MustCompile(`(Command running in background with ID: |tasks/|<task-id>)([a-z0-9]{9})`)
-	bgTaskIDSuffixRe = regexp.MustCompile(`([a-z0-9]{9})(\.output|</task-id>)`)
+	bgTaskIDPrefixRe = regexp.MustCompile(`(Command running in background with ID: |tasks/|<task-id>)([a-z0-9]+)`)
+	bgTaskIDSuffixRe = regexp.MustCompile(`([a-z0-9]+)(\.output|</task-id>)`)
 	// claude 2.1.126 echoes bg task IDs in prose like:
 	//   "Started in background (id `bgf6mq7y2`)".
 	bgTaskIDStartedRe = regexp.MustCompile("Started in background \\(id `[a-z0-9]{9}`\\)")
@@ -882,9 +884,9 @@ var (
 	// with to: 'a1234...' to continue...)`. Context-scoped so we don't match
 	// arbitrary hex strings elsewhere.
 	agentIDRe = regexp.MustCompile(`(agentId: |to: ')(a[0-9a-f]{16})`)
-	// Subagent wall-clock duration inside the Agent tool result's <usage>
-	// block.
-	agentDurationRe = regexp.MustCompile(`duration_ms: \d+`)
+	// Subagent wall-clock duration. Non-deterministic across runs. Two
+	// shapes: the task-notification XML tag and the older colon form.
+	agentDurationRe = regexp.MustCompile(`(duration_ms: |<duration_ms>)\d+(</duration_ms>)?`)
 	// The CLI injects the user's email address from real credentials into
 	// system-reminder context at record time. Replay-side dummy credentials
 	// don't carry an email, so this whole block is absent there.
@@ -911,7 +913,7 @@ func normalizeNoisyText(s string) string {
 	s = planFilePathRe.ReplaceAllString(s, "/root/.claude/plans/<PLANFILE>.md")
 	s = recentCommitsSHARe.ReplaceAllString(s, "${1}<SHA>")
 	s = agentIDRe.ReplaceAllString(s, "${1}<AGENT_ID>")
-	s = agentDurationRe.ReplaceAllString(s, "duration_ms: <DUR>")
+	s = agentDurationRe.ReplaceAllString(s, "${1}<DUR>${2}")
 	s = userEmailBlockRe.ReplaceAllString(s, "")
 	s = osVersionRe.ReplaceAllString(s, "OS Version: <OS>")
 	s = currentMonthRe.ReplaceAllString(s, "current month is <MONTH>")

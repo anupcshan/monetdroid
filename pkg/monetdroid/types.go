@@ -43,6 +43,11 @@ type AgentStat struct {
 	DurationMs   int    `json:"duration_ms"`
 	LastToolName string `json:"last_tool_name,omitempty"`
 	Completed    bool   `json:"completed"`
+	// Background marks a run_in_background agent. Its parent Agent tool_result
+	// arrives at launch as an acknowledgement rather than the result, so
+	// finalization is deferred to the agent's task_notification. Foreground
+	// agents finalize at the parent tool_result and never carry this flag.
+	Background bool `json:"background,omitempty"`
 }
 
 type CostInfo struct {

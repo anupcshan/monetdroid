@@ -91,15 +91,29 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				if event.TaskUsage != nil {
 					s.UpdateAgentStat(event.ToolUseID, event.TaskUsage, event.Summary, "")
 				}
-				// For local_agent tasks (tracked via StartAgent at
-				// task_started, so GetAgentStat returns non-nil),
-				// task_notification is not the last word. claude can still
-				// flush the parent's tool_result for this Agent on stdout
-				// afterwards, so FinishAgent and the section's finished
-				// state are deferred to the "user" branch that handles that
-				// tool_result. Background Bash tasks aren't tracked as
-				// agents, so they emit task_done here.
-				if s.GetAgentStat(event.ToolUseID) == nil {
+				stat := s.GetAgentStat(event.ToolUseID)
+				// A background agent deferred finalization from its launch
+				// tool_result. task_notification is its completion point. It
+				// carries the real summary and totals, so finalize here.
+				// Description is left blank, unlike the foreground path.
+				// UpdateAgentStat above stored the summary into
+				// stat.Description. Propagating it would overwrite the
+				// subagent_started heading with that summary on a re-render.
+				if stat != nil && stat.Background {
+					s.FinishAgent(event.ToolUseID)
+					finished := ServerMsg{
+						Type:      "subagent_finished",
+						SessionID: s.ID,
+						AgentID:   event.ToolUseID,
+						Text:      event.Summary,
+					}
+					finished.TotalTokens = stat.TotalTokens
+					finished.TotalToolUses = stat.ToolUses
+					finished.DurationMs = stat.DurationMs
+					broadcast(finished)
+					broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: event.ToolUseID})
+				} else if stat == nil {
+					// Untracked background task (e.g. Bash): emit task_done.
 					broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: event.ToolUseID})
 				}
 				s.CloseBgStop(event.ToolUseID)
@@ -152,6 +166,9 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				// whatever is registered.
 				if b.Name == "Agent" {
 					s.StartAgent(b.ID, "")
+					if agentRunsInBackground(b.RawInput) {
+						s.MarkAgentBackground(b.ID)
+					}
 					continue
 				}
 				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Cwd: s.GetCwd(), Input: protocol.ParseToolInput(b.Name, b.RawInput)})
@@ -238,27 +255,33 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 		for _, b := range event.Message.Content.Blocks {
 			if b.Type == "tool_result" {
 				suppressed := s.RemoveSuppressed(b.ToolUseID)
+				stat := s.GetAgentStat(b.ToolUseID)
 
-				// Agent tool_results finalize the sub-agent. This is the
-				// deterministic "no more events for this Agent" point;
-				// FinishAgent + task_done fire here rather than at
+				// A background agent's tool_result is its launch
+				// acknowledgement, not its result. Finalization is deferred
+				// to the agent's task_notification, so drop it here and leave
+				// the section in its running state.
+				if stat != nil && stat.Background {
+					continue
+				}
+
+				// Foreground Agent tool_results finalize the sub-agent. This
+				// is the deterministic "no more events for this Agent" point.
+				// FinishAgent and task_done fire here rather than at
 				// task_notification.
-				if s.GetAgentStat(b.ToolUseID) != nil {
+				if stat != nil {
 					output := b.Content.String()
 					s.FinishAgent(b.ToolUseID)
-					stat := s.GetAgentStat(b.ToolUseID)
 					finished := ServerMsg{
 						Type:      "subagent_finished",
 						SessionID: s.ID,
 						AgentID:   b.ToolUseID,
 						Text:      output,
 					}
-					if stat != nil {
-						finished.TotalTokens = stat.TotalTokens
-						finished.TotalToolUses = stat.ToolUses
-						finished.DurationMs = stat.DurationMs
-						finished.Description = stat.Description
-					}
+					finished.TotalTokens = stat.TotalTokens
+					finished.TotalToolUses = stat.ToolUses
+					finished.DurationMs = stat.DurationMs
+					finished.Description = stat.Description
 					broadcast(finished)
 					broadcast(ServerMsg{Type: "task_done", SessionID: s.ID, ToolUseID: b.ToolUseID})
 					continue
@@ -317,6 +340,20 @@ func handleBashToolUse(s *Session, toolUseID string, rawInput json.RawMessage) {
 	if err := os.WriteFile(s.BashSignalPath, []byte(s.ID+" "+toolUseID), 0o644); err != nil {
 		log.Printf("[bs] write signal file for tool %s: %v", toolUseID, err)
 	}
+}
+
+// agentRunsInBackground reports whether an Agent tool_use input requested
+// run_in_background. The flag decides whether the section finalizes at the
+// parent tool_result (foreground) or at the agent's task_notification
+// (background).
+func agentRunsInBackground(rawInput json.RawMessage) bool {
+	var input struct {
+		RunInBackground *bool `json:"run_in_background,omitempty"`
+	}
+	if err := json.Unmarshal(rawInput, &input); err != nil {
+		return false
+	}
+	return input.RunInBackground != nil && *input.RunInBackground
 }
 
 func Truncate(s string, n int) string {

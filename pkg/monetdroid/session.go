@@ -724,6 +724,17 @@ func (s *Session) FinishAgent(toolUseID string) {
 	}
 }
 
+// MarkAgentBackground flags an Agent invocation as run_in_background. It
+// updates the stat StartAgent creates, so it must run after StartAgent for
+// the same tool_use_id.
+func (s *Session) MarkAgentBackground(toolUseID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if stat := s.AgentStats[toolUseID]; stat != nil {
+		stat.Background = true
+	}
+}
+
 // UpdateAgentStat updates the live stats for an agent from a task_progress event.
 func (s *Session) UpdateAgentStat(toolUseID string, usage *protocol.TaskUsage, description, lastTool string) {
 	s.mu.Lock()

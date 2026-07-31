@@ -2838,6 +2838,145 @@ func getEnv(key, fallback string) string {
 	})
 }
 
+// TestAgentSubagentBackground covers a single run_in_background sub-agent. The
+// parent does not wait on it, so the section must stay running past the launch
+// acknowledgement and finalize only at the agent's task_notification, which
+// carries the real result and totals. A single agent keeps the recording
+// deterministic by removing concurrent completion ordering.
+func TestAgentSubagentBackground(t *testing.T) {
+	t.Parallel()
+	WithProviders(t, "agent_subagent_background.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+		files := map[string]string{
+			"/go.mod": "module myapp\ngo 1.21\n",
+			"/internal/api/users.go": `package api
+
+import (
+	"database/sql"
+	"fmt"
+	"net/http"
+)
+
+func handleUsers(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		query := fmt.Sprintf("SELECT id, name, email FROM users WHERE name = '%s'", name)
+		db.Query(query)
+	}
+}
+`,
+		}
+
+		paths := make([]string, 0, len(files))
+		for p := range files {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, path := range paths {
+			f.WriteFile(containerWorkdir+path, files[path])
+		}
+		// Pin mtimes in case the agent reaches for Bash despite the prompt.
+		f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+
+		page := f.Page()
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		// Dump the event log on exit so the order is visible even when a
+		// wait fatals mid-run.
+		t.Cleanup(func() {
+			events := f.SessionLog()
+			t.Logf("=== SESSION EVENT LOG (%d events) ===", len(events))
+			for i, e := range events {
+				line := fmt.Sprintf("[%3d] type=%-20s toolUseID=%s", i, e.Type, e.ToolUseID)
+				if e.Text != "" {
+					text := e.Text
+					if len(text) > 80 {
+						text = text[:80] + "..."
+					}
+					line += fmt.Sprintf(" text=%q", text)
+				}
+				t.Logf("%s", line)
+			}
+		})
+
+		Screenshot(t, page, "bg_before_send")
+
+		prompt := "Launch a single background agent (run_in_background on) that reads " +
+			containerWorkdir + "/internal/api/users.go with the Read tool and reports whether it contains a SQL injection. " +
+			"Use Read only, with no Bash and no Glob. You must launch exactly one agent. " +
+			"A single agent is sufficient. Do not launch any additional or second agent. " +
+			"Do not wait for the agent to finish. When that one agent completes, print a one-line acknowledgement."
+		page.MustElement(`textarea[name="text"]`).MustInput(prompt)
+		page.MustElement(`.send-btn`).MustClick()
+
+		// The section appears at task_started and must finalize at the agent's
+		// task_notification, not at the launch acknowledgement.
+		WaitForElement(t, page, ".msg-subagent", 120*time.Second)
+		waitForFinishedSubagents(t, page, 1, 120*time.Second)
+		Screenshot(t, page, "bg_finished")
+
+		sections := readSubagentSections(page)
+		if len(sections) != 1 {
+			t.Fatalf("expected 1 sub-agent section, got %d", len(sections))
+		}
+		s := sections[0]
+		if !strings.HasPrefix(s.heading, "Agent: ") {
+			t.Errorf("heading should be 'Agent: ...', got %q", s.heading)
+		}
+		if s.spinnerPresent {
+			t.Errorf("finished section should have no spinner (agentID=%s)", s.agentID)
+		}
+		if s.stats == "" {
+			t.Errorf("finished section should have stats filled (agentID=%s)", s.agentID)
+		}
+		// Background agents do not stream their inner tool calls, so the
+		// section body stays empty.
+		if s.innerChips != 0 {
+			t.Errorf("background section should have no inner chips, got %d (agentID=%s)", s.innerChips, s.agentID)
+		}
+
+		// Open the section so the final text is readable, then confirm it is
+		// the agent's result, not the launch acknowledgement.
+		page.MustEval(`() => { const d = document.querySelector('.msg-subagent details.tool-chip'); if (d) d.open = true; }`)
+		finalText := page.MustElement(`.subagent-final`).MustText()
+		if strings.Contains(finalText, "Async agent launched") || strings.Contains(finalText, "agentId:") {
+			t.Errorf("section finalized with the launch acknowledgement instead of the result: %q", finalText)
+		}
+
+		// Top-level timeline: user, the sub-agent section, then only the
+		// parent's acknowledgement. No inner tool chips leak to the top level.
+		topClasses := dropPreSubagentAssistant(topLevelMessageClasses(page))
+		wantPrefix := []string{"user", "subagent"}
+		if len(topClasses) < len(wantPrefix) || !slices.Equal(topClasses[:len(wantPrefix)], wantPrefix) {
+			t.Fatalf("top-level mismatch: got %v want prefix %v", topClasses, wantPrefix)
+		}
+		for _, c := range topClasses[len(wantPrefix):] {
+			if c != "assistant" {
+				t.Fatalf("unexpected top-level message type %q after subagent: %v", c, topClasses)
+			}
+		}
+
+		// The section must have finalized via task_notification.
+		events := f.SessionLog()
+		hasFinished := false
+		hasTaskDone := false
+		for _, e := range events {
+			if e.Type == "subagent_finished" {
+				hasFinished = true
+			}
+			if e.Type == "task_done" {
+				hasTaskDone = true
+			}
+		}
+		if !hasFinished {
+			t.Error("expected a subagent_finished event")
+		}
+		if !hasTaskDone {
+			t.Error("expected a task_done event")
+		}
+	})
+}
+
 // subagentSectionInfo describes one .msg-subagent element in DOM form
 // suitable for asserting on. spinnerPresent is true iff the spinner element
 // exists in the DOM (it is removed at link or stop).
