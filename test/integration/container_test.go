@@ -97,24 +97,20 @@ func WithSharedProviders(t *testing.T, cassette string, fn func(*testing.T, *Con
 	withProviders(t, cassette, SetupWithSharedCassette, fn, skips...)
 }
 
-// ensureDummyCredentials writes a dummy Claude subscription credential at the
-// well-known path if nothing is already there. Record mode bind-mounts the
-// real credentials file before the container starts, so this is a no-op then.
-// In replay mode the file is absent and this provides it, keeping the CLI on
-// the subscription code path (user:mcp_servers scope → same tools array as
-// record mode) so recorded and live request bodies match.
-func ensureDummyCredentials() {
-	const path = "/root/.claude/.credentials.json"
-	if _, err := os.Stat(path); err == nil {
-		return
+// ensureWorkspaceTrust marks /work as trusted in /root/.claude.json so Claude
+// honors the project's .claude/settings.json permission rules.
+func ensureWorkspaceTrust() {
+	cfg := claudeUserConfig{
+		Projects: map[string]claudeProject{
+			containerWorkdir: {HasTrustDialogAccepted: true},
+		},
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		log.Fatalf("ensureDummyCredentials mkdir: %v", err)
+	content, err := json.Marshal(cfg)
+	if err != nil {
+		log.Fatalf("ensureWorkspaceTrust marshal: %v", err)
 	}
-	expiresAt := time.Now().Add(7 * 24 * time.Hour).UnixMilli()
-	creds := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"dummy-replay-access-token","refreshToken":"dummy-replay-refresh-token","expiresAt":%d,"scopes":["user:file_upload","user:inference","user:mcp_servers","user:profile","user:sessions:claude_code"],"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}`, expiresAt)
-	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
-		log.Fatalf("ensureDummyCredentials write: %v", err)
+	if err := os.WriteFile("/root/.claude.json", content, 0o600); err != nil {
+		log.Fatalf("ensureWorkspaceTrust write: %v", err)
 	}
 }
 
@@ -143,7 +139,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
 		// Inside the container: run the monetdroid server.
 		os.MkdirAll(containerWorkdir, 0o755)
-		ensureDummyCredentials()
+		ensureWorkspaceTrust()
 		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", nil)
 		if err != nil {
 			panic(err)
@@ -2677,7 +2673,7 @@ func getEnv(key, fallback string) string {
 		// investigation. Every file is named in the prompt and Glob is banned
 		// because Glob's output ordering is non-deterministic across runs
 		// An explicit file list with no Glob/Bash eliminates that variance.
-		prompt := fmt.Sprintf("Launch three parallel agents (Read/Grep only, no Bash, no Glob) to investigate these files: %s. Look for: 1) SQL injection vulnerabilities, 2) hardcoded secrets or credentials, 3) HTTP handler input validation. Report combined findings.", fileList)
+		prompt := fmt.Sprintf("Launch three parallel foreground agents (run_in_background: false, Read/Grep only, no Bash, no Glob) to investigate these files: %s. Look for: 1) SQL injection vulnerabilities, 2) hardcoded secrets or credentials, 3) HTTP handler input validation. Report combined findings.", fileList)
 		page.MustElement(`textarea[name="text"]`).MustInput(prompt)
 		page.MustElement(`.send-btn`).MustClick()
 
@@ -2929,10 +2925,9 @@ func handleUsers(db *sql.DB) http.HandlerFunc {
 		if s.stats == "" {
 			t.Errorf("finished section should have stats filled (agentID=%s)", s.agentID)
 		}
-		// Background agents do not stream their inner tool calls, so the
-		// section body stays empty.
-		if s.innerChips != 0 {
-			t.Errorf("background section should have no inner chips, got %d (agentID=%s)", s.innerChips, s.agentID)
+		// The agent's single Read renders as one inner chip in the section body.
+		if s.innerChips != 1 {
+			t.Errorf("background section should have 1 inner chip (the Read), got %d (agentID=%s)", s.innerChips, s.agentID)
 		}
 
 		// Open the section so the final text is readable, then confirm it is

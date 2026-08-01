@@ -146,7 +146,7 @@ func TestWriteReviewComment(t *testing.T) {
 		// --- Turn 1: Create a new file (Write to nonexistent path) ---
 
 		page.MustElement(`textarea[name="text"]`).MustInput(
-			"Create a new file called calculator.go with a Calculator struct that has Add, Subtract, Multiply, and Divide methods. Each method should take two float64 arguments and return (float64, error). Divide should return an error for division by zero. Include a package declaration and imports. Use the Write tool. Write calculator.go exactly once, then stop. Do not rewrite or revise it, and do not create any other files.")
+			"Create a new file called calculator.go with a Calculator struct that has Add, Subtract, Multiply, and Divide methods. Each method should take two float64 arguments and return (float64, error). Divide should return an error for division by zero. Include a package declaration and imports. Do not add any comments. Use the Write tool. Write calculator.go exactly once, then stop. Do not rewrite or revise it, and do not create any other files.")
 		page.MustElement(`.send-btn`).MustClick()
 
 		// Wait for permission with all-additions diff.
@@ -175,7 +175,7 @@ func TestWriteReviewComment(t *testing.T) {
 
 		// Fill review comment.
 		WaitForElement(t, page, ".review-form", 5*time.Second)
-		page.MustElement(".review-textarea").MustInput("Add godoc comments to the exported methods")
+		page.MustElement(".review-textarea").MustInput("Add godoc comments to the exported methods. This overrides the earlier instruction not to add comments")
 		page.MustElement(".review-submit").MustClick()
 
 		// Verify comment chip and review bar.

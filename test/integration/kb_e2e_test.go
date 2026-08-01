@@ -9,16 +9,22 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 )
 
-// kbMcpServers is dropped at /root/.claude.json so Claude spawns the kb MCP
-// server. User scope is always trusted, so there is no project trust dialog
-// in the non-interactive cassette run. The container's /usr/local/bin/kb
-// shim resolves to the test binary running `kb mcp`.
-const kbMcpServers = `{
-  "mcpServers": {
-    "kb": { "command": "kb", "args": ["mcp"] }
-  }
+// claudeUserConfig models the subset of /root/.claude.json the harness writes.
+// Claude adds more fields (firstStartTime, machineID, etc.) itself. Merging
+// happens before Claude starts, so only these fields are present at merge time.
+type claudeUserConfig struct {
+	Projects   map[string]claudeProject   `json:"projects,omitempty"`
+	McpServers map[string]claudeMcpServer `json:"mcpServers,omitempty"`
 }
-`
+
+type claudeProject struct {
+	HasTrustDialogAccepted bool `json:"hasTrustDialogAccepted,omitempty"`
+}
+
+type claudeMcpServer struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
 
 // kbAllowSettings is dropped at <cwd>/.claude/settings.json so Claude
 // auto-approves every kb MCP tool call. Entries are the namespaced tool
@@ -50,10 +56,27 @@ clarifying questions. Pick reasonable defaults, write them into the
 kb entry, and note any open questions inside the entry itself.
 `
 
-// RegisterKBMCP writes the user-scope mcpServers entry so Claude spawns the
-// kb MCP server. Must run before the session starts.
+// RegisterKBMCP adds the user-scope kb mcpServers entry so Claude spawns the
+// kb MCP server. It merges into the existing /root/.claude.json rather than
+// overwriting it, preserving the workspace trust entry written at container
+// startup. The container's /usr/local/bin/kb shim resolves to the test binary
+// running `kb mcp`. Must run before the session starts.
 func (f *ContainerFixture) RegisterKBMCP() {
-	f.WriteFile("/root/.claude.json", kbMcpServers)
+	var cfg claudeUserConfig
+	if existing := strings.TrimSpace(f.ReadFile("/root/.claude.json")); existing != "" {
+		if err := json.Unmarshal([]byte(existing), &cfg); err != nil {
+			f.T.Fatalf("RegisterKBMCP: parse /root/.claude.json: %v", err)
+		}
+	}
+	if cfg.McpServers == nil {
+		cfg.McpServers = map[string]claudeMcpServer{}
+	}
+	cfg.McpServers["kb"] = claudeMcpServer{Command: "kb", Args: []string{"mcp"}}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		f.T.Fatalf("RegisterKBMCP: marshal: %v", err)
+	}
+	f.WriteFile("/root/.claude.json", string(out))
 }
 
 // kbWritePath extracts the path argument from an mcp__kb__write tool_use

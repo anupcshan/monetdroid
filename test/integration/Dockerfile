@@ -1,13 +1,23 @@
 FROM debian:bookworm-slim
 
-ARG CLAUDE_VERSION=2.1.153
-ARG GCS_BUCKET=https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
+# Upgrade: update CLAUDE_VERSION and CLAUDE_CHECKSUM together.
+# Latest version: curl -fsSL https://downloads.claude.ai/claude-code-releases/latest
+# Checksum is platforms["linux-x64"].checksum in this manifest:
+#   curl -fsSL https://downloads.claude.ai/claude-code-releases/<version>/manifest.json
+# Use linux-x64 (not -musl) because the base image is glibc, debian bookworm.
+# These URLs mirror the canonical installer at https://claude.ai/install.sh.
+# If an upgrade breaks tests, check the per-version changelog for what changed:
+#   https://code.claude.com/docs/en/changelog.md
+ARG CLAUDE_VERSION=2.1.220
+ARG DOWNLOAD_BASE_URL=https://downloads.claude.ai/claude-code-releases
+ARG CLAUDE_CHECKSUM=674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fSL "$GCS_BUCKET/$CLAUDE_VERSION/linux-x64/claude" -o /usr/local/bin/claude \
+RUN curl -fSL "$DOWNLOAD_BASE_URL/$CLAUDE_VERSION/linux-x64/claude" -o /usr/local/bin/claude \
+    && echo "$CLAUDE_CHECKSUM  /usr/local/bin/claude" | sha256sum -c - \
     && chmod +x /usr/local/bin/claude
 
 RUN printf '#!/bin/sh\nexec env KB_CLI_MODE=kb /test "$@"\n' > /usr/local/bin/kb \

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +152,7 @@ func TestKBWriteReviewComment(t *testing.T) {
 		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
+		prevAssistants := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
 		page.MustElement(".review-send-btn").MustClick()
 		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
 		if err != nil {
@@ -158,6 +160,15 @@ func TestKBWriteReviewComment(t *testing.T) {
 			t.Fatalf("review message never appeared: %v", err)
 		}
 		Screenshot(t, page, "kb_write_review_sent")
+
+		// The review starts a new Claude turn. Wait for it to finish so the
+		// cassette records the full exchange. Gate on a new assistant message
+		// first, because #stop-btn:empty alone matches the leftover empty span
+		// between turns.
+		page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
+			`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		Screenshot(t, page, "kb_write_review_response")
 
 		// The new entry must exist in the store.
 		list := f.KB(containerWorkdir, "list")

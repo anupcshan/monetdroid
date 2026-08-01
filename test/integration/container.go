@@ -277,9 +277,11 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 			}
 		}
 	}
-	// Replay mode: no credentials are mounted; the test binary's TestMain
-	// writes a dummy subscription credential inside the container before the
-	// server starts (see container_test.go).
+	// Replay mode: set a dummy auth token so the CLI takes the same token
+	// code path as record mode, keeping request bodies aligned.
+	if mode == "replay" {
+		dockerArgs = append(dockerArgs, "-e", "ANTHROPIC_AUTH_TOKEN=dummy-replay-auth-token")
+	}
 
 	dockerArgs = append(dockerArgs, dockerImage,
 		"timeout", fmt.Sprintf("%d", containerTimeout), "/test",
