@@ -789,52 +789,6 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 	defer t.Log()
 	var buf strings.Builder
 
-	tracked := h.Tracker.List()
-	if len(tracked) > 0 {
-		buf.WriteString(`<div class="drawer-section-label">Sessions</div>`)
-		for _, ts := range tracked {
-			summary := ts.Label
-			if ts.AutoLabel && summary != "" {
-				summary = "(auto) " + summary
-			}
-			if summary == "" {
-				summary = "(no label)"
-			}
-
-			sp := ShortPath(MainWorktree(t, ts.Cwd))
-
-			var statusHTML string
-			switch ts.Status {
-			case "running":
-				statusHTML = `<span class="di-running"></span> running`
-			case "completed":
-				statusHTML = `<span style="color:var(--tool)">&#x2713; done</span>`
-			case "blocked":
-				statusHTML = `<span style="color:var(--accent)">&#x25CF; blocked</span>`
-			}
-
-			metaExtra := ""
-			if s := h.Sessions.Get(ts.ClaudeID); s != nil {
-				mc, ctxUsed, ctxWindow := s.Stats()
-				if mc > 0 {
-					metaExtra = fmt.Sprintf(" · %d msgs", mc)
-				}
-				if ctxUsed > 0 {
-					metaExtra += " · " + FormatTokens(ctxUsed, ctxWindow)
-				}
-			} else {
-				metaExtra = " · " + TimeAgo(time.UnixMilli(ts.UpdatedAtMillis))
-			}
-
-			branchHTML := renderBranchChips(ts.Branches)
-			fmt.Fprintf(&buf,
-				`<div class="drawer-item-row"><a class="drawer-item" href="/?session=%s" onclick="document.getElementById('drawer').hidePopover()"><div class="di-name"><span class="di-name-text">%s</span>%s</div><div class="di-path">%s</div><div class="di-meta">%s%s</div></a>`+
-					`<form hx-post="/close-session" hx-swap="delete" hx-target="closest .drawer-item-row"><input type="hidden" name="claude_id" value="%s"><button type="submit" class="drawer-close-btn" title="Close session" onclick="event.stopPropagation()">✕</button></form></div>`,
-				Esc(ts.ClaudeID), Esc(summary), branchHTML, Esc(sp), statusHTML, metaExtra, Esc(ts.ClaudeID),
-			)
-		}
-	}
-
 	groups, err := ScanHistory(t)
 	if err == nil && len(groups) > 0 {
 		buf.WriteString(`<div class="drawer-section-label">History</div>`)
@@ -887,8 +841,8 @@ func (h *Hub) handleDrawer(w http.ResponseWriter, r *http.Request) {
 
 	buf.WriteString(`<div class="drawer-section-label">Debug</div>`)
 
-	if len(tracked) == 0 && (err != nil || len(groups) == 0) {
-		buf.WriteString(`<div style="padding:20px;text-align:center;color:var(--text2);font-size:13px">No sessions yet</div>`)
+	if len(groups) == 0 {
+		buf.WriteString(`<div style="padding:20px;text-align:center;color:var(--text2);font-size:13px">No history yet</div>`)
 	}
 
 	w.Header().Set("Content-Type", "text/html")

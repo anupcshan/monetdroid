@@ -128,65 +128,6 @@ html, body {
   letter-spacing: 0.5px;
   padding: 12px 12px 6px;
 }
-.drawer-item-row {
-  display: flex;
-  align-items: center;
-  border-radius: 8px;
-  margin-bottom: 4px;
-}
-.drawer-item-row:active { background: var(--surface2); }
-.drawer-item {
-  display: block;
-  text-decoration: none;
-  color: inherit;
-  padding: 12px;
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-}
-.drawer-close-btn {
-  background: none;
-  border: none;
-  color: var(--text2);
-  cursor: pointer;
-  padding: 8px;
-  font-size: 14px;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-.drawer-close-btn:hover { color: var(--text); background: var(--surface2); }
-.drawer-item .di-name {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 2px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-.di-name-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.drawer-item .di-path {
-  font-size: 11px;
-  color: var(--text2);
-  font-family: var(--mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.drawer-item .di-meta {
-  font-size: 11px;
-  color: var(--text2);
-  margin-top: 4px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
 .di-running {
   display: inline-block;
   width: 6px;

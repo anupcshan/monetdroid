@@ -867,6 +867,7 @@ func TestDrawer(t *testing.T) {
 		if !strings.Contains(session1URL, "session=") {
 			t.Fatalf("expected session= in URL after first message, got: %s", session1URL)
 		}
+		session1ID := page.MustEval(`() => new URLSearchParams(location.search).get('session')`).String()
 		Screenshot(t, page, "drawer_session1")
 
 		// --- Session 2 ---
@@ -881,46 +882,38 @@ func TestDrawer(t *testing.T) {
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 		Screenshot(t, page, "drawer_session2")
 
-		// --- Open drawer and verify contents ---
+		// --- Open drawer and verify history ---
 		page.MustElement(`button[popovertarget="drawer"]`).MustClick()
-		WaitForElement(t, page, "#drawer-content .drawer-item", 5*time.Second)
+		WaitForElement(t, page, "#drawer-content .history-item", 5*time.Second)
 		Screenshot(t, page, "drawer_open")
 
-		// Exactly 2 active sessions (no orphan sN sessions)
-		activeItems := page.MustElements("#drawer-content .drawer-item")
-		if len(activeItems) != 2 {
-			t.Fatalf("expected 2 active sessions in drawer, got %d", len(activeItems))
-		}
-
-		// Both session labels should appear
+		// Both repos appear as history groups.
 		drawerHTML := page.MustEval(`() => document.getElementById('drawer-content').innerHTML`).String()
-		if !strings.Contains(drawerHTML, "Say hello") {
-			t.Fatalf("drawer missing 'Say hello' session")
-		}
-		if !strings.Contains(drawerHTML, "Say goodbye") {
-			t.Fatalf("drawer missing 'Say goodbye' session")
-		}
-
-		// Both directories should appear (in active sessions section)
 		if !strings.Contains(drawerHTML, "project-alpha") {
-			t.Fatalf("drawer missing project-alpha directory")
+			t.Fatalf("drawer history missing project-alpha")
 		}
 		if !strings.Contains(drawerHTML, "project-beta") {
-			t.Fatalf("drawer missing project-beta directory")
+			t.Fatalf("drawer history missing project-beta")
 		}
 
-		// --- Switch to session 1 via drawer ---
-		// Find the drawer item that links to session 1
-		session1Link, err := page.Timeout(5*time.Second).ElementR(".drawer-item", "Say hello")
+		// History groups render collapsed. Open the project-alpha group holding session 1.
+		groupSummary, err := page.Timeout(5*time.Second).ElementR("summary.history-group-header", "project-alpha")
 		if err != nil {
-			t.Fatalf("could not find session 1 link in drawer: %v", err)
+			t.Fatalf("could not find project-alpha history group: %v", err)
+		}
+		groupSummary.MustClick()
+
+		// --- Switch back to session 1 via its history item ---
+		session1Link, err := page.Timeout(5 * time.Second).Element(`#drawer-content .history-item[href*="session=` + session1ID + `"]`)
+		if err != nil {
+			t.Fatalf("could not find history item for session 1 (%s): %v", session1ID, err)
 		}
 		session1Link.MustClick()
 
-		// Session 1's content should be visible
+		// Session 1's content should be visible.
 		WaitForText(t, page, ".msg-user", "Say hello", 10*time.Second)
 
-		// Should be back on session 1's URL
+		// Should be back on session 1's URL.
 		currentURL := page.MustEval(`() => window.location.href`).String()
 		if currentURL != session1URL {
 			t.Fatalf("expected to switch back to session 1 URL %s, got %s", session1URL, currentURL)
@@ -958,33 +951,7 @@ func TestCloseSession(t *testing.T) {
 		WaitForElement(t, page, ".msg-assistant", 120*time.Second)
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-		// Currently viewing session 2 (project-beta)
-
-		// --- Close session 1 from drawer (should NOT redirect) ---
-		page.MustElement(`button[popovertarget="drawer"]`).MustClick()
-		WaitForElement(t, page, "#drawer-content .drawer-item", 5*time.Second)
-
-		// Find the close button for session 1 (the row containing "Say hello")
-		row1, err := page.Timeout(5*time.Second).ElementR(".drawer-item-row", "Say hello")
-		if err != nil {
-			t.Fatalf("could not find session 1 row in drawer: %v", err)
-		}
-		row1.MustElement(".drawer-close-btn").MustClick()
-
-		// Wait for the row to be removed (drawer stays open for multi-close)
-		if err := page.Timeout(10 * time.Second).Wait(rod.Eval(`() => ![...document.querySelectorAll('.drawer-item-row')].some(el => el.textContent.includes('Say hello'))`)); err != nil {
-			t.Fatalf("drawer item 'Say hello' was not removed: %v", err)
-		}
-		Screenshot(t, page, "close_from_drawer")
-
-		// Only 1 active session remaining in the still-open drawer
-		activeItems := page.MustElements("#drawer-content .drawer-item")
-		if len(activeItems) != 1 {
-			t.Fatalf("expected 1 active session after closing from drawer, got %d", len(activeItems))
-		}
-
-		// Dismiss the drawer to access the header
-		page.MustEval(`() => document.getElementById('drawer').hidePopover()`)
+		// Currently viewing session 2 (project-beta).
 
 		// --- Close session 2 from header (should redirect to /) ---
 		page.MustElement(`#close-btn button`).MustClick()
@@ -992,6 +959,23 @@ func TestCloseSession(t *testing.T) {
 		// Should redirect to landing page showing tracked sessions
 		WaitForText(t, page, ".queue-header", "SESSIONS", 5*time.Second)
 		Screenshot(t, page, "close_from_header")
+
+		// Closing via the header leaves the session tracked, so the landing
+		// queue still lists both sessions. Close one from its queue item,
+		// exercising the /close-session path the queue items depend on.
+		WaitForElement(t, page, ".queue-item", 10*time.Second)
+		queueItems := page.MustElements(".queue-item")
+		if len(queueItems) < 1 {
+			t.Fatalf("expected sessions in landing queue, got %d", len(queueItems))
+		}
+		before := len(queueItems)
+		queueItems[0].MustElement(".qi-close").MustClick()
+
+		// The closed item is removed client-side once the request completes.
+		if err := page.Timeout(10 * time.Second).Wait(rod.Eval(fmt.Sprintf(`() => document.querySelectorAll('.queue-item').length === %d`, before-1))); err != nil {
+			t.Fatalf("queue item was not removed after close (expected %d remaining): %v", before-1, err)
+		}
+		Screenshot(t, page, "close_from_queue")
 	})
 }
 
@@ -1325,26 +1309,6 @@ func TestDrawerNewWorkstream(t *testing.T) {
 		groups := page.MustElements(".history-group")
 		if len(groups) != 1 {
 			t.Fatalf("expected 1 history group, got %d", len(groups))
-		}
-
-		// Both tracked sessions should show /work as their path.
-		items := page.MustElements(".drawer-item")
-		if len(items) != 2 {
-			t.Fatalf("expected 2 tracked sessions, got %d", len(items))
-		}
-		for i, item := range items {
-			path := item.MustElement(".di-path").MustText()
-			if strings.Contains(path, "worktrees") {
-				t.Fatalf("session %d path should show main repo, not worktree: %s", i, path)
-			}
-			if !strings.Contains(path, "/work") {
-				t.Fatalf("session %d path should contain /work, got: %s", i, path)
-			}
-		}
-		// First session (most recent) should be the workstream.
-		wsName := items[0].MustElement(".di-name").MustText()
-		if !strings.Contains(wsName, "test-ws") {
-			t.Fatalf("first tracked session should be test-ws, got: %s", wsName)
 		}
 
 		// Navigate to home page (no active session) and verify landing page cards.
