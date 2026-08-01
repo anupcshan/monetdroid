@@ -1,7 +1,12 @@
 #!/bin/bash -eu
 
 rc=0
-go fmt ./... || rc=$?
+out=$(go fmt ./...) || rc=$?
+if [ -n "$out" ]; then
+	echo "go fmt reformatted:"
+	printf '%s\n' "$out"
+	echo
+fi
 go tool golangci-lint run ./... || rc=$?
 go build -o /tmp/exportedmutex ./tools/analyzers/cmd/exportedmutex && \
   go vet -vettool=/tmp/exportedmutex ./... || rc=$?
