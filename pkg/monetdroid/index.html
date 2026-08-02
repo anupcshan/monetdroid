@@ -18,12 +18,41 @@
     hx-swap="none" means the element itself isn't updated. Only OOB elements
     in the response are swapped into their targets.
 
-    Auto-scroll: debounced via _sp flag so at most 1 reflow per frame.
-    Only scrolls if _ab (at-bottom) is true, tracked by scroll event on #messages.
-    _ab starts true so initial load scrolls to bottom.
+    Auto-follow streaming output in #messages.
+
+    _shouldStickToBottom is an INTENTION latch, not a position measurement. It means "the
+    user wants new content to scroll into view." It starts true so initial load
+    and each new turn (see the /send form) follow the stream. It latches false
+    the moment the user scrolls up to read, and latches true again only when the
+    user returns to the bottom, taps #scroll-btn, or submits a message.
+
+    _shouldStickToBottom must be driven by user intent, not by measuring the scroll
+    position. The auto-scroll resets the view to the absolute bottom every frame, so a
+    position-derived latch would be re-set true on every frame and the user could never
+    disengage. Only user actions change the latch.
+
+    Three pieces work together, and none can be removed.
+    _isProgrammaticallyScrolling is set while we scroll programmatically (from the
+    rAF below and #scroll-btn), so the scroll handler ignores those events. Without
+    it, our own scroll-to-bottom would fire a scroll event and corrupt
+    _shouldStickToBottom, reintroducing the loop.
+    _lastScrollTop holds the previous scrollTop so the handler can detect direction:
+    any upward user scroll latches _shouldStickToBottom false.
+    The rAF rechecks _shouldStickToBottom before scrolling, so a scroll scheduled before the
+    user opted out does not yank them back.
+
+    _isScrollPending debounces to one scroll per animation frame, one reflow per frame.
+    _isProgrammaticallyScrolling is a one-shot token: the scroll handler consumes it on the next event.
+    Scroll events from programmatic scrollTop changes fire asynchronously, after
+    this script finishes, not at the moment of assignment, so the token cannot be
+    cleared inline after the assignment. It must be consumed by the handler.
+
+    Back-pagination (#load-older, before/after-swap below) is unrelated to this
+    latch. Its compensation preserves the view position by adjusting scrollTop, without
+    touching _shouldStickToBottom.
   -->
   <div sse-swap="htmx" hx-swap="none" style="display:none"
-       hx-on:htmx:sse-message="if(window._ab!==false&&!window._sp){window._sp=true;requestAnimationFrame(function(){window._sp=false;var m=document.getElementById('messages');m.scrollTop=m.scrollHeight})}"></div>
+       hx-on:htmx:sse-message="if(window._shouldStickToBottom!==false&&!window._isScrollPending){window._isScrollPending=true;requestAnimationFrame(function(){window._isScrollPending=false;if(window._shouldStickToBottom===false){return}var m=document.getElementById('messages');if(m.scrollTop+m.clientHeight<m.scrollHeight-2){window._isProgrammaticallyScrolling=true;m.scrollTop=m.scrollHeight}})}"></div>
 
   <div class="header">
     <button class="header-btn" popovertarget="drawer" hx-get="/drawer" hx-target="#drawer-content" hx-swap="innerHTML">☰</button>
@@ -47,20 +76,20 @@
 
     <div class="messages-wrap">
       <div class="messages" id="messages"
-           hx-on:scroll="if(this.scrollTop===0){window._ab=true}else{var ab=this.scrollHeight-this.scrollTop-this.clientHeight<200;window._ab=ab;document.getElementById('scroll-btn').style.display=ab?'none':'flex'}"
-           hx-on:htmx:before-swap="if(event.detail.target.id==='load-older'){this._sh=this.scrollHeight}"
-           hx-on:htmx:after-swap="if(this._sh){this.scrollTop+=this.scrollHeight-this._sh;delete this._sh}">
+           hx-on:scroll="var m=this;if(window._isProgrammaticallyScrolling){window._isProgrammaticallyScrolling=false;window._lastScrollTop=m.scrollTop;return}if(m.scrollHeight<=m.clientHeight){window._shouldStickToBottom=true;document.getElementById('scroll-btn').style.display='none';window._lastScrollTop=m.scrollTop;return}if(m.scrollTop<window._lastScrollTop){window._shouldStickToBottom=false;document.getElementById('scroll-btn').style.display='flex'}else if(m.scrollTop+m.clientHeight>=m.scrollHeight-4){window._shouldStickToBottom=true;document.getElementById('scroll-btn').style.display='none'}window._lastScrollTop=m.scrollTop"
+           hx-on:htmx:before-swap="if(event.detail.target.id==='load-older'){this._savedScrollHeight=this.scrollHeight}"
+           hx-on:htmx:after-swap="if(this._savedScrollHeight){this.scrollTop+=this.scrollHeight-this._savedScrollHeight;delete this._savedScrollHeight}">
         <div id="msg-content"></div>
         <div id="thinking"></div>
         <div id="streaming"></div>
       </div>
-      <button id="scroll-btn" class="scroll-btn" onclick="var m=document.getElementById('messages');m.scrollTop=m.scrollHeight;this.style.display='none';window._ab=true">↓</button>
+      <button id="scroll-btn" class="scroll-btn" onclick="var m=document.getElementById('messages');window._shouldStickToBottom=true;if(m.scrollTop+m.clientHeight<m.scrollHeight-2){window._isProgrammaticallyScrolling=true;m.scrollTop=m.scrollHeight}this.style.display='none'">↓</button>
     </div>
 
     <div class="review-bar" id="review-bar"></div>
     <div class="queue-bar" id="queue-bar"></div>
     <div class="input-area" id="input-area">
-      <form hx-post="/send" hx-swap="none" hx-encoding="multipart/form-data" hx-on::after-request="this.reset(); this.querySelector('.badge').classList.add('hidden'); this.querySelector('.badge').textContent = ''">
+      <form hx-post="/send" hx-swap="none" hx-encoding="multipart/form-data" hx-on::before-request="window._shouldStickToBottom=true" hx-on::after-request="this.reset(); this.querySelector('.badge').classList.add('hidden'); this.querySelector('.badge').textContent = ''">
         <input type="hidden" name="session_id" id="session-id" value="">
         <input type="hidden" name="cwd" id="session-cwd" value="">
         <input type="hidden" name="label" id="session-label-value" value="">

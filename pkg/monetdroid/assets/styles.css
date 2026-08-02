@@ -746,13 +746,13 @@ details[open] > .history-group-header::before { content: '▼ '; }
   overflow: visible;
 }
 .thinking-chip .thinking-detail {
+  /* Must stay uncapped. A max-height here stops #messages from growing, which
+     breaks streaming auto-follow for thinking. */
   color: var(--text2);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
   margin-top: 6px;
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 /* --- Permission prompt --- */
