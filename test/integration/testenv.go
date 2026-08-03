@@ -12,7 +12,8 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-// Screenshot captures the current page state.
+// Screenshot captures the current page as a PNG and writes its HTML to a
+// sibling .html file.
 func Screenshot(t *testing.T, page *rod.Page, name string) {
 	t.Helper()
 	dir := filepath.Join(TestdataDir(), "screenshots")
@@ -23,21 +24,18 @@ func Screenshot(t *testing.T, page *rod.Page, name string) {
 	})
 	if err != nil {
 		t.Logf("screenshot failed: %v", err)
-		return
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	} else if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Logf("screenshot write failed: %v", err)
-		return
 	}
+	DumpDOM(t, page, name)
 }
 
 func ScreenshotOnFailure(t *testing.T, page *rod.Page, name string) {
 	t.Helper()
 	Screenshot(t, page, "FAIL_"+name)
-	DumpDOM(t, page, "FAIL_"+name)
 }
 
-// DumpDOM saves the page's HTML to a file for post-mortem debugging.
+// DumpDOM saves the page's HTML to a file.
 func DumpDOM(t *testing.T, page *rod.Page, name string) {
 	t.Helper()
 	dir := filepath.Join(TestdataDir(), "screenshots")
