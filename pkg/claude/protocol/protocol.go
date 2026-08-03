@@ -47,6 +47,10 @@ type StreamEvent struct {
 	Summary      string     `json:"summary,omitempty"`
 	LastToolName string     `json:"last_tool_name,omitempty"`
 	TaskUsage    *TaskUsage `json:"usage,omitempty"`
+
+	// task_description is set on a forked skill's child assistant messages.
+	// It is distinct from description, which task_started carries for agents.
+	TaskDescription string `json:"task_description,omitempty"`
 }
 
 type TaskUsage struct {

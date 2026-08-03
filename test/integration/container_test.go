@@ -3512,3 +3512,161 @@ func TestDiffStatInCostBar(t *testing.T) {
 		Screenshot(t, page, "diff_stat_step2")
 	})
 }
+
+// yesfileSkillPath is where the skill is installed inside the container. The
+// container runs as root, so $HOME is /root and personal skills live under
+// /root/.claude/skills. Each variant overwrites this path with its own
+// frontmatter in its own fresh container.
+const yesfileSkillPath = "/root/.claude/skills/yesfile/SKILL.md"
+
+// yesfileBody is the shared instruction body for every variant. It pins a
+// single exact Bash command so the request body claude builds is identical
+// across record and replay, keeping the cassette deterministic.
+const yesfileBody = `Run this exact shell command with the Bash tool. Run it verbatim. Do not paraphrase it, split it into multiple commands, or substitute any part of it.
+
+    yes | head -10 > /tmp/yesfile`
+
+// Frontmatter for each execution context. The body and description are
+// identical. Only context and background differ.
+const (
+	yesfileFrontmatterInline = `---
+name: yesfile
+description: Create /tmp/yesfile by running one fixed shell command.
+---`
+
+	yesfileFrontmatterForkForeground = `---
+name: yesfile
+description: Create /tmp/yesfile by running one fixed shell command.
+context: fork
+background: false
+---`
+
+	yesfileFrontmatterForkBackground = `---
+name: yesfile
+description: Create /tmp/yesfile by running one fixed shell command.
+context: fork
+background: true
+---`
+)
+
+func yesfileSkill(frontmatter string) string {
+	return frontmatter + "\n\n" + yesfileBody + "\n"
+}
+
+// skillVariant captures what differs between the three execution contexts.
+type skillVariant struct {
+	cassette    string // cassette filename under testdata/cassettes/<provider>/
+	frontmatter string // SKILL.md frontmatter for this variant
+	screenshot  string // stem for screenshot names
+	subagent    bool   // true for forked skills, so selectors scope to .msg-subagent
+}
+
+// runSkillTest is the shared driver. It installs the skill, invokes it, and
+// asserts that the Bash command's permission prompt surfaces, resolves on
+// Allow, creates /tmp/yesfile, and does not re-prompt after a reload.
+func runSkillTest(t *testing.T, v skillVariant) {
+	t.Parallel()
+	WithProviders(t, v.cassette, func(t *testing.T, f *ContainerFixture) {
+		f.WriteFile(yesfileSkillPath, yesfileSkill(v.frontmatter))
+
+		page := f.Page()
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		page.MustElement(`textarea[name="text"]`).MustInput("Invoke yesfile skill")
+		page.MustElement(`.send-btn`).MustClick()
+
+		// A forked skill runs its Bash command in a subagent, so the prompt
+		// lives inside the subagent section. Inline, it lives at the top level.
+		scope := ""
+		if v.subagent {
+			scope = ".msg-subagent "
+		}
+		WaitForElement(t, page, scope+".perm-inline", 30*time.Second)
+		Screenshot(t, page, v.screenshot+"_prompt")
+
+		// The subagent section renders collapsed, so open it to reach Allow.
+		if v.subagent {
+			page.MustElement(scope + "summary").MustClick()
+		}
+		page.MustElement(scope + ".perm-allow").MustClick()
+		WaitForText(t, page, scope+".tool-name", "Allowed", 30*time.Second)
+		Screenshot(t, page, v.screenshot+"_allowed")
+
+		// Confirm the command ran by polling the container filesystem, which is
+		// independent of forked-skill DOM details that differ between
+		// foreground and background execution.
+		waitForFile(t, f, "/tmp/yesfile", 60*time.Second)
+		assertYesfileCreated(t, f)
+		Screenshot(t, page, v.screenshot+"_complete")
+
+		// A resolved permission must not re-prompt when the session is
+		// re-rendered from the log.
+		sessionURL := page.MustEval(`() => window.location.href`).String()
+		page.MustNavigate(sessionURL).MustWaitStable()
+		WaitForElement(t, page, ".msg-assistant", 5*time.Second)
+		reprompts := page.MustEval(`() => document.querySelectorAll('.perm-inline').length`).Int()
+		if reprompts != 0 {
+			Screenshot(t, page, v.screenshot+"_reprompts_after_reload")
+			t.Fatalf("expected 0 pending permission prompts after reload, got %d", reprompts)
+		}
+		Screenshot(t, page, v.screenshot+"_resolved_after_reload")
+	})
+}
+
+// These tests drive a personal skill installed at $HOME/.claude/skills. The
+// skill runs one fixed Bash command that matches no permission allow rule, so
+// it surfaces a permission prompt and leaves a verifiable artifact at
+// /tmp/yesfile. The three variants cover the skill execution contexts. Inline
+// runs the command in the main turn. The two fork variants run it in a
+// sub-agent and differ only in the background frontmatter flag.
+func TestSkillInline(t *testing.T) {
+	runSkillTest(t, skillVariant{
+		cassette:    "skill_inline.jsonl.zst",
+		frontmatter: yesfileFrontmatterInline,
+		screenshot:  "skill_inline",
+		subagent:    false,
+	})
+}
+
+func TestSkillForkForeground(t *testing.T) {
+	runSkillTest(t, skillVariant{
+		cassette:    "skill_fork_foreground.jsonl.zst",
+		frontmatter: yesfileFrontmatterForkForeground,
+		screenshot:  "skill_fork_foreground",
+		subagent:    true,
+	})
+}
+
+func TestSkillForkBackground(t *testing.T) {
+	runSkillTest(t, skillVariant{
+		cassette:    "skill_fork_background.jsonl.zst",
+		frontmatter: yesfileFrontmatterForkBackground,
+		screenshot:  "skill_fork_background",
+		subagent:    true,
+	})
+}
+
+// waitForFile polls until path exists inside the container.
+func waitForFile(t *testing.T, f *ContainerFixture, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := f.DockerExec("test", "-f", path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s to exist in the container", path)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// assertYesfileCreated fails if the command did not produce its output.
+func assertYesfileCreated(t *testing.T, f *ContainerFixture) {
+	t.Helper()
+	content := f.ReadFile("/tmp/yesfile")
+	if !strings.Contains(content, "y") {
+		t.Fatalf("/tmp/yesfile has unexpected content: %q", content)
+	}
+}

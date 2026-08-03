@@ -127,6 +127,20 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 		// subagent_finished, so streaming it would duplicate the final
 		// text and leak into the main timeline.
 		if pid != "" {
+			// A forked skill runs in a sub-agent context but never emits the
+			// task_started lifecycle event that announces an Agent invocation.
+			// When a parented message arrives for an unannounced parent, create
+			// the sub-agent section the missing event would have created.
+			if s.GetAgentStat(pid) == nil {
+				s.StartAgent(pid, event.TaskDescription)
+				broadcast(ServerMsg{
+					Type:        "subagent_started",
+					SessionID:   s.ID,
+					AgentID:     pid,
+					AgentType:   event.SubagentType,
+					Description: event.TaskDescription,
+				})
+			}
 			for _, b := range event.Message.Content.Blocks {
 				if b.Type == "tool_use" {
 					if suppressResultTools[b.Name] {
