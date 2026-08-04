@@ -492,8 +492,12 @@ func TestSubagentPermission(t *testing.T) {
 		WaitForText(t, page, ".msg-subagent .tool-name", "Allowed", 30*time.Second)
 		Screenshot(t, page, "subagent_perm_allowed")
 
-		WaitForElement(t, page, ".msg-assistant", 120*time.Second)
-		content := f.ReadFile(containerWorkdir + "/done.txt")
+		// The sub-agent runs in the background, so the parent's assistant
+		// message appears at launch, not when done.txt is written. Poll the
+		// file itself.
+		donePath := containerWorkdir + "/done.txt"
+		waitForFile(t, f, donePath, 60*time.Second)
+		content := f.ReadFile(donePath)
 		if !strings.Contains(content, "completed") {
 			t.Fatalf("done.txt has unexpected content: %s", content)
 		}
@@ -3016,11 +3020,15 @@ func topLevelMessageClasses(page *rod.Page) []string {
 		if cls == nil {
 			continue
 		}
-		c := strings.TrimPrefix(strings.TrimPrefix(*cls, "msg "), "msg-")
-		if c == "thinking" {
-			continue
+		for token := range strings.FieldsSeq(*cls) {
+			if !strings.HasPrefix(token, "msg-") {
+				continue
+			}
+			if c := strings.TrimPrefix(token, "msg-"); c != "thinking" {
+				classes = append(classes, c)
+			}
+			break
 		}
-		classes = append(classes, c)
 	}
 	return classes
 }
