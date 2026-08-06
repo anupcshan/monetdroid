@@ -339,8 +339,13 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 		t.Fatalf("git config user.name: %v\n%s", err, out)
 	}
 
-	// Launch headless browser
-	u := launcher.New().Headless(true).MustLaunch()
+	// Launch headless browser.
+	l := launcher.New().Headless(true)
+	if os.Getenv("CI") != "" {
+		// The kernel user namespace sandbox is unavailable on GitHub Actions runners.
+		l = l.Set("no-sandbox")
+	}
+	u := l.MustLaunch()
 	browser := rod.New().ControlURL(u).MustConnect()
 	t.Cleanup(func() { browser.MustClose() })
 
