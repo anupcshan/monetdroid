@@ -21,3 +21,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -v ./... -count=1 -timeout 600s
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-screenshots
+          path: test/integration/testdata/screenshots/
