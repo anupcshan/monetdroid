@@ -648,12 +648,13 @@ func renderPermSuggestions(msg ServerMsg) string {
 		suggestionsDiv = fmt.Sprintf(`<div class="perm-suggestions">%s</div>`, checkboxes.String())
 	}
 
-	return fmt.Sprintf(`<form id="allow-form-%s" hx-post="/perm" hx-swap="none" style="display:none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"></form>%s<div class="perm-actions" id="perm-actions-%s"><form hx-post="/perm" hx-swap="none" style="flex:1"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"><button type="submit" class="perm-deny" style="width:100%%">Deny</button></form><button type="submit" class="perm-allow" style="flex:1" form="allow-form-%s">Allow</button></div>`,
+	return fmt.Sprintf(`<form id="allow-form-%s" hx-post="/perm" hx-swap="none" style="display:none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="true"></form><form id="deny-form-%s" hx-post="/perm" hx-swap="none" style="display:none"><input type="hidden" name="session_id" value="%s"><input type="hidden" name="perm_id" value="%s"><input type="hidden" name="allow" value="false"></form>%s<textarea name="message" class="perm-deny-msg" placeholder="message (optional)" form="deny-form-%s" rows="2"></textarea><div class="perm-actions" id="perm-actions-%s"><button type="submit" class="perm-deny" style="flex:1" form="deny-form-%s">Deny</button><button type="submit" class="perm-allow" style="flex:1" form="allow-form-%s">Allow</button></div>`,
+		Esc(msg.PermID), Esc(msg.SessionID), Esc(msg.PermID),
 		Esc(msg.PermID), Esc(msg.SessionID), Esc(msg.PermID),
 		suggestionsDiv,
 		Esc(msg.PermID),
-		Esc(msg.SessionID), Esc(msg.PermID),
 		Esc(msg.PermID),
+		Esc(msg.PermID), Esc(msg.PermID),
 	)
 }
 

@@ -383,9 +383,17 @@ func (p *ClaudeProcess) sendPermResponse(requestID string, originalInput *protoc
 		}
 		p.sendControlResponse(requestID, payload)
 	} else {
+		message := resp.Message
+		if message == "" {
+			message = "User denied this action"
+		} else {
+			// Reproduce Claude Code's reject-with-message wording. The framing
+			// marks the user's text as guidance rather than a bare tool error.
+			message = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n" + message
+		}
 		payload := permDenyResponse{
 			Behavior: "deny",
-			Message:  "User denied this action",
+			Message:  message,
 		}
 		p.sendControlResponse(requestID, payload)
 	}

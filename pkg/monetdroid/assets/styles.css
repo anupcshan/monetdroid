@@ -809,6 +809,20 @@ details[open] > .history-group-header::before { content: '▼ '; }
 }
 .perm-allow { background: var(--tool); color: var(--bg); }
 .perm-deny { background: var(--error); color: white; }
+.perm-deny-msg {
+	display: block;
+	width: 100%;
+	box-sizing: border-box;
+	padding: 6px 8px;
+	margin-bottom: 8px;
+	border-radius: 6px;
+	border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--sans);
+	font-size: 12px;
+	resize: vertical;
+}
 
 /* --- Inline permission (inside tool chip) --- */
 .tool-chip:has(.perm-inline) {

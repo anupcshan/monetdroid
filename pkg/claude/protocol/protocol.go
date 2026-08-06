@@ -384,4 +384,7 @@ type PermResponse struct {
 	Allow        bool
 	Permissions  []PermSuggestion
 	UpdatedInput *ToolInput
+	// Message is the reason shown to the model when a request is denied. It is
+	// ignored when Allow is true.
+	Message string
 }

@@ -3264,51 +3264,36 @@ After step 6, reply with the single word "done" and stop.`,
 	})
 }
 
-// TestInjectDuringPermission exercises the handlers.go HasPendingPerms branch:
-// when the user sends a message while a permission prompt is open, monetdroid
-// calls proc.SendUserMessage directly (bypassing StartTurn). The claude CLI
-// folds the injected message into the current turn and emits exactly one
-// "result" event covering both messages and their tool uses.
-func TestInjectDuringPermission(t *testing.T) {
+// TestRejectWithMessage rejects a tool with an attached message and asserts
+// the model heeds the guidance in the rejection turn. The deny-form message
+// is delivered as the rejected tool's result, framed as user guidance, so
+// the reply in that turn must reflect it.
+func TestRejectWithMessage(t *testing.T) {
 	t.Parallel()
-	WithProviders(t, "inject_during_permission.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+	WithProviders(t, "reject_with_message.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 		page := f.Page()
 
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-		// Turn-trigger: request a file create. This blocks on a Write permission.
+		// Trigger a Write permission.
 		page.MustElement(`textarea[name="text"]`).MustInput("Create a file called hello.txt containing 'Hello'")
 		page.MustElement(`.send-btn`).MustClick()
 
 		WaitForElement(t, page, ".perm-inline", 60*time.Second)
-		Screenshot(t, page, "inject_perm_open")
+		Screenshot(t, page, "reject_perm_open")
 
-		// Inject a second user message while the permission is still pending.
-		// monetdroid's /send handler sees HasPendingPerms=true and calls
-		// proc.SendUserMessage directly instead of EnqueueMessage or StartTurn.
-		page.MustElement(`textarea[name="text"]`).MustInput("Also create world.txt containing 'World'")
-		page.MustElement(`.send-btn`).MustClick()
+		// Type the rejection guidance into the deny field. monetdroid delivers
+		// it to the model as the reason for the denial.
+		page.MustElement(`textarea[name="message"]`).MustInput("Do not create that file. Reply with exactly the word ZUCCHINI and nothing else.")
+		Screenshot(t, page, "reject_guidance_typed")
 
-		// Confirm the second user message rendered in chat (proves the inject
-		// reached the session log, not just the textarea).
-		if _, err := page.Timeout(10*time.Second).ElementR(".msg-user", "world.txt"); err != nil {
-			Screenshot(t, page, "inject_second_msg_missing")
-			t.Fatalf("second user message never rendered: %v", err)
-		}
-		Screenshot(t, page, "inject_second_msg_sent")
-
-		// Resolve permissions as they appear. The inject may add a second tool
-		// use (write world.txt), which gates on its own permission. Race
-		// `.perm-allow` (more work) against `#stop-btn:empty` (turn settled);
-		// whichever fires first decides the next step.
-		allowed := 0
+		// Reject the tool, and any retry, until the turn settles.
 		done := false
 		for !done {
 			page.Timeout(60 * time.Second).Race().
-				Element(`.perm-allow`).MustHandle(func(e *rod.Element) {
+				Element(`.perm-deny`).MustHandle(func(e *rod.Element) {
 				e.MustClick()
-				allowed++
 				e.MustWaitInvisible()
 			}).
 				Element(`#stop-btn:empty`).MustHandle(func(e *rod.Element) {
@@ -3316,43 +3301,32 @@ func TestInjectDuringPermission(t *testing.T) {
 			}).
 				MustDo()
 		}
-		t.Logf("=== INJECT-DURING-PERMISSION: allowed %d permission prompt(s) ===", allowed)
-		Screenshot(t, page, "inject_complete")
+		Screenshot(t, page, "reject_turn_done")
 
-		// Diagnostic: count "result" events.
+		// The rejection guidance must shape the model's reply in the rejection
+		// turn. Collect assistant reply text up to the first "result" event,
+		// which ends that turn. The guidance the user typed is a user_message
+		// event, so it never matches the type "text" filter.
 		events := f.SessionLog()
+		var reply strings.Builder
+		for _, e := range events {
+			if e.Type == "result" {
+				break
+			}
+			if e.Type == "text" {
+				reply.WriteString(e.Text)
+			}
+		}
 		resultCount := 0
 		for _, e := range events {
 			if e.Type == "result" {
 				resultCount++
 			}
 		}
-		t.Logf("=== INJECT-DURING-PERMISSION: %d result event(s), %d total events ===", resultCount, len(events))
-		for i, e := range events {
-			line := fmt.Sprintf("[%3d] type=%-20s tool=%-20s toolUseID=%s", i, e.Type, e.Tool, e.ToolUseID)
-			if e.Text != "" {
-				text := e.Text
-				if len(text) > 80 {
-					text = text[:80] + "..."
-				}
-				line += fmt.Sprintf(" text=%q", text)
-			}
-			t.Logf("%s", line)
-		}
+		t.Logf("=== REJECT-WITH-MESSAGE: turn-1 reply=%q resultCount=%d", reply.String(), resultCount)
 
-		// The original Write must have completed (we clicked Allow).
-		helloContent := f.ReadFile(containerWorkdir + "/hello.txt")
-		if !strings.Contains(helloContent, "Hello") {
-			t.Fatalf("hello.txt has unexpected content: %s", helloContent)
-		}
-
-		// world.txt may or may not exist depending on how claude handled the
-		// inject. Log either way without failing. The result-event count is
-		// the primary observation for this test.
-		if worldOut, err := f.DockerExec("cat", containerWorkdir+"/world.txt"); err != nil {
-			t.Logf("world.txt: not created (inject was not acted upon)")
-		} else {
-			t.Logf("world.txt: %q", worldOut)
+		if !strings.Contains(strings.ToUpper(reply.String()), "ZUCCHINI") {
+			t.Fatalf("rejection guidance was not handled in the rejection turn: reply lacked ZUCCHINI")
 		}
 	})
 }

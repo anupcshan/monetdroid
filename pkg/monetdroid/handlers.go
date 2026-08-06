@@ -654,7 +654,7 @@ func (h *Hub) handlePerm(w http.ResponseWriter, r *http.Request) {
 			}
 			perms = append(perms, suggestion)
 		}
-		ch <- protocol.PermResponse{Allow: allow, Permissions: perms}
+		ch <- protocol.PermResponse{Allow: allow, Permissions: perms, Message: r.FormValue("message")}
 	}
 
 	// Look up the ToolUseID before removing the permission from the log
