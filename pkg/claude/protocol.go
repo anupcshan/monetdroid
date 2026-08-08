@@ -37,9 +37,10 @@ type ctlIncomingResponse struct {
 }
 
 type ctlRespPayload struct {
-	Subtype   string `json:"subtype"` // "success" or "error"
-	RequestID string `json:"request_id"`
-	Error     string `json:"error,omitempty"`
+	Subtype   string          `json:"subtype"` // "success" or "error"
+	RequestID string          `json:"request_id"`
+	Error     string          `json:"error,omitempty"`
+	Response  json.RawMessage `json:"response,omitempty"`
 }
 
 type ctlIncomingRequest struct {
@@ -102,6 +103,22 @@ type ctlInterruptRequest struct {
 type ctlSetPermModeRequest struct {
 	Subtype string `json:"subtype"` // "set_permission_mode"
 	Mode    string `json:"mode"`
+}
+
+type ctlRewindRequest struct {
+	Subtype           string `json:"subtype"` // "rewind_conversation"
+	TargetMessageUUID string `json:"target_message_uuid"`
+}
+
+// ctlRewindResponse is the body of a rewind_conversation control_response.
+// The outer subtype is "success" even when Rewound is false, so Rewound is the
+// real success signal.
+type ctlRewindResponse struct {
+	Rewound                bool   `json:"rewound"`
+	TargetMessageUUID      string `json:"targetMessageUuid"`
+	PrefillText            string `json:"prefillText"`
+	PrecedingAssistantUUID string `json:"precedingAssistantUuid"`
+	Error                  string `json:"error,omitempty"`
 }
 
 // --- Permission response payloads ---

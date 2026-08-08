@@ -59,6 +59,13 @@ type Process interface {
 	// SetPermissionMode changes the permission mode mid-session.
 	SetPermissionMode(mode PermissionMode) error
 
+	// RewindConversation rewinds the active conversation tip to the message
+	// with the given uuid. The next SendUserMessage attaches as a sibling of
+	// the target, branching at its parent. Used to edit or re-send a past user
+	// message. Returns the branch point and the target's text, or an error if
+	// claude rejects the request, including a target not on the active branch.
+	RewindConversation(targetMessageUUID string) (RewindResult, error)
+
 	// IsDead reports whether the process has exited and will no longer
 	// respond to any method.
 	IsDead() bool
@@ -190,7 +197,9 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		// `git` directly when it needs current state.
 		"CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1",
 	)
-	cmd.Env = append(cmd.Env, cfg.ExtraEnv...)
+	if cfg != nil {
+		cmd.Env = append(cmd.Env, cfg.ExtraEnv...)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -247,7 +256,7 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 
 	go p.scan(stdout, logLabel)
 
-	if err := p.sendControlRequest(ctlInitRequest{Subtype: "initialize"}); err != nil {
+	if _, err := p.sendControlRequest(ctlInitRequest{Subtype: "initialize"}); err != nil {
 		p.Kill()
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
@@ -405,7 +414,8 @@ func (p *ClaudeProcess) writeStdin(data []byte) (int, error) {
 	return p.stdin.Write(append(data, '\n'))
 }
 
-func (p *ClaudeProcess) sendControlRequest(request any) error {
+// sendControlRequest sends a control request and returns the response payload.
+func (p *ClaudeProcess) sendControlRequest(request any) (ctlRespPayload, error) {
 	p.mu.Lock()
 	p.reqSeq++
 	id := fmt.Sprintf("req_%d", p.reqSeq)
@@ -420,28 +430,28 @@ func (p *ClaudeProcess) sendControlRequest(request any) error {
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("marshal control request: %w", err)
+		return ctlRespPayload{}, fmt.Errorf("marshal control request: %w", err)
 	}
 	if _, err := p.writeStdin(data); err != nil {
-		return fmt.Errorf("write control request: %w", err)
+		return ctlRespPayload{}, fmt.Errorf("write control request: %w", err)
 	}
 
 	select {
 	case resp := <-ch:
 		if resp.Subtype == "error" {
-			return fmt.Errorf("control request error: %s", resp.Error)
+			return ctlRespPayload{}, fmt.Errorf("control request error: %s", resp.Error)
 		}
-		return nil
+		return resp, nil
 	case <-p.dead:
 		p.mu.Lock()
 		delete(p.pending, id)
 		p.mu.Unlock()
-		return fmt.Errorf("process died")
+		return ctlRespPayload{}, fmt.Errorf("process died")
 	case <-time.After(30 * time.Second):
 		p.mu.Lock()
 		delete(p.pending, id)
 		p.mu.Unlock()
-		return fmt.Errorf("control request timeout")
+		return ctlRespPayload{}, fmt.Errorf("control request timeout")
 	}
 }
 
@@ -501,12 +511,48 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []protocol.ImageData
 
 // Interrupt sends an interrupt control request to abort the current turn.
 func (p *ClaudeProcess) Interrupt() error {
-	return p.sendControlRequest(ctlInterruptRequest{Subtype: "interrupt"})
+	_, err := p.sendControlRequest(ctlInterruptRequest{Subtype: "interrupt"})
+	return err
 }
 
 // SetPermissionMode changes the permission mode mid-session.
 func (p *ClaudeProcess) SetPermissionMode(mode PermissionMode) error {
-	return p.sendControlRequest(ctlSetPermModeRequest{Subtype: "set_permission_mode", Mode: string(mode)})
+	_, err := p.sendControlRequest(ctlSetPermModeRequest{Subtype: "set_permission_mode", Mode: string(mode)})
+	return err
+}
+
+// RewindResult holds the details claude reports for a rewind_conversation
+// control request.
+type RewindResult struct {
+	// PrecedingAssistantUUID is the target message's parent. After the rewind,
+	// the next message attaches there, becoming a sibling of the target.
+	PrecedingAssistantUUID string
+	// PrefillText is the target message's text, suitable for prefilling an
+	// edit field.
+	PrefillText string
+}
+
+// RewindConversation rewinds the active conversation tip to targetMessageUUID.
+// The next SendUserMessage attaches as a sibling of the target, branching at
+// its parent. Returns the branch point and the target's text. Returns an error
+// if claude rejects the request, including a target that is not on the active
+// branch.
+func (p *ClaudeProcess) RewindConversation(targetMessageUUID string) (RewindResult, error) {
+	resp, err := p.sendControlRequest(ctlRewindRequest{Subtype: "rewind_conversation", TargetMessageUUID: targetMessageUUID})
+	if err != nil {
+		return RewindResult{}, err
+	}
+	var body ctlRewindResponse
+	if err := json.Unmarshal(resp.Response, &body); err != nil {
+		return RewindResult{}, fmt.Errorf("parse rewind response: %w", err)
+	}
+	if !body.Rewound {
+		if body.Error != "" {
+			return RewindResult{}, fmt.Errorf("rewind rejected: %s", body.Error)
+		}
+		return RewindResult{}, fmt.Errorf("rewind rejected")
+	}
+	return RewindResult{PrecedingAssistantUUID: body.PrecedingAssistantUUID, PrefillText: body.PrefillText}, nil
 }
 
 // IsDead returns true if the process has exited.

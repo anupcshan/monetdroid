@@ -136,6 +136,12 @@ func TestMain(m *testing.M) {
 		}
 		return
 	}
+	if os.Getenv(CLAUDE_PROTOCOL_IN_CONTAINER) == "1" {
+		// Protocol tests run under the Go test runner, invoked in-container by
+		// the host-side test with -test.run. This guard must precede the server
+		// mode below, whose env is inherited inside the container.
+		os.Exit(m.Run())
+	}
 	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
 		// Inside the container: run the monetdroid server.
 		os.MkdirAll(containerWorkdir, 0o755)
