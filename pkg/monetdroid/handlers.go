@@ -287,6 +287,17 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 					label = ShortPath(s.GetCwd())
 				}
 				cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))
+				// Known race: this read is not atomic with the lastSeq snapshot
+				// above. A thinking_delta landing between the two is both baked in
+				// here and replayed by the event loop, duplicating its fragment at
+				// the tail until the block finishes and replaces #streaming. A
+				// single lock across both reads would close it.
+				if thinking := s.GetStreamingThinking(); thinking != "" {
+					cmds = append(cmds,
+						DOMCmd{Target: "thinking", Strategy: "innerHTML", Content: ""},
+						DOMCmd{Target: "streaming", Strategy: "innerHTML", Content: renderStreamingThinking(thinking)},
+					)
+				}
 				event := FormatSSEDOM(cmds, TitleOob(label), FaviconOob(label))
 				fmt.Fprint(w, event)
 				flusher.Flush()

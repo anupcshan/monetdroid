@@ -347,14 +347,9 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 	if msg.Type == "thinking_delta" && s != nil {
 		accumulated, first := s.AppendStreamingThinkingAtomically(msg.Text)
 		if first {
-			preview := msg.Text
-			if len(preview) > 120 {
-				preview = preview[:120] + "..."
-			}
 			event := FormatSSE("htmx", strings.Join([]string{
 				OobSwap("thinking", "innerHTML", ""),
-				OobSwap("streaming", "innerHTML",
-					fmt.Sprintf(`<div class="msg msg-thinking"><details class="thinking-chip" open><summary class="thinking-summary" id="streaming-summary">%s</summary><div class="thinking-detail" id="streaming-detail">%s</div></details></div>`, Esc(preview), Esc(msg.Text))),
+				OobSwap("streaming", "innerHTML", renderStreamingThinking(msg.Text)),
 			}, "\n"))
 			h.BroadcastToSession(sessionID, event, "streaming", "")
 		} else {
@@ -575,8 +570,14 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 }
 
 // isStreamingFlushTrigger reports whether msg should flush accumulated
-// streaming deltas to the permanent log before being displayed.
+// streaming deltas to the permanent log before being displayed. Only
+// main-timeline messages flush. Subagent inner events, recognized by a
+// non-empty AgentID, are excluded because they never add to the streaming
+// buffer.
 func isStreamingFlushTrigger(msg ServerMsg) bool {
+	if msg.AgentID != "" {
+		return false
+	}
 	switch msg.Type {
 	case "text", "thinking", "tool_use", "tool_result":
 		return true

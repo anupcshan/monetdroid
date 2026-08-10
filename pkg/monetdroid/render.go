@@ -441,6 +441,22 @@ func isBoringResult(output string) bool {
 	return false
 }
 
+// renderStreamingThinking returns the HTML for the in-progress thinking chip.
+// Shared by the live first-delta path and the reconnect initial render so the
+// streaming container and its ids are identical in both.
+func renderStreamingThinking(thinking string) string {
+	preview := thinking
+	if len(preview) > 120 {
+		preview = preview[:120] + "..."
+	}
+	return fmt.Sprintf(
+		`<div class="msg msg-thinking"><details class="thinking-chip" open>`+
+			`<summary class="thinking-summary" id="streaming-summary">%s</summary>`+
+			`<div class="thinking-detail" id="streaming-detail">%s</div>`+
+			`</details></div>`,
+		Esc(preview), Esc(thinking))
+}
+
 func RenderMsg(msg ServerMsg) string {
 	switch msg.Type {
 	case "user_message":

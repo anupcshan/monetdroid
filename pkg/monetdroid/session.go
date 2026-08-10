@@ -279,6 +279,13 @@ func (s *Session) AppendStreamingThinkingAtomically(delta string) (accumulated s
 	return s.StreamingThinking, first
 }
 
+// GetStreamingThinking returns the accumulated in-progress thinking text.
+func (s *Session) GetStreamingThinking() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.StreamingThinking
+}
+
 // ClearStreaming resets the streaming accumulators.
 func (s *Session) ClearStreaming() {
 	s.mu.Lock()
