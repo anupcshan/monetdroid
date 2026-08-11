@@ -24,7 +24,7 @@ const maxStreamLineBytes = 1024 * 1024
 
 // Run executes the bashstreamer CLI in shell mode. It is called from
 // both the standalone binary and the test multi-call binary. args is
-// os.Args[1:]; the command to stream follows "--" (e.g.
+// os.Args[1:]. The command to stream follows "--" (e.g.
 // ["--push-url", URL, "--", "-c", "command"]).
 func Run(args []string) error {
 	fs := flag.NewFlagSet("bashstreamer", flag.ContinueOnError)
@@ -61,7 +61,7 @@ func streamCommand(pushURL string, args []string, stdin io.Reader, consoleOut, c
 
 	// Build the request before starting the child or any goroutine. On
 	// failure nothing else is running, so the only pw.Close() in the
-	// streaming lifecycle is the closer goroutine below: there is no
+	// streaming lifecycle is the closer goroutine below. There is no
 	// second close needed to unblock deadlocked writers.
 	req, err := http.NewRequest("POST", pushURL, pr)
 	if err != nil {
@@ -95,7 +95,7 @@ func streamCommand(pushURL string, args []string, stdin io.Reader, consoleOut, c
 
 	// Both goroutines write to the same pw concurrently. io.Pipe
 	// serializes concurrent Writes, so each line is delivered whole
-	// and the bytes reach the HTTP body in write order; only the
+	// and the bytes reach the HTTP body in write order. Only the
 	// stdout/stderr interleaving is nondeterministic.
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -115,7 +115,7 @@ func streamCommand(pushURL string, args []string, stdin io.Reader, consoleOut, c
 	}()
 
 	// client.Do blocks until pw is closed (EOF on the body), so run it
-	// in its own goroutine; the main goroutine drains the streamers
+	// in its own goroutine. The main goroutine drains the streamers
 	// (wg.Wait) before cmd.Wait closes the stdout/stderr pipes.
 	type httpResult struct {
 		resp *http.Response
@@ -171,7 +171,7 @@ func exitCode(cmd *exec.Cmd) int {
 
 // streamToPipe reads r line by line, writes each line to the console
 // (out) and to the streaming pipe (pw). A line exceeding
-// maxStreamLineBytes ends the scan; the truncation is reported on the
+// maxStreamLineBytes ends the scan. The truncation is reported on the
 // console and through the pipe so the receiver sees why output stopped.
 func streamToPipe(pw *io.PipeWriter, out *os.File, r io.Reader) {
 	scanner := bufio.NewScanner(r)

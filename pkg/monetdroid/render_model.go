@@ -218,7 +218,7 @@ func RenderEvent(m *SessionModel, msg ServerMsg, sessionID string) []DOMCmd {
 		if msg.AgentID == "" {
 			return nil
 		}
-		// The heading is already correct: it was rendered from the
+		// The heading is already correct. It was rendered from the
 		// description at subagent_started.
 		var cmds []DOMCmd
 		if _, ok := m.SubagentSections[msg.AgentID]; ok {

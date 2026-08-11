@@ -187,7 +187,7 @@ func (t ToolInput) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON stores the incoming bytes in Raw. The per-tool typed
 // fields (Bash, Read, etc.) stay nil and must be filled by calling
-// ParseToolInput with the corresponding tool name; JSON alone doesn't
+// ParseToolInput with the corresponding tool name. JSON alone doesn't
 // carry the tool name, so generic unmarshal can't pick the right struct.
 func (t *ToolInput) UnmarshalJSON(data []byte) error {
 	t.Raw = append(json.RawMessage(nil), data...)

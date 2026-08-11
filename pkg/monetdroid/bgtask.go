@@ -6,7 +6,7 @@
 //     A Bash tool_use with run_in_background produces a parent tool_result on
 //     stdout whose text carries the output path. ParseBgTaskPath extracts it.
 //     BgTaskState is created in the model via Apply() with Command (stashed
-//     from the tool_use) and OutputPath set; Completed is false.
+//     from the tool_use) and OutputPath set. Completed is false.
 //
 //   Completion:
 //     <task-notification> XML is injected into the next UserPromptSubmit
@@ -131,7 +131,7 @@ func RenderBgSlot(sessionID, toolUseID string) string {
 }
 
 // RenderBgExtractorDiv returns the SSE-connected div for an extractor-backed
-// bg task. The summary zone is replaced on each "summary" event; the raw
+// bg task. The summary zone is replaced on each "summary" event. The raw
 // toggle accumulates raw chunks on "raw" events. Both share one SSE connection.
 func RenderBgExtractorDiv(sessionID, toolUseID string) string {
 	return fmt.Sprintf(

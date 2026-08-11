@@ -239,8 +239,8 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 		client.mu.Unlock()
 	}
 
-	// Render page from model state. The model is built from the session log;
-	// if a previous model exists (warm load), it is reused and kept current by
+	// Render page from model state. The model is built from the session log.
+	// If a previous model exists (warm load), it is reused and kept current by
 	// live events. On cold load (seq == 0), bg tasks are marked completed.
 	var lastSeq uint64
 	if sid := client.ActiveSession(); sid != "" {
@@ -266,7 +266,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			s.Model.DiffStat = s.GetDiffStat()
 			_, lastSeq = s.EventLog.Snapshot()
 			if isCold {
-				// On cold load all processes are dead; mark bg tasks
+				// On cold load all processes are dead. Mark bg tasks
 				// completed. Register paths and commands for the
 				// bg-output stream endpoint.
 				for _, bt := range s.Model.BgTasks {
@@ -444,7 +444,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	// /clear is handled client-side by the Claude CLI in stream-json mode
 	// but doesn't actually reset the conversation the LLM sees. Intercept
-	// it here: redirect to a fresh session in the same cwd.
+	// it here. Redirect to a fresh session in the same cwd.
 	if strings.TrimSpace(text) == "/clear" {
 		cwd := r.FormValue("cwd")
 		if s != nil {
@@ -1028,7 +1028,7 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stream combined output. Split on \r and \n since git progress uses \r.
-	// Both goroutines send lines to a channel; a single writer drains it.
+	// Both goroutines send lines to a channel. A single writer drains it.
 	lines := make(chan string, 16)
 	done := make(chan struct{})
 	streamLines := func(r io.Reader) {
@@ -1399,7 +1399,7 @@ func (h *Hub) handleBashStream(w http.ResponseWriter, r *http.Request) {
 		drainAndDone()
 		return
 	}
-	// ConsumeOutstandingBash verifies tid matches the outstanding Bash; a
+	// ConsumeOutstandingBash verifies tid matches the outstanding Bash. A
 	// stray or mismatched connection is rejected rather than attaching to
 	// whatever happens to be outstanding.
 	id := s.ConsumeOutstandingBash(tid)
@@ -1416,8 +1416,8 @@ func (h *Hub) handleBashStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Append each line to the buffer. Writes are non-blocking;
-	// the SSE handler drains from its own offset.
+	// Append each line to the buffer. Writes are non-blocking.
+	// The SSE handler drains from its own offset.
 	scanner := bufio.NewScanner(r.Body)
 	scanner.Buffer(make([]byte, 64*1024), maxBashStreamLineBytes)
 	for scanner.Scan() {
@@ -1466,7 +1466,7 @@ func (h *Hub) handleBashStreamConnect(w http.ResponseWriter, r *http.Request) {
 // handleBashStreamSSE serves foreground bash output as an SSE stream
 // to the browser. The streaming div connects here via sse-connect.
 // When an extractor matches the command, routes through the extractor
-// for summary + raw toggle output; otherwise streams line-by-line.
+// for summary + raw toggle output. Otherwise streams line-by-line.
 func (h *Hub) handleBashStreamSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1525,7 +1525,7 @@ func (h *Hub) handleBashStreamSSE(w http.ResponseWriter, r *http.Request) {
 
 // streamBashWithExtractor reads lines from the BashStreamBuffer, feeds
 // them to the extractor, and sends summary and raw SSE events to the
-// client. The summary is re-sent whenever it changes; raw lines are sent
+// client. The summary is re-sent whenever it changes. Raw lines are sent
 // as they arrive. Closes with "done" when the buffer is done.
 func (h *Hub) streamBashWithExtractor(w http.ResponseWriter, flusher http.Flusher, ctx context.Context, buf *BashStreamBuffer, ext Extractor) {
 	var lastSummary string

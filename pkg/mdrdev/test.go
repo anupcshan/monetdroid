@@ -13,7 +13,7 @@ import (
 
 // These regexes duplicate pkg/monetdroid/extractor.go's go test parser (kept
 // separate so this dev tool does not import the web app). Change both
-// together. contRe and nameRe are added here: the extractor never needed to
+// together. contRe and nameRe are added here. The extractor never needed to
 // attribute interleaved lines, but itest does.
 var (
 	runRe   = regexp.MustCompile(`^=== RUN\s+(.+)$`)
@@ -178,7 +178,7 @@ func runTest(args []string, record bool) int {
 // buildGoTestArgs injects -v and forwards the rest. Any -v the caller passed is
 // dropped so it is not duplicated. In the replay-only path (record false) a
 // caller-supplied -record is an error, since that path must be unable to record
-// cassettes; in the record path (record true) -record is injected here and any
+// cassettes. In the record path (record true) -record is injected here and any
 // caller copy is dropped.
 func buildGoTestArgs(forwarded []string, record bool) ([]string, error) {
 	args := []string{"test", "-v"}

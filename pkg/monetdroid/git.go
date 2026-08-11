@@ -131,7 +131,7 @@ func gitDirty(t *GitTrace, cwd string) bool {
 }
 
 // GitCommonDir returns the path to the shared .git directory for a repo or worktree.
-// For the main checkout this returns the .git dir; for worktrees it returns the main
+// For the main checkout this returns the .git dir. For worktrees it returns the main
 // repo's .git dir. Returns "" if cwd is not a git repo.
 func GitCommonDir(t *GitTrace, cwd string) string {
 	out, err := t.Output(cwd, "rev-parse", "--git-common-dir")

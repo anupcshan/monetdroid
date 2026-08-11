@@ -34,7 +34,7 @@ func run(pass *analysis.Pass) (any, error) {
 			for _, name := range field.Names {
 				if unicode.IsUpper(rune(name.Name[0])) {
 					pass.Reportf(name.Pos(),
-						"mutex field %s is exported; use %s%s instead",
+						"mutex field %s is exported. Use %s%s instead",
 						name.Name,
 						strings.ToLower(name.Name[:1]),
 						name.Name[1:],

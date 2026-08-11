@@ -20,15 +20,15 @@ func TestRenderFinalSubagentSection_NestsResultInChip(t *testing.T) {
 	out := renderFinalSubagentSection(st, nil)
 
 	if count := strings.Count(out, payload); count != 1 {
-		t.Errorf("payload should appear exactly once; got %d\noutput:\n%s", count, out)
+		t.Errorf("payload should appear exactly once. Got %d\noutput:\n%s", count, out)
 	}
 	if !strings.Contains(out, `id="tool-result-slot-st1">`) {
-		t.Errorf("expected populated result-slot for st1; output:\n%s", out)
+		t.Errorf("expected populated result-slot for st1. Output:\n%s", out)
 	}
 	// The standalone subagent tool_result chip uses tool-result-chip class.
 	// It must not appear when the result is nested inside the tool_use chip.
 	if strings.Contains(out, `tool-result-chip`) {
-		t.Errorf("standalone subagent tool_result chip should not render when nested; output:\n%s", out)
+		t.Errorf("standalone subagent tool_result chip should not render when nested. Output:\n%s", out)
 	}
 }
 
@@ -45,9 +45,9 @@ func TestRenderFinalSubagentSection_OrphanResultStandsAlone(t *testing.T) {
 	out := renderFinalSubagentSection(st, nil)
 
 	if count := strings.Count(out, payload); count != 1 {
-		t.Errorf("orphan payload should appear exactly once standalone; got %d\noutput:\n%s", count, out)
+		t.Errorf("orphan payload should appear exactly once standalone. Got %d\noutput:\n%s", count, out)
 	}
 	if !strings.Contains(out, `tool-result-chip`) {
-		t.Errorf("orphan result should fall back to standalone tool-result-chip; output:\n%s", out)
+		t.Errorf("orphan result should fall back to standalone tool-result-chip. Output:\n%s", out)
 	}
 }

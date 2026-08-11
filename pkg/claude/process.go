@@ -26,7 +26,7 @@ const (
 )
 
 // PermissionModeFromString converts a string to PermissionMode. Only modes
-// monetdroid explicitly supports are recognized; unknown modes return false.
+// monetdroid explicitly supports are recognized. Unknown modes return false.
 func PermissionModeFromString(s string) (PermissionMode, bool) {
 	switch s {
 	case "default":
@@ -83,7 +83,7 @@ var ErrProcessDead = errors.New("process exited")
 type PermissionHandler func(req protocol.PermissionRequest) protocol.PermResponse
 
 // ProcessConfig holds optional configuration for StartProcessWithConfig.
-// All fields are optional; zero values preserve the default behavior.
+// All fields are optional. Zero values preserve the default behavior.
 type ProcessConfig struct {
 	// PermissionHandler handles can_use_tool requests from the CLI.
 	// When nil, all permission requests are denied.
@@ -187,7 +187,7 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-		// Tasks are on by default in interactive mode; we run Claude with -p
+		// Tasks are on by default in interactive mode. We run Claude with -p
 		// (non-interactive), so we need this opt-in to keep them.
 		"CLAUDE_CODE_ENABLE_TASKS=1",
 		// Strip the built-in git status snapshot and commit/PR workflow

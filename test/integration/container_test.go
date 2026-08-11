@@ -1369,7 +1369,7 @@ func Add(a, b int) int {
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 		Screenshot(t, page, "queue_turn1_complete")
 
-		// Pause the replayer: all API calls from here will block.
+		// Pause the replayer. All API calls from here will block.
 		f.Replayer.Pause()
 
 		// Turn 2 sends a message, and the Claude CLI sends a blocking API call.
@@ -1393,7 +1393,7 @@ func Add(a, b int) int {
 		}
 		Screenshot(t, page, "queue_bar_visible")
 
-		// Unpause: all API calls flow through.
+		// Unpause. All API calls flow through.
 		f.Replayer.Unpause()
 
 		// Turn 2 completes, queue drains, turn 3 starts and completes.
@@ -1653,7 +1653,7 @@ func TestPullMain(t *testing.T) {
 			}
 		}
 
-		// Simulate upstream changes: commit directly to the bare remote.
+		// Simulate upstream changes. Commit directly to the bare remote.
 		for _, args := range [][]string{
 			{"git", "clone", "/tmp/remote.git", "/tmp/remote-clone"},
 			{"git", "-C", "/tmp/remote-clone", "config", "user.email", "test@test.com"},
@@ -2043,7 +2043,7 @@ func TestBranchTree(t *testing.T) {
 // sub-agent it sees an inner PreToolUse from as the target and hangs the
 // target's nth inner PreToolUse. Other sub-agents' hooks return immediately
 // so their tool loops keep advancing while the target is held. The
-// returned channel fires once the hold engages. It carries no ID: the
+// returned channel fires once the hold engages. It carries no ID. The
 // hook payload names the sub-agent by the CLI's agent_id, which the UI does
 // not use, and callers identify the held sub-agent by its state instead.
 // The returned release func lets the held sub-agent continue. Release is
@@ -2622,7 +2622,7 @@ func getEnv(key, fallback string) string {
 			Hooks map[string][]matcherGroup `json:"hooks"`
 		}
 		// HTTP-type hooks in the project settings file don't get dispatched by
-		// claude in -p (non-interactive) mode -- empirically verified. Use a
+		// claude in -p (non-interactive) mode (empirically verified). Use a
 		// command-type curl shim instead.
 		cmd := fmt.Sprintf("curl -s -X POST --data-binary @- %s", hookURL)
 		cfg := config{Hooks: map[string][]matcherGroup{
@@ -2974,7 +2974,7 @@ func readSubagentSections(page *rod.Page) []subagentSectionInfo {
 			info.stats = strings.TrimSpace(stats.MustText())
 		}
 		// Probe the link-rendered child rather than reading the final
-		// element's text directly: rod's MustText uses innerText
+		// element's text directly. rod's MustText uses innerText
 		// semantics, and .subagent-final sits inside a collapsed <details>
 		// so its text reads as empty when the chip isn't expanded.
 		if _, err := s.Element(`.subagent-final .msg-bubble`); err == nil {
@@ -3041,7 +3041,7 @@ func topLevelMessageClasses(page *rod.Page) []string {
 
 // dropPreSubagentAssistant removes top-level assistant messages the parent
 // emits as a preamble before dispatching its first sub-agent. MiMo and GLM
-// emit one; Claude and DeepSeek dispatch immediately, so this is a no-op for them.
+// emit one. Claude and DeepSeek dispatch immediately, so this is a no-op for them.
 func dropPreSubagentAssistant(classes []string) []string {
 	out := make([]string, 0, len(classes))
 	seenSubagent := false
@@ -3064,7 +3064,7 @@ func dropPreSubagentAssistant(classes []string) []string {
 //
 // The held sub-agent is identified by state rather than by ID. A sub-agent
 // blocked in its PreToolUse hook cannot produce a result, so it cannot be
-// one of the two showing final text: "exactly one unfinished" entails that
+// one of the two showing final text. "Exactly one unfinished" entails that
 // the unfinished one is the held one. The CLI's agent_id, which is what the
 // hook reports, does not appear in the UI because sections are keyed by the
 // parent's Agent tool_use ID.
@@ -3353,7 +3353,7 @@ func TestPermissionSuggestions(t *testing.T) {
 		WaitForElement(t, page, ".perm-inline", 120*time.Second)
 		Screenshot(t, page, "permission_suggestions_prompt")
 
-		// Check for suggestion checkboxes; if present, click first and Allow
+		// Check for suggestion checkboxes. If present, click first and Allow.
 		checkboxes, err := page.Timeout(5 * time.Second).Elements(".perm-checkbox-label")
 		if err == nil && len(checkboxes) > 0 {
 			checkboxes[0].MustClick()
@@ -3376,7 +3376,7 @@ func TestPermissionSuggestions(t *testing.T) {
 		Screenshot(t, page, "permission_suggestions_turn1")
 
 		// Send the same command again. With the persisted rule, no new permission
-		// should appear; the second turn should just run through.
+		// should appear. The second turn should just run through.
 		prevAssistants := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
 		page.MustElement(`textarea[name="text"]`).MustInput("Run python3 -c \"print('hello world')\" again and tell me what it prints")
 		page.MustElement(`.send-btn`).MustClick()
@@ -3416,7 +3416,7 @@ func TestModelNameInCostBar(t *testing.T) {
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-		// Step 1: New session -- send a message and complete a turn
+		// Step 1: New session. Send a message and complete a turn.
 		page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
 		page.MustElement(`.send-btn`).MustClick()
 		WaitForElement(t, page, ".msg-assistant", 120*time.Second)

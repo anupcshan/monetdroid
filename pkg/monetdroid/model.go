@@ -17,11 +17,11 @@ type Viewer interface {
 
 // SessionModel holds all renderable state derived from the session event log.
 // It is produced by folding the event log through Apply. The zero value
-// is a valid empty model: BuildModel(base, log) calls Apply for each event.
+// is a valid empty model. BuildModel(base, log) calls Apply for each event.
 //
 // State is mutated only by the internal goroutine launched in BuildModel.
 // External callers send events via HandleEvent and attach/detach via
-// Attach/Detach; all of these are channel-based and never touch state
+// Attach/Detach. All of these are channel-based and never touch state
 // directly.
 type SessionModel struct {
 	mu sync.Mutex

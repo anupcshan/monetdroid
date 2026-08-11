@@ -58,7 +58,7 @@ EXAMPLES:
 		Commands: []*cli.Command{
 			{
 				Name:  "list",
-				Usage: "List all tracked files (no filter; use 'search' to find content)",
+				Usage: "List all tracked files (no filter). Use 'search' to find content",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return cmdList(cmd)
 				},
@@ -77,7 +77,7 @@ EXAMPLES:
 			},
 			{
 				Name:      "edit",
-				Usage:     "Edit a file (stdin: separator, old, separator, new; fails if old is not unique unless --all)",
+				Usage:     "Edit a file (stdin: separator, old, separator, new). Fails if old is not unique unless --all",
 				ArgsUsage: "<path>",
 				Description: `Replaces a literal string in a file. Input on stdin:
 

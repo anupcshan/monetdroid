@@ -121,7 +121,7 @@ func TestEventLogCompactKey_Explicit(t *testing.T) {
 		event2 := FormatSSE("htmx", OobSwap("streaming", "innerHTML", "new"))
 		el.Append(event2, "streaming", "")
 		if len(el.events) != 1 {
-			t.Fatalf("explicit key should supersede; got %d events", len(el.events))
+			t.Fatalf("explicit key should supersede. Got %d events", len(el.events))
 		}
 		if !strings.Contains(el.events[0].Event, "new") {
 			t.Errorf("expected 'new' content, got: %s", el.events[0].Event)
@@ -179,7 +179,7 @@ func TestEventLogCompactKey_ParentRemoval(t *testing.T) {
 		// Supersede the container.
 		el.Append(FormatSSE("htmx", OobSwap("streaming", "innerHTML", "")), "streaming", "")
 		if len(el.events) != 2 {
-			t.Errorf("unrelated parent key should survive; got %d events", len(el.events))
+			t.Errorf("unrelated parent key should survive. Got %d events", len(el.events))
 		}
 	})
 
@@ -188,7 +188,7 @@ func TestEventLogCompactKey_ParentRemoval(t *testing.T) {
 		el.Append(FormatSSE("htmx", OobSwap("detail", "beforeend", "A")), "", "streaming")
 		el.Append(FormatSSE("htmx", OobSwap("detail", "beforeend", "B")), "", "streaming")
 		if len(el.events) != 2 {
-			t.Errorf("parent key alone should not compact siblings; got %d", len(el.events))
+			t.Errorf("parent key alone should not compact siblings. Got %d", len(el.events))
 		}
 	})
 
@@ -203,7 +203,7 @@ func TestEventLogCompactKey_ParentRemoval(t *testing.T) {
 		// Supersede only "streaming".
 		el.Append(FormatSSE("htmx", OobSwap("streaming", "innerHTML", "")), "streaming", "")
 		if len(el.events) != 3 {
-			t.Errorf("only 'streaming'-parented fragments should be removed; got %d events", len(el.events))
+			t.Errorf("only 'streaming'-parented fragments should be removed. Got %d events", len(el.events))
 		}
 	})
 }
@@ -229,13 +229,13 @@ func TestRenderMessages_PaginationSplitDoesNotDuplicateResult(t *testing.T) {
 	newerCount := strings.Count(newer, payload)
 
 	if olderCount != 0 {
-		t.Errorf("older slice (tool_use only) should not contain result payload; got %d occurrences", olderCount)
+		t.Errorf("older slice (tool_use only) should not contain result payload. Got %d occurrences", olderCount)
 	}
 	if newerCount != 1 {
-		t.Errorf("newer slice (tool_result only) should contain payload exactly once; got %d", newerCount)
+		t.Errorf("newer slice (tool_result only) should contain payload exactly once. Got %d", newerCount)
 	}
 	if olderCount+newerCount != 1 {
-		t.Errorf("total payload occurrences across both slices should be 1; got %d", olderCount+newerCount)
+		t.Errorf("total payload occurrences across both slices should be 1. Got %d", olderCount+newerCount)
 	}
 }
 
@@ -252,14 +252,14 @@ func TestRenderMessages_SameSliceNestsResult(t *testing.T) {
 	out := renderMessages(log, 0, 2, rc, "sess")
 
 	if count := strings.Count(out, payload); count != 1 {
-		t.Errorf("payload should appear exactly once when pair is in same slice; got %d", count)
+		t.Errorf("payload should appear exactly once when pair is in same slice. Got %d", count)
 	}
 	if !strings.Contains(out, `id="tool-result-slot-t1">`) {
-		t.Errorf("expected populated result-slot for t1; output:\n%s", out)
+		t.Errorf("expected populated result-slot for t1. Output:\n%s", out)
 	}
-	// The standalone tool_result chip class must be absent: only the nested
+	// The standalone tool_result chip class must be absent. Only the nested
 	// result-slot should carry the payload.
 	if strings.Contains(out, `tool-result-chip`) {
-		t.Errorf("standalone tool_result chip should not render when nested inside tool_use; output:\n%s", out)
+		t.Errorf("standalone tool_result chip should not render when nested inside tool_use. Output:\n%s", out)
 	}
 }

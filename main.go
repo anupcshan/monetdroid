@@ -13,7 +13,7 @@ import (
 func main() {
 	addr := flag.String("addr", ":8222", "listen address")
 	trace := flag.Bool("trace", false, "enable git trace logging")
-	claudeBin := flag.String("claude-bin", "", `claude CLI to invoke; whitespace-separated tokens, e.g. "podman run -i --rm img claude". Defaults to "claude" in PATH.`)
+	claudeBin := flag.String("claude-bin", "", `claude CLI to invoke (whitespace-separated tokens, e.g. "podman run -i --rm img claude"). Defaults to "claude" in PATH.`)
 	flag.Parse()
 	monetdroid.SetTraceEnabled(*trace)
 

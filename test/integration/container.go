@@ -56,7 +56,7 @@ type ProviderConfig struct {
 }
 
 // AllProviders lists every provider that integration tests iterate over.
-// The default go test run exercises all providers; -run selects subsets.
+// The default go test run exercises all providers. -run selects subsets.
 var AllProviders = []ProviderConfig{
 	{
 		Name:     "mimo",
@@ -241,7 +241,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 		// Prevent auto memory probes (e.g. `ls /root/.claude/projects/`)
 		// that introduce non-deterministic Bash results in cassettes.
 		"-e", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
-		// Fail fast on replayer 5xx responses; default is 10 retries with backoff.
+		// Fail fast on replayer 5xx responses. Default is 10 retries with backoff.
 		"-e", "CLAUDE_CODE_MAX_RETRIES=0",
 		// Pin the model so record and replay send identical request bodies
 		// regardless of the auth type the Claude CLI sees.
@@ -311,7 +311,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 		t.Fatalf("docker port: %v", err)
 	}
 	hostAddr := strings.TrimSpace(string(portOut))
-	// Output is like "0.0.0.0:32768\n[::]:32768"; take the first line
+	// Output is like "0.0.0.0:32768\n[::]:32768". Take the first line.
 	if i := strings.Index(hostAddr, "\n"); i >= 0 {
 		hostAddr = hostAddr[:i]
 	}

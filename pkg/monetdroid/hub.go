@@ -781,8 +781,8 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 			}
 			continue
 		}
-		// Skip tool_results whose tool_use chip lives in the rendered slice:
-		// they're nested inside that chip via result-slot injection below.
+		// Skip tool_results whose tool_use chip lives in the rendered slice.
+		// They're nested inside that chip via result-slot injection below.
 		if msg.Type == "tool_result" && msg.ToolUseID != "" {
 			if useIdx, ok := rc.toolUseIndexes[msg.ToolUseID]; ok && useIdx >= start && useIdx < end {
 				continue
@@ -793,11 +793,11 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 				continue
 			}
 		}
-		// Suppress bg task tool_results: their output is loaded lazily.
+		// Suppress bg task tool_results. Their output is loaded lazily.
 		if msg.Type == "tool_result" && rc.bgTaskResults[msg.ToolUseID] != "" {
 			continue
 		}
-		// Skip inline permission_request messages: they're rendered inside tool chips.
+		// Skip inline permission_request messages. They're rendered inside tool chips.
 		if msg.Type == "permission_request" && msg.PermTool != "AskUserQuestion" && msg.ToolUseID != "" {
 			continue
 		}

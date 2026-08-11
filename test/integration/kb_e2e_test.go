@@ -46,7 +46,7 @@ const kbAllowSettings = `{
 `
 
 // testOnlyNoQuestionsAddendum is written to CLAUDE.md in TestKBNewProject
-// only. Real users may want clarifying questions during planning; in a
+// only. Real users may want clarifying questions during planning. In a
 // non-interactive cassette run there is no one to answer them, so we
 // suppress them at the test fixture.
 const testOnlyNoQuestionsAddendum = `## For this test

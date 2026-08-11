@@ -117,7 +117,7 @@ class NotificationService : Service() {
                 conn = url.openConnection() as HttpURLConnection
                 conn.setRequestProperty("Accept", "text/event-stream")
                 conn.connectTimeout = 10_000
-                conn.readTimeout = 60_000 // safety net; server sends heartbeats every 30s
+                conn.readTimeout = 60_000 // safety net. Server sends heartbeats every 30s.
                 activeConnection = conn
 
                 val reader = BufferedReader(InputStreamReader(conn.inputStream))

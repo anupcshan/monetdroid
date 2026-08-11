@@ -12,7 +12,7 @@ import (
 // place in settings.json (POSTs from Claude hit handler). The server is
 // stopped automatically when the test ends.
 //
-// The test owns the handler entirely: parsing, filtering, pausing, and
+// The test owns the handler entirely. Parsing, filtering, pausing, and
 // release semantics are the test's concern. This helper only provides the
 // HTTP transport.
 func StartHookListener(t *testing.T, handler http.HandlerFunc) string {

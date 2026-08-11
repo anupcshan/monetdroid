@@ -34,7 +34,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `mdrdev: curated monetdroid development operations
 
 Usage:
-  mdrdev test [go test args...]            run go test -v with condensed, de-interleaved output (replay-only; -record rejected)
+  mdrdev test [go test args...]            run go test -v with condensed, de-interleaved output (replay-only, -record rejected)
   mdrdev record-cassette [go test args...] run go test -v -record to record cassettes (real upstream calls)
 `)
 }

@@ -135,7 +135,7 @@ func assertRewindContract(t *testing.T) {
 		t.Fatal("new message should branch as a sibling of the target")
 	}
 
-	// The target is now dormant. Rewinding it again must be rejected: claude
+	// The target is now dormant. Rewinding it again must be rejected. Claude
 	// only rewinds messages on the active branch.
 	if _, err := proc.RewindConversation(target.UUID); err == nil {
 		t.Fatal("rewind of a dormant target should be rejected")

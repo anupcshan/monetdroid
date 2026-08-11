@@ -29,7 +29,7 @@ state. To debug behavior, read the screenshots (`*.png`) and DOM snapshots
 cassettes.
 
 Don't preflight-check for Docker or other prerequisites before running tests or
-recording; the test itself reports what's missing. Checking beforehand adds
+recording. The test itself reports what's missing. Checking beforehand adds
 noise and guesses at causes.
 
 **Never write to auto-memory unless the user says "write to your memory" verbatim.** Do not infer consent from corrections, preferences, or context.

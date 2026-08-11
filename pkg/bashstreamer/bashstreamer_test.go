@@ -100,7 +100,7 @@ func TestStreamCommandPartialOutput(t *testing.T) {
 	// Validate that output arrives at the server while the child is
 	// still running, not only after it exits. The child prints "step1",
 	// sleeps 3s, then prints "step2". The server signals when "step1"
-	// arrives; the test checks that this happens well before the child
+	// arrives. The test checks that this happens well before the child
 	// exits (which would take >= 3s if streaming were broken).
 	firstLine := make(chan string, 1)
 
@@ -158,7 +158,7 @@ func TestStreamCommandConcurrentStdoutStderr(t *testing.T) {
 	// Two subshells emit a fixed number of lines to stdout and stderr
 	// at the same time, stressing concurrent Writes to the shared
 	// io.PipeWriter. io.Pipe serializes Writes, so every line must
-	// arrive; a lost write under concurrency would drop the count.
+	// arrive. A lost write under concurrency would drop the count.
 	const perStream = 100
 	var n int
 	var mu sync.Mutex

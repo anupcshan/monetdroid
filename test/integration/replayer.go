@@ -26,7 +26,7 @@ import (
 //
 // The replayer is an HTTP server that records and replays Anthropic API
 // interactions for integration tests. -record proxies live requests to
-// the real API and writes a cassette; default replay loads the cassette
+// the real API and writes a cassette. Default replay loads the cassette
 // and serves recorded responses without network egress.
 //
 // Cassette format (JSONL, one Interaction per line):
@@ -36,8 +36,8 @@ import (
 //
 // Match path: at load time each cassette body is normalized (see
 // normalizeRequestBody) and sha256-hashed to build an in-memory index.
-// At replay each live request is normalized and hashed the same way;
-// hit serves the recorded response, miss fails the test and dumps live
+// At replay each live request is normalized and hashed the same way.
+// Hit serves the recorded response, miss fails the test and dumps live
 // and recorded bodies to /tmp/replayer-nomatch-*/ for diff diagnosis.
 //
 // The cassette's `body` field stores the raw request body after a
@@ -49,7 +49,7 @@ import (
 //     and embeds them in tool_result text. The model's recorded
 //     responses reference those IDs in follow-up tool_use inputs.
 //     learnIDMappings pairs recorded↔live IDs from matched request
-//     bodies; substituteSSEDeltas rewrites recorded IDs to live values
+//     bodies. substituteSSEDeltas rewrites recorded IDs to live values
 //     before serving. A normalized stored body would have stripped or
 //     genericized those IDs and lost the pairing.
 //
@@ -104,13 +104,13 @@ type Replayer struct {
 	consumed  []bool
 	// idMap holds recorded→live substitutions for per-session randoms (bash
 	// background task IDs, session UUIDs). The CLI generates these locally
-	// and embeds them in tool_result text; the model's canned response then
+	// and embeds them in tool_result text. The model's canned response then
 	// references them in subsequent tool_use inputs. Without substitution,
 	// the live CLI would execute tool_use inputs against recorded paths
 	// that don't exist in the live session.
 	//
 	// Populated after each successful hash match by comparing the live and
-	// recorded request bodies; consulted when writing the recorded response
+	// recorded request bodies. Consulted when writing the recorded response
 	// to the live client.
 	idMap        map[string]string
 	mode         string // "record" or "replay"
@@ -118,7 +118,7 @@ type Replayer struct {
 	cassettePath string
 	t            *testing.T
 
-	// pauseMu acts as a gate for incoming requests. Pause() locks it;
+	// pauseMu acts as a gate for incoming requests. Pause() locks it.
 	// Unpause() unlocks it. Requests acquire and immediately release it,
 	// so they pass through instantly when unpaused but block when paused.
 	pauseMu sync.Mutex
@@ -285,7 +285,7 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 		}
 		// Inline diff against the unique open recorded interaction with the
 		// same (msgs, lastRole). If zero or more than one match, the diff
-		// would either be missing context or ambiguous; re-recording is the
+		// would either be missing context or ambiguous. Re-recording is the
 		// right next step in those cases.
 		var matchIdx = -1
 		matchCount := 0
@@ -781,7 +781,7 @@ func hashRequestBody(body []byte) string {
 // them up by order of first appearance. Resulting map (recorded→live) is
 // used at response-serve time to rewrite recorded identifiers to their live
 // counterparts. Safe to call repeatedly as turns accumulate because new IDs are
-// appended; existing mappings stay consistent because IDs are stable within
+// appended. Existing mappings stay consistent because IDs are stable within
 // a single session on each side.
 //
 // Pairing is by first-appearance index. This is sound because the live and
@@ -985,7 +985,7 @@ func stripCacheControl(v any) {
 // receiving block is non-deterministic across runs.
 // Match only newlines around the reminder, never tabs or spaces. tool_result
 // content (e.g. Read line-numbered output) can legitimately end with a tab
-// that belongs to the phantom last line; greedy \s* would eat it.
+// that belongs to the phantom last line. Greedy \s* would eat it.
 var systemReminderRe = regexp.MustCompile(`(?s)\n*<system-reminder>.*?</system-reminder>\n*`)
 
 // stripSystemRemindersInToolResults removes appended <system-reminder>
@@ -1020,7 +1020,7 @@ func stripSystemRemindersInToolResults(parsed map[string]any) {
 			s = systemReminderRe.ReplaceAllString(s, "")
 			// When the CLI appends a <system-reminder> to a tool_result it
 			// strips the Read tool's phantom-line trailing tab before
-			// concatenation; when it doesn't, the tab stays. Across parallel
+			// concatenation. When it doesn't, the tab stays. Across parallel
 			// tool calls the reminder lands on a different block each run, so
 			// the same block's content ends `...N\t` one run and `...N` the
 			// next. TrimRight equalizes both to `...N`.
@@ -1109,7 +1109,7 @@ func sortPathListPrefix(s string) string {
 // by the API and carried through the cassette's response unchanged, so
 // sorting by it produces the same order at record and replay time.
 //
-// Only consecutive runs of tool_result blocks are sorted; text/tool_use
+// Only consecutive runs of tool_result blocks are sorted. Text/tool_use
 // blocks keep their original positions.
 func sortToolResults(parsed map[string]any) {
 	messages, ok := parsed["messages"].([]any)

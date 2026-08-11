@@ -11,7 +11,7 @@ import (
 )
 
 // Cmd is an abstract DOM mutation independent of the transport (SSE,
-// WebSocket, etc.). The SSE sink converts these to OOB-swap HTML; a future
+// WebSocket, etc.). The SSE sink converts these to OOB-swap HTML. A future
 // WebSocket sink would convert them to JSON.
 type Cmd struct {
 	Target   string
@@ -63,7 +63,7 @@ func Format(cmds []Cmd, extraOOBs ...string) string {
 }
 
 // QueueBar returns an OOB swap for the queue bar. When text is empty the bar
-// is cleared; otherwise it shows the queued message with Edit and Cancel
+// is cleared. Otherwise it shows the queued message with Edit and Cancel
 // buttons.
 func QueueBar(sessionID, text string) string {
 	if text == "" {
@@ -81,7 +81,7 @@ func QueueBar(sessionID, text string) string {
 }
 
 // ReviewBarOOB returns an OOB swap for the review bar. When barHTML is empty,
-// the bar is cleared; otherwise it replaces the bar contents.
+// the bar is cleared. Otherwise it replaces the bar contents.
 func ReviewBarOOB(barHTML string) string {
 	if barHTML == "" {
 		return OOB("review-bar", "outerHTML", `<div class="review-bar" id="review-bar"></div>`)
