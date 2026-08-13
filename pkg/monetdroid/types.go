@@ -33,6 +33,7 @@ type ServerMsg struct {
 	PermReason      string                    `json:"perm_reason,omitempty"`
 	PermSuggestions []protocol.PermSuggestion `json:"perm_suggestions,omitempty"`
 	PermMode        claude.PermissionMode     `json:"perm_mode,omitempty"`
+	UUID            string                    `json:"uuid,omitempty"`
 }
 
 // AgentStat tracks live stats for a sub-agent invocation.
@@ -81,6 +82,7 @@ type HistoryMessage struct {
 	ToolUseID string               `json:"tool_use_id,omitempty"`
 	Input     *protocol.ToolInput  `json:"input,omitempty"`
 	Output    string               `json:"output,omitempty"`
+	UUID      string               `json:"uuid,omitempty"`
 }
 
 type SessionUsage struct {

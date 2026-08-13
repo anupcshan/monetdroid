@@ -220,7 +220,9 @@ func TestRenderMessages_PaginationSplitDoesNotDuplicateResult(t *testing.T) {
 		{Type: "text", Text: "thinking"},
 		{Type: "tool_result", ToolUseID: "t1", Output: payload},
 	}
-	rc := precomputeRenderContext(log)
+	// The fixtures carry no uuids, so the active-branch filter is inert and
+	// the active set can be empty.
+	rc := precomputeRenderContext(log, map[string]bool{})
 
 	older := renderMessages(log, 0, 2, rc, "sess") // user_message + tool_use
 	newer := renderMessages(log, 2, 4, rc, "sess") // text + tool_result
@@ -248,7 +250,9 @@ func TestRenderMessages_SameSliceNestsResult(t *testing.T) {
 		{Type: "tool_use", Tool: "Grep", ToolUseID: "t1"},
 		{Type: "tool_result", ToolUseID: "t1", Output: payload},
 	}
-	rc := precomputeRenderContext(log)
+	// The fixtures carry no uuids, so the active-branch filter is inert and
+	// the active set can be empty.
+	rc := precomputeRenderContext(log, map[string]bool{})
 	out := renderMessages(log, 0, 2, rc, "sess")
 
 	if count := strings.Count(out, payload); count != 1 {

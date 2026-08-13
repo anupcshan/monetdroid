@@ -3,6 +3,8 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,10 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
+
+// branchSessionIDFile is where the in-container branch producer writes the
+// session id for the host test to cold-load via /test/read.
+const branchSessionIDFile = "/tmp/monetdroid-branch-session-id"
 
 // CLAUDE_PROTOCOL_IN_CONTAINER marks the in-container pass of a Claude Code
 // protocol test. The host-side test re-invokes this binary inside the container
@@ -67,40 +73,10 @@ func assertRewindContract(t *testing.T) {
 		}
 	}()
 
-	send := func(text string) {
-		t.Helper()
-		if err := proc.SendUserMessage(text, nil); err != nil {
-			t.Fatalf("send %q: %v", text, err)
-		}
-		if err := proc.WaitForTurnDone(ctx); err != nil {
-			t.Fatalf("turn %q: %v", text, err)
-		}
-	}
+	sessionID, target, res := rewindAndResend(t, ctx, proc)
 
-	// The first message triggers claude to emit the session id, so it must
-	// precede WaitForSessionID. This mirrors the hub's handleSend ordering.
-	send("Reply with just the number 11111.")
-	sessionID, err = proc.WaitForSessionID(ctx)
-	if err != nil {
-		t.Fatalf("session id: %v", err)
-	}
-	// A second user message to rewind. Its parent is a real assistant turn
-	// (the first user message's parent is null), so the response's branch
-	// point is comparable.
-	send("Reply with just the number 22222.")
-
-	messages := waitForUserMessages(ctx, sessionID, 2)
-	if len(messages) < 2 {
-		t.Fatalf("expected at least 2 user messages before rewind, got %d", len(messages))
-	}
-	target := messages[1]
-
-	// Rewind the active target. The contract: the response names the branch
-	// point (the target's parent), and the next message attaches there.
-	res, err := proc.RewindConversation(target.UUID)
-	if err != nil {
-		t.Fatalf("rewind active target: %v", err)
-	}
+	// The contract: the response names the branch point (the target's
+	// parent), and the next message attaches there.
 	if res.PrecedingAssistantUUID != target.ParentUUID {
 		t.Fatalf("precedingAssistantUuid %q != target parent %q",
 			res.PrecedingAssistantUUID, target.ParentUUID)
@@ -109,11 +85,12 @@ func assertRewindContract(t *testing.T) {
 		t.Fatalf("prefillText %q does not contain the target message text", res.PrefillText)
 	}
 
-	send("Reply with just the number 33333.")
-
 	// claude writes the transcript asynchronously after the turn completes, so
 	// poll until the new message appears before asserting on it.
-	messages = waitForUserMessages(ctx, sessionID, len(messages)+1)
+	messages := waitForUserMessages(ctx, sessionID, 3)
+	if len(messages) < 3 {
+		t.Fatalf("expected at least 3 user messages after rewind, got %d", len(messages))
+	}
 
 	// After the rewind the new message must branch as a sibling of the target,
 	// and the target must remain in the transcript (dormant, not deleted).
@@ -139,6 +116,169 @@ func assertRewindContract(t *testing.T) {
 	// only rewinds messages on the active branch.
 	if _, err := proc.RewindConversation(target.UUID); err == nil {
 		t.Fatal("rewind of a dormant target should be rejected")
+	}
+}
+
+// rewindAndResend drives proc through two turns, rewinds the second turn's
+// user message, and sends a replacement. The replacement branches as a
+// sibling of the rewound message, so the transcript holds the abandoned
+// turn as dormant and the replacement as active. Returns the session id,
+// the rewound target entry, and the rewind response.
+func rewindAndResend(t *testing.T, ctx context.Context, proc claude.Process) (string, transcriptEntry, claude.RewindResult) {
+	t.Helper()
+
+	send := func(text string) {
+		t.Helper()
+		if err := proc.SendUserMessage(text, nil); err != nil {
+			t.Fatalf("send %q: %v", text, err)
+		}
+		if err := proc.WaitForTurnDone(ctx); err != nil {
+			t.Fatalf("turn %q: %v", text, err)
+		}
+	}
+
+	// The first message triggers claude to emit the session id, so it must
+	// precede WaitForSessionID. This mirrors the hub's handleSend ordering.
+	send("Reply with just the number 11111.")
+	sessionID, err := proc.WaitForSessionID(ctx)
+	if err != nil {
+		t.Fatalf("session id: %v", err)
+	}
+	// A second user message to rewind. Its parent is a real assistant turn
+	// (the first user message's parent is null), so the response's branch
+	// point is comparable.
+	send("Reply with just the number 22222.")
+
+	messages := waitForUserMessages(ctx, sessionID, 2)
+	if len(messages) < 2 {
+		t.Fatalf("expected at least 2 user messages before rewind, got %d", len(messages))
+	}
+	target := messages[1]
+
+	// Rewind the active target, then resend. The new message branches as a
+	// sibling of the target.
+	res, err := proc.RewindConversation(target.UUID)
+	if err != nil {
+		t.Fatalf("rewind active target: %v", err)
+	}
+	send("Reply with just the number 33333.")
+	return sessionID, target, res
+}
+
+// waitForTranscriptFlush polls until the transcript holds the user line
+// carrying marker followed by its assistant line. claude writes the
+// transcript asynchronously after the turn, and the only process shutdown
+// is a hard kill, so the producer confirms these lines are on disk before
+// it exits. The result summary that follows contributes usage and session
+// identity, not rendered messages. Returns whether the flush was
+// confirmed before the context expired.
+func waitForTranscriptFlush(ctx context.Context, sessionID, marker string) bool {
+	for {
+		entries := readTranscript(sessionID)
+		seenMarker := false
+		for _, e := range entries {
+			if !seenMarker && e.Type == "user" && strings.Contains(e.Raw, marker) {
+				seenMarker = true
+				continue
+			}
+			if seenMarker && e.Type == "assistant" {
+				return true
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// TestBranchedSessionColdLoad verifies the user-visible render of a
+// branched transcript. The active turn must show and the abandoned turn
+// must not. It reuses the rewind cassette and the same prompt sequence
+// as TestRewindConversation.
+//
+// The test runs in two passes. On the host it stands up the container,
+// re-invokes this binary inside it with -test.run selecting this test, and
+// then drives the browser. In the container the pass prepares the branched
+// session and writes the session id to a file for the host to read.
+func TestBranchedSessionColdLoad(t *testing.T) {
+	if os.Getenv(CLAUDE_PROTOCOL_IN_CONTAINER) == "1" {
+		prepareBranchedSession(t)
+		return
+	}
+
+	f := SetupWithSharedCassette(t, AllProviders[0], "rewind.jsonl.zst", testMode())
+	cmd := exec.Command("docker", "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
+		f.containerID, "/test", "-test.run=^TestBranchedSessionColdLoad$", "-test.v")
+	out, err := cmd.CombinedOutput()
+	t.Logf("branched-session protocol output:\n%s", out)
+	if err != nil {
+		t.Fatalf("branched-session protocol pass failed: %v", err)
+	}
+
+	// The protocol pass writes the session id after confirming the transcript
+	// flush, so the file's presence means the branch is on disk.
+	resp, err := http.Get(f.ServerURL + "/test/read?path=" + branchSessionIDFile)
+	if err != nil {
+		t.Fatalf("read session id: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("read session id: status %d: %s", resp.StatusCode, body)
+	}
+	sessionID := strings.TrimSpace(string(body))
+	if sessionID == "" {
+		t.Fatal("protocol pass wrote an empty session id")
+	}
+
+	page := f.Page()
+	page.MustNavigate(f.ServerURL + "/?session=" + sessionID)
+
+	// Gate the absence check behind the resent message, which renders below
+	// the dormant turn's position. Before it appears, absence proves nothing.
+	WaitForText(t, page, "body", "33333", 30*time.Second)
+	WaitForText(t, page, "body", "11111", 5*time.Second)
+	html, err := page.HTML()
+	if err != nil {
+		t.Fatalf("page HTML: %v", err)
+	}
+	if strings.Contains(html, "22222") {
+		t.Fatal("dormant turn rendered: 22222 is visible")
+	}
+}
+
+// prepareBranchedSession runs in-container and prepares the branched session
+// for the host to cold-load: it starts a claude process, drives the rewind
+// and resend, waits for the transcript flush, and writes the session id to
+// branchSessionIDFile.
+func prepareBranchedSession(t *testing.T) {
+	ensureWorkspaceTrust()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	proc, err := claude.StartProcess(containerWorkdir, func(protocol.StreamEvent) {}, "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer proc.Kill()
+
+	var sessionID string
+	defer func() {
+		if t.Failed() && sessionID != "" {
+			dumpTranscript(t, sessionID)
+		}
+	}()
+
+	sessionID, _, _ = rewindAndResend(t, ctx, proc)
+	if !waitForTranscriptFlush(ctx, sessionID, "33333") {
+		t.Fatal("transcript never flushed the resent turn")
+	}
+
+	if err := os.WriteFile(branchSessionIDFile, []byte(sessionID), 0o644); err != nil {
+		t.Fatalf("write session id: %v", err)
 	}
 }
 

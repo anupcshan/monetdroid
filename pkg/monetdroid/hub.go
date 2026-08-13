@@ -673,6 +673,7 @@ type renderContext struct {
 	suppressedIDs     map[string]bool                 // tool_use ids for tools whose results are suppressed
 	pendingPerms      map[string]ServerMsg            // tool_use id → unresolved inline permission_request
 	subagentSections  map[string]*subagentRenderState // agent_id → section state derived from later events
+	active            map[string]bool                 // uuids on the active branch. Messages not in this set are dropped.
 }
 
 // subagentRenderState holds the inner events and link metadata for one
@@ -684,7 +685,13 @@ type subagentRenderState struct {
 }
 
 // precomputeRenderContext scans the full log to build rendering metadata.
-func precomputeRenderContext(log []ServerMsg) renderContext {
+// The scan skips every dormant message, so the tool maps, permission
+// state, and the compacted-region marker cover the active branch only.
+// The marker must sit there, or a dormant boundary would open or close
+// the compacted region for messages that are not rendered. Background
+// task state derives from the whole log, since its slots are only
+// reached from tool chips that render.
+func precomputeRenderContext(log []ServerMsg, active map[string]bool) renderContext {
 	rc := renderContext{
 		lastCompact:       -1,
 		toolResults:       make(map[string]ServerMsg),
@@ -695,8 +702,12 @@ func precomputeRenderContext(log []ServerMsg) renderContext {
 		suppressedIDs:     make(map[string]bool),
 		pendingPerms:      make(map[string]ServerMsg),
 		subagentSections:  make(map[string]*subagentRenderState),
+		active:            active,
 	}
 	for i, msg := range log {
+		if msg.UUID != "" && !active[msg.UUID] {
+			continue
+		}
 		if msg.Type == "compact_boundary" {
 			rc.lastCompact = i
 		}
@@ -758,6 +769,12 @@ func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID
 		if msg.Type == "compact_boundary" && i == rc.lastCompact {
 			b.WriteString(`</div>`)
 			b.WriteString(RenderMsg(msg))
+			continue
+		}
+		// A uuid-bearing message renders iff its uuid is on the active
+		// branch. Messages without a uuid (synthesized user messages,
+		// errors, live state) are not part of the tree and are unaffected.
+		if msg.UUID != "" && !rc.active[msg.UUID] {
 			continue
 		}
 		// Sub-agent inner events (AgentID set on tool_use/tool_result) and

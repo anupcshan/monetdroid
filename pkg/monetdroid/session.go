@@ -3,6 +3,7 @@ package monetdroid
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"sync"
@@ -13,16 +14,22 @@ import (
 )
 
 type Session struct {
-	ID                string
-	Label             string
-	AutoLabel         bool
-	Cwd               string
-	Branches          []string
-	PermissionMode    claude.PermissionMode
-	Interrupted       bool
-	CreatedAt         time.Time
-	JSONLPath         string
-	Log               []ServerMsg
+	ID             string
+	Label          string
+	AutoLabel      bool
+	Cwd            string
+	Branches       []string
+	PermissionMode claude.PermissionMode
+	Interrupted    bool
+	CreatedAt      time.Time
+	JSONLPath      string
+	Log            []ServerMsg
+	// Tip is the uuid of the last message-bearing entry on the active
+	// branch, seeded when a transcript is loaded. LineParents maps every
+	// transcript line's uuid to its parent's uuid. Both feed the
+	// active-path walk at render time.
+	Tip               string
+	LineParents       map[string]string
 	QueuedText        string
 	CostAccum         CostInfo
 	StreamContext     bool // true when the assistant stream carried a non-zero context-used this turn
@@ -816,6 +823,41 @@ func (s *Session) InitLive(label string, autoLabel bool, proc claude.Process) {
 	s.AutoLabel = autoLabel
 	s.proc = proc
 	s.mu.Unlock()
+}
+
+// InitTree loads the line-parent chain parsed from a transcript and seeds
+// the tip cursor from the last message-bearing entry. The transcript is
+// append-only, so that entry is the active tip. Trailing lines that
+// produce no message render nothing, so the walk from it covers the same
+// rendered set as the transcript's own final line.
+func (s *Session) InitTree(parents map[string]string, lastUUID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LineParents = parents
+	s.Tip = lastUUID
+}
+
+func (s *Session) GetTip() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Tip
+}
+
+func (s *Session) GetLineParents() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.LineParents)
+}
+
+// activeSet walks parent links from the leaf to the root and returns the
+// uuids on the active branch as a membership set. The walk stops at a uuid
+// already visited, so a chain that repeats cannot loop the render.
+func activeSet(parents map[string]string, leaf string) map[string]bool {
+	active := make(map[string]bool)
+	for u := leaf; u != "" && !active[u]; u = parents[u] {
+		active[u] = true
+	}
+	return active
 }
 
 // UpdateLabel sets the label and returns the display label (falls back to short cwd path).

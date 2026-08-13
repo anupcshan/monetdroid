@@ -20,6 +20,8 @@ type jsonlEntry struct {
 	GitBranch       string                    `json:"gitBranch"`
 	Type            string                    `json:"type"`
 	Subtype         string                    `json:"subtype,omitempty"`
+	UUID            string                    `json:"uuid"`
+	ParentUUID      string                    `json:"parentUuid"`
 	IsSidechain     bool                      `json:"isSidechain"`
 	SessionID       string                    `json:"sessionId"`
 	ResultSID       string                    `json:"session_id"`
@@ -395,14 +397,15 @@ func scanTokenUsage(fpath string) (used, window int, modelName string, err error
 	return used, window, modelName, scanner.Err()
 }
 
-func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, branches []string, usage SessionUsage, err error) {
+func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, branches []string, usage SessionUsage, parents map[string]string, err error) {
 	f, err := os.Open(jsonlPath)
 	if err != nil {
-		return nil, "", "", nil, usage, err
+		return nil, "", "", nil, usage, nil, err
 	}
 	defer f.Close()
 	toolNames := make(map[string]string) // tool_use id → tool name
 	branchSet := make(map[string]struct{})
+	parents = make(map[string]string)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -419,15 +422,22 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		if entry.GitBranch != "" {
 			branchSet[entry.GitBranch] = struct{}{}
 		}
+		// Record every line's parent, including lines that never become
+		// HistoryMessages. The chain can run through such lines, and a
+		// link missing from this map ends the walk early, dropping
+		// everything above it.
+		if entry.UUID != "" {
+			parents[entry.UUID] = entry.ParentUUID
+		}
 		if entry.IsSidechain {
 			continue
 		}
+		msgStart := len(msgs)
 		switch entry.Type {
 		case "system":
 			if entry.Subtype == "compact_boundary" {
 				msgs = append(msgs, HistoryMessage{Type: "compact_boundary"})
 			}
-			continue
 		case "user":
 			if entry.SessionID != "" {
 				claudeID = entry.SessionID
@@ -435,7 +445,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 			c := entry.Message.Content
 			if c.Text != "" && len(c.Blocks) == 0 {
 				msgs = append(msgs, HistoryMessage{Type: "user", Text: c.Text})
-				continue
+				break
 			}
 			var userText string
 			var userImages []protocol.ImageData
@@ -511,10 +521,17 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 				break
 			}
 		}
+		// Stamp the transcript node identity onto every message derived from
+		// this entry. Nodes that produce no rendered message still contribute
+		// their uuid to parents above, so the chain stays walkable across
+		// them.
+		for i := msgStart; i < len(msgs); i++ {
+			msgs[i].UUID = entry.UUID
+		}
 	}
 	for b := range branchSet {
 		branches = append(branches, b)
 	}
 	sort.Strings(branches)
-	return msgs, claudeID, cwd, branches, usage, scanner.Err()
+	return msgs, claudeID, cwd, branches, usage, parents, scanner.Err()
 }

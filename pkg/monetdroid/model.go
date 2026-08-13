@@ -37,8 +37,12 @@ type SessionModel struct {
 	SuppressedIDs     map[string]bool             // tool_use ids for suppressed tools
 	PendingPerms      map[string]ServerMsg        // unresolved inline permission_request
 	SubagentSections  map[string]*SubagentSection // parent Agent tool_use_id -> section state
-	LastCompact       int                         // index of last compact_boundary, -1 if none
 	QueuedText        string                      // next user message queued for sending
+	// Tip and LineParents copy the session's active-branch tip and parent
+	// chain at build time, so the full-page render walks the same active
+	// path as the session.
+	Tip         string
+	LineParents map[string]string
 
 	// Session metadata (set from base state, not from events).
 	Cwd       string
@@ -81,6 +85,9 @@ type ModelBase struct {
 	AutoLabel bool
 	PermMode  claude.PermissionMode
 	Cost      CostInfo // initial cost from session (includes ModelName set by history load)
+	// Tip and LineParents are copied into the model at build time.
+	Tip         string
+	LineParents map[string]string
 }
 
 // BuildModel folds a base state and an event log into a SessionModel.
@@ -99,7 +106,8 @@ func BuildModel(base ModelBase, log []ServerMsg, sessionID string) *SessionModel
 		SuppressedIDs:     make(map[string]bool),
 		PendingPerms:      make(map[string]ServerMsg),
 		SubagentSections:  make(map[string]*SubagentSection),
-		LastCompact:       -1,
+		Tip:               base.Tip,
+		LineParents:       base.LineParents,
 		pendingCommands:   make(map[string]string),
 		sessionID:         sessionID,
 		events:            make(chan serverMsgEvent, 256),
@@ -265,9 +273,6 @@ func (m *SessionModel) Apply(msg ServerMsg) {
 	m.Messages = append(m.Messages, msg)
 
 	switch msg.Type {
-	case "compact_boundary":
-		m.LastCompact = len(m.Messages) - 1
-
 	case "tool_use":
 		if msg.ToolUseID == "" {
 			break

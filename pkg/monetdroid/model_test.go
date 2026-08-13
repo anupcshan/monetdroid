@@ -19,7 +19,6 @@ func newTestModel() *SessionModel {
 		SuppressedIDs:     make(map[string]bool),
 		PendingPerms:      make(map[string]ServerMsg),
 		SubagentSections:  make(map[string]*SubagentSection),
-		LastCompact:       -1,
 		pendingCommands:   make(map[string]string),
 	}
 }

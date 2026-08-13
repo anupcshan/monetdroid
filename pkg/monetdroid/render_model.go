@@ -452,9 +452,10 @@ func injectBgSlot(html, toolUseID string) string {
 }
 
 // renderModelMessages renders the message list from model state, matching
-// the output of renderMessages. Paginated to the last 100 messages.
+// the output of renderMessages. Paginated to the last 100 messages. The
+// active branch comes from the tree state the model copied at build time.
 func renderModelMessages(m *SessionModel, sessionID string) string {
-	rc := buildRenderContext(m)
+	rc := buildRenderContext(m, activeSet(m.LineParents, m.Tip))
 
 	const pageSize = 100
 	start := 0
@@ -476,7 +477,7 @@ func renderModelMessages(m *SessionModel, sessionID string) string {
 
 // buildRenderContext creates a renderContext from the model, bridging the
 // new model type to the existing renderMessages function.
-func buildRenderContext(m *SessionModel) renderContext {
+func buildRenderContext(m *SessionModel, active map[string]bool) renderContext {
 	bgTaskResults := make(map[string]string)
 	for id, bt := range m.BgTasks {
 		if bt.OutputPath != "" {
@@ -515,8 +516,18 @@ func buildRenderContext(m *SessionModel) renderContext {
 		}
 	}
 
+	// The compacted-region marker must name an active-branch boundary, for
+	// the reason documented on precomputeRenderContext. Derive it here
+	// from the message list.
+	lastCompact := -1
+	for i, msg := range m.Messages {
+		if msg.Type == "compact_boundary" && (msg.UUID == "" || active[msg.UUID]) {
+			lastCompact = i
+		}
+	}
+
 	return renderContext{
-		lastCompact:       m.LastCompact,
+		lastCompact:       lastCompact,
 		toolResults:       m.ToolResults,
 		toolUseIndexes:    m.ToolUseIndexes,
 		toolResultIndexes: m.ToolResultIndexes,
@@ -525,5 +536,6 @@ func buildRenderContext(m *SessionModel) renderContext {
 		suppressedIDs:     m.SuppressedIDs,
 		pendingPerms:      m.PendingPerms,
 		subagentSections:  subagentSections,
+		active:            active,
 	}
 }

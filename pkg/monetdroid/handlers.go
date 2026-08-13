@@ -100,7 +100,7 @@ func sessionURL(s *Session) string {
 
 // loadSessionFromDisk parses a JSONL file and creates an in-memory session.
 func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
-	allMsgs, claudeID, cwd, branches, sessUsage, err := ParseSessionMessages(jsonlPath)
+	allMsgs, claudeID, cwd, branches, sessUsage, parents, err := ParseSessionMessages(jsonlPath)
 	if err != nil {
 		return nil
 	}
@@ -112,8 +112,9 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 	s := h.Sessions.Create(claudeID, cwd)
 	s.InitFromHistory(h.Labels.Get(claudeID), jsonlPath, branches, CostInfo(sessUsage))
 
+	var lastUUID string
 	for _, m := range allMsgs {
-		sm := ServerMsg{SessionID: s.ID}
+		sm := ServerMsg{SessionID: s.ID, UUID: m.UUID}
 		switch m.Type {
 		case "user":
 			sm.Type = "user_message"
@@ -141,8 +142,12 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 		default:
 			continue
 		}
+		if m.UUID != "" {
+			lastUUID = m.UUID
+		}
 		s.Log = append(s.Log, sm)
 	}
+	s.InitTree(parents, lastUUID)
 	return s
 }
 
@@ -254,7 +259,8 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				isCold = true
 			}
 			cost, _ := s.GetCostBarInfo()
-			base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost}
+			base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost,
+				Tip: s.GetTip(), LineParents: s.GetLineParents()}
 			// Refresh diff stat so the cost bar reflects current repo state.
 			if ds, err := GitDiffStat(NewGitTrace("page-diff-stat"), base.Cwd); err == nil {
 				s.SetDiffStat(ds)
@@ -1350,7 +1356,7 @@ func (h *Hub) handleMessagesBefore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc := precomputeRenderContext(snap)
+	rc := precomputeRenderContext(snap, activeSet(s.GetLineParents(), s.GetTip()))
 
 	// Determine how far back to render
 	start := max(idx-100, 0)
