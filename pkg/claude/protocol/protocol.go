@@ -31,6 +31,7 @@ type StreamEvent struct {
 	Type            string                    `json:"type"` // "user", "assistant", "result", "system"
 	Subtype         string                    `json:"subtype,omitempty"`
 	SessionID       string                    `json:"session_id,omitempty"`
+	UUID            string                    `json:"uuid,omitempty"`
 	ToolUseID       string                    `json:"tool_use_id,omitempty"`
 	Status          string                    `json:"status,omitempty"`
 	ParentToolUseID *string                   `json:"parent_tool_use_id"`

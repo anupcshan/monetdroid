@@ -43,7 +43,10 @@ func PermissionModeFromString(s string) (PermissionMode, bool) {
 // Process is the interface for driving a claude backend.
 type Process interface {
 	// SendUserMessage delivers user text and optional images to claude.
-	SendUserMessage(text string, images []protocol.ImageData) error
+	// The uuid is minted by the caller and adopted by claude as the
+	// message's transcript uuid, so the caller knows it before sending.
+	// An empty uuid omits the field, and claude mints its own.
+	SendUserMessage(text string, images []protocol.ImageData, uuid string) error
 
 	// WaitForSessionID blocks until the session ID is known or the context
 	// is cancelled. Returns ErrProcessDead if the process exits first.
@@ -475,7 +478,7 @@ func (p *ClaudeProcess) sendControlResponse(requestID string, response any) {
 }
 
 // SendUserMessage sends a user message to start a turn.
-func (p *ClaudeProcess) SendUserMessage(text string, images []protocol.ImageData) error {
+func (p *ClaudeProcess) SendUserMessage(text string, images []protocol.ImageData, uuid string) error {
 	var content any
 	if len(images) > 0 {
 		var blocks []any
@@ -499,6 +502,7 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []protocol.ImageData
 
 	msg := userMessageEnvelope{
 		Type:    "user",
+		UUID:    uuid,
 		Message: userMessage{Role: "user", Content: content},
 	}
 	data, err := json.Marshal(msg)

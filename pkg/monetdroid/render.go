@@ -468,7 +468,8 @@ func RenderMsg(msg ServerMsg) string {
 			fmt.Fprintf(&content, `<dialog id="%s" class="img-dialog" onclick="this.close()"><img src="%s" onclick="event.stopPropagation()"></dialog>`, dlgID, src)
 		}
 		content.WriteString(strings.ReplaceAll(Esc(msg.Text), "\n", "<br>"))
-		return fmt.Sprintf(`<div class="msg msg-user"><div class="msg-bubble">%s</div></div>`, content.String())
+		// The uuid is the message's transcript uuid, minted at send time.
+		return fmt.Sprintf(`<div class="msg msg-user" data-uuid="%s"><div class="msg-bubble">%s</div></div>`, Esc(msg.UUID), content.String())
 	case "thinking":
 		if strings.TrimSpace(msg.Text) == "" {
 			return ""

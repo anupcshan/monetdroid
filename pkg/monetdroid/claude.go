@@ -64,6 +64,18 @@ func parentID(event *protocol.StreamEvent) string {
 func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(ServerMsg)) {
 	pid := parentID(event)
 
+	// Advance the tip cursor once per parentless user or assistant event
+	// carrying a uuid. These are the transcript's main-branch lines. Result,
+	// system, task, and parented (sidechain) events are not. Sent user
+	// messages advance the tip at send time with their minted uuid.
+	if pid == "" && event.UUID != "" && (event.Type == "user" || event.Type == "assistant") {
+		s.AdvanceTip(event.UUID)
+	}
+	uuid := ""
+	if pid == "" {
+		uuid = event.UUID
+	}
+
 	switch event.Type {
 	case "system":
 		switch event.Subtype {
@@ -160,11 +172,11 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 			switch b.Type {
 			case "thinking":
 				if b.Thinking != "" {
-					broadcast(ServerMsg{Type: "thinking", SessionID: s.ID, Text: b.Thinking})
+					broadcast(ServerMsg{Type: "thinking", SessionID: s.ID, Text: b.Thinking, UUID: uuid})
 				}
 			case "text":
 				if b.Text != "" {
-					broadcast(ServerMsg{Type: "text", SessionID: s.ID, Text: b.Text})
+					broadcast(ServerMsg{Type: "text", SessionID: s.ID, Text: b.Text, UUID: uuid})
 				}
 			case "tool_use":
 				if suppressResultTools[b.Name] {
@@ -185,7 +197,7 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 					}
 					continue
 				}
-				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Cwd: s.GetCwd(), Input: protocol.ParseToolInput(b.Name, b.RawInput)})
+				broadcast(ServerMsg{Type: "tool_use", SessionID: s.ID, Tool: b.Name, ToolUseID: b.ID, Cwd: s.GetCwd(), Input: protocol.ParseToolInput(b.Name, b.RawInput), UUID: uuid})
 				// Bash foreground: trigger bashstreamer by writing the signal file.
 				if b.Name == "Bash" {
 					handleBashToolUse(s, b.ID, b.RawInput)
@@ -265,7 +277,12 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 			return
 		}
 
-		// Parent user events: broadcast normally
+		// Parent user events are broadcast normally. Only claude-generated
+		// user events arrive here. monetdroid broadcasts each typed message
+		// itself at send time with its minted uuid, so no typed message
+		// reaches this handler. The tool_result loop below finds nothing on
+		// claude-generated text prompts. The task-notification scan still
+		// applies to them.
 		for _, b := range event.Message.Content.Blocks {
 			if b.Type == "tool_result" {
 				suppressed := s.RemoveSuppressed(b.ToolUseID)
@@ -303,7 +320,7 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 
 				// Always show images even for suppressed tools (e.g. Read on screenshots).
 				if len(b.Content.Images) > 0 {
-					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Images: b.Content.Images})
+					broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Images: b.Content.Images, UUID: uuid})
 					continue
 				}
 				output := ""
@@ -316,7 +333,7 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 				// Always broadcast tool_result, with empty output when the
 				// result is suppressed or boring, so the tool chip's spinner
 				// is stripped on result arrival.
-				broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output})
+				broadcast(ServerMsg{Type: "tool_result", SessionID: s.ID, ToolUseID: b.ToolUseID, Output: output, UUID: uuid})
 			}
 		}
 

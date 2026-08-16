@@ -258,9 +258,16 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if _, seq := s.EventLog.Snapshot(); seq == 0 {
 				isCold = true
 			}
+			// Read the log first, then the tip, then the parents. A message
+			// that lands between the log read and the tip read is missing
+			// from the log but harmless, while a tip read ahead of its
+			// parent link would end the active walk early and drop messages.
+			logSnapshot := s.GetLog()
+			tip := s.GetTip()
+			parents := s.GetLineParents()
 			cost, _ := s.GetCostBarInfo()
 			base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost,
-				Tip: s.GetTip(), LineParents: s.GetLineParents()}
+				Tip: tip, LineParents: parents}
 			// Refresh diff stat so the cost bar reflects current repo state.
 			if ds, err := GitDiffStat(NewGitTrace("page-diff-stat"), base.Cwd); err == nil {
 				s.SetDiffStat(ds)
@@ -268,7 +275,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if s.Model != nil {
 				s.Model.Close()
 			}
-			s.Model = BuildModel(base, s.GetLog(), s.ID)
+			s.Model = BuildModel(base, logSnapshot, s.ID)
 			s.Model.DiffStat = s.GetDiffStat()
 			_, lastSeq = s.EventLog.Snapshot()
 			if isCold {
@@ -530,8 +537,12 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Mint the message's uuid before sending. The session does not exist
+		// yet, so the chain link waits until it does, below.
+		uuid := NewUserUUID()
+
 		// Send the user message to trigger the stream
-		if err := proc.SendUserMessage(text, images); err != nil {
+		if err := proc.SendUserMessage(text, images, uuid); err != nil {
 			proc.Kill()
 			log.Printf("[send] send message failed: %s", err)
 			w.WriteHeader(500)
@@ -573,6 +584,12 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		s.Model = BuildModel(base, s.GetLog(), s.ID)
 		s.Model.DiffStat = s.GetDiffStat()
 
+		// Link the minted uuid and broadcast the user message before the
+		// buffered replay, so replayed reply events chain onto the message
+		// and the log order matches the conversation order.
+		s.AdvanceTip(uuid)
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images, UUID: uuid})
+
 		// Replay buffered events. The model exists, so broadcasts
 		// reach HandleEvent.
 		mu.Lock()
@@ -584,6 +601,11 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		mu.Unlock()
 
 		broadcast(ServerMsg{Type: "session_started", SessionID: s.ID})
+
+		// Drain the model before binding clients. Every queued event has
+		// finished its push by now, so no client can receive an append of a
+		// message the full render below already contains.
+		s.Model.Sync()
 
 		// Bind SSE clients that were waiting on this cwd
 		h.mu.RLock()
@@ -606,8 +628,8 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		h.BroadcastToSession(s.ID, FormatSSEDOM(cmds, TitleOob(labelText), FaviconOob(labelText)), "", "")
 
-		// Broadcast user message and signal the turn is running.
-		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+		// Signal the turn is running. The user message was broadcast before
+		// the buffered replay above.
 		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
 		// Wait for turn completion and drain queue in background
@@ -625,9 +647,11 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 	} else if s.HasPendingPerms() {
 		// Permission-blocked: inject message directly into stdin.
 		// The CLI queues it internally and processes it after the current turn.
-		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+		uuid := NewUserUUID()
+		s.AdvanceTip(uuid)
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images, UUID: uuid})
 		if proc := s.GetProc(); proc != nil {
-			proc.SendUserMessage(text, images)
+			proc.SendUserMessage(text, images, uuid)
 		}
 	} else {
 		// Idle: start a new turn
@@ -1356,7 +1380,12 @@ func (h *Hub) handleMessagesBefore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc := precomputeRenderContext(snap, activeSet(s.GetLineParents(), s.GetTip()))
+	// The log is read first (above), then the tip, then the parents, so a
+	// message arriving mid-read is absent from the log rather than missing
+	// its link in the walk.
+	tip := s.GetTip()
+	parents := s.GetLineParents()
+	rc := precomputeRenderContext(snap, activeSet(parents, tip))
 
 	// Determine how far back to render
 	start := max(idx-100, 0)

@@ -453,9 +453,11 @@ func injectBgSlot(html, toolUseID string) string {
 
 // renderModelMessages renders the message list from model state, matching
 // the output of renderMessages. Paginated to the last 100 messages. The
-// active branch comes from the tree state the model copied at build time.
+// active branch comes from the model's chain, seeded at build time and
+// extended live by Apply.
 func renderModelMessages(m *SessionModel, sessionID string) string {
-	rc := buildRenderContext(m, activeSet(m.LineParents, m.Tip))
+	tip, parents := m.ChainSnapshot()
+	rc := buildRenderContext(m, activeSet(parents, tip))
 
 	const pageSize = 100
 	start := 0

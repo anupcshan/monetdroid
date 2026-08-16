@@ -11,6 +11,7 @@ import (
 
 	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
+	"github.com/google/uuid"
 )
 
 type Session struct {
@@ -25,9 +26,9 @@ type Session struct {
 	JSONLPath      string
 	Log            []ServerMsg
 	// Tip is the uuid of the last message-bearing entry on the active
-	// branch, seeded when a transcript is loaded. LineParents maps every
-	// transcript line's uuid to its parent's uuid. Both feed the
-	// active-path walk at render time.
+	// branch, seeded when a transcript is loaded and advanced live as
+	// messages arrive. LineParents maps every transcript line's uuid to
+	// its parent's uuid. Both feed the active-path walk at render time.
 	Tip               string
 	LineParents       map[string]string
 	QueuedText        string
@@ -847,6 +848,35 @@ func (s *Session) GetLineParents() map[string]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return maps.Clone(s.LineParents)
+}
+
+// AdvanceTip links a main-branch transcript line into the active chain and
+// moves the tip to it. Called once per parentless user or assistant stream
+// event carrying a uuid, and once per sent user message with its minted
+// uuid. A uuid that is already linked is left alone, since re-linking it
+// would point it at itself and end the active walk early. This mirrors the
+// guard in SessionModel.Apply.
+func (s *Session) AdvanceTip(uuid string) {
+	if uuid == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, linked := s.LineParents[uuid]; linked {
+		return
+	}
+	if s.LineParents == nil {
+		s.LineParents = make(map[string]string)
+	}
+	s.LineParents[uuid] = s.Tip
+	s.Tip = uuid
+}
+
+// NewUserUUID mints the uuid for a user message being sent. The uuid travels
+// on the stdin envelope, and claude adopts it as the message's transcript
+// uuid, so it is canonical from the moment of sending.
+func NewUserUUID() string {
+	return uuid.NewString()
 }
 
 // activeSet walks parent links from the leaf to the root and returns the

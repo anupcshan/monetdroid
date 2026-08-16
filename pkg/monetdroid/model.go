@@ -2,6 +2,7 @@ package monetdroid
 
 import (
 	"log"
+	"maps"
 	"strconv"
 	"sync"
 
@@ -9,20 +10,13 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
 )
 
-// Viewer receives rendered HTML from a Model.
-type Viewer interface {
-	Send(html string)
-	Done() <-chan struct{}
-}
-
 // SessionModel holds all renderable state derived from the session event log.
 // It is produced by folding the event log through Apply. The zero value
 // is a valid empty model. BuildModel(base, log) calls Apply for each event.
 //
 // State is mutated only by the internal goroutine launched in BuildModel.
-// External callers send events via HandleEvent and attach/detach via
-// Attach/Detach. All of these are channel-based and never touch state
-// directly.
+// External callers send events via HandleEvent, which is channel-based and
+// never touches state directly.
 type SessionModel struct {
 	mu sync.Mutex
 
@@ -38,9 +32,9 @@ type SessionModel struct {
 	PendingPerms      map[string]ServerMsg        // unresolved inline permission_request
 	SubagentSections  map[string]*SubagentSection // parent Agent tool_use_id -> section state
 	QueuedText        string                      // next user message queued for sending
-	// Tip and LineParents copy the session's active-branch tip and parent
-	// chain at build time, so the full-page render walks the same active
-	// path as the session.
+	// Tip and LineParents are the model's active-branch chain, seeded from
+	// the session at build time and extended live by Apply as messages
+	// arrive.
 	Tip         string
 	LineParents map[string]string
 
@@ -62,12 +56,17 @@ type SessionModel struct {
 	turnActive   bool
 	processAlive bool
 
-	// Event channel and viewer management.
+	// Event channel management.
 	sessionID string
 	events    chan serverMsgEvent
-	viewers   map[string]Viewer
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
+
+	// folding is set while BuildModel replays the log. During the fold the
+	// chain comes whole from ModelBase, so Apply must not link live messages
+	// into it. A uuid missing from the base chain is a transcript property,
+	// not a live event to append after the tip.
+	folding bool
 }
 
 // serverMsgEvent wraps a ServerMsg with its rendering context.
@@ -76,6 +75,7 @@ type serverMsgEvent struct {
 	todosChanged bool
 	permUpgrades func([]DOMCmd) []DOMCmd // extra DOM commands to append after rendering
 	push         func(string)            // callback to push rendered HTML to transport
+	done         chan struct{}           // closed once processed. Set only by Sync
 }
 
 // ModelBase holds session-level state that is not derived from the event log.
@@ -85,7 +85,8 @@ type ModelBase struct {
 	AutoLabel bool
 	PermMode  claude.PermissionMode
 	Cost      CostInfo // initial cost from session (includes ModelName set by history load)
-	// Tip and LineParents are copied into the model at build time.
+	// Tip and LineParents seed the model's chain, which is then extended
+	// live by Apply as messages arrive.
 	Tip         string
 	LineParents map[string]string
 }
@@ -93,6 +94,12 @@ type ModelBase struct {
 // BuildModel folds a base state and an event log into a SessionModel.
 // The returned model has its internal goroutine running.
 func BuildModel(base ModelBase, log []ServerMsg, sessionID string) *SessionModel {
+	// The model owns its chain, cloned here at the boundary, because the
+	// session and the model mutate their chains live under different locks.
+	lineParents := maps.Clone(base.LineParents)
+	if lineParents == nil {
+		lineParents = make(map[string]string)
+	}
 	m := &SessionModel{
 		Cwd:               base.Cwd,
 		Label:             base.Label,
@@ -107,17 +114,18 @@ func BuildModel(base ModelBase, log []ServerMsg, sessionID string) *SessionModel
 		PendingPerms:      make(map[string]ServerMsg),
 		SubagentSections:  make(map[string]*SubagentSection),
 		Tip:               base.Tip,
-		LineParents:       base.LineParents,
+		LineParents:       lineParents,
 		pendingCommands:   make(map[string]string),
 		sessionID:         sessionID,
 		events:            make(chan serverMsgEvent, 256),
-		viewers:           make(map[string]Viewer),
 		stopCh:            make(chan struct{}),
 		processAlive:      true, // live sessions always have a live process
+		folding:           true,
 	}
 	for _, msg := range log {
 		m.Apply(msg)
 	}
+	m.folding = false
 	m.wg.Add(1)
 	go m.run()
 	return m
@@ -144,6 +152,27 @@ func (m *SessionModel) HandleEventWithTodos(msg ServerMsg, todosChanged bool, pu
 // DOM commands to the rendered output (used for permission detail upgrades).
 func (m *SessionModel) HandleEventWithUpgrades(msg ServerMsg, todosChanged bool, permUpgrades func([]DOMCmd) []DOMCmd, push func(string)) {
 	m.sendEvent(serverMsgEvent{msg: msg, todosChanged: todosChanged, permUpgrades: permUpgrades, push: push})
+}
+
+// Sync blocks until every event enqueued before it has been applied and
+// pushed. handleSend calls it before binding SSE clients to a new session,
+// so no queued event's push can straddle the binding and append a message
+// the full render sent after the binding already contains. If the model is
+// closed while waiting, the goroutine that would process the marker is gone,
+// so Sync returns without draining. That case cannot produce the duplicate:
+// the closing path replaces the model with one built from the session log,
+// which already holds every enqueued message.
+func (m *SessionModel) Sync() {
+	done := make(chan struct{})
+	select {
+	case m.events <- serverMsgEvent{done: done}:
+	case <-m.stopCh:
+		return
+	}
+	select {
+	case <-done:
+	case <-m.stopCh:
+	}
 }
 
 func (m *SessionModel) sendEvent(ev serverMsgEvent) {
@@ -176,8 +205,13 @@ func (m *SessionModel) run() {
 	}
 }
 
-// processEvent applies a single event and pushes rendered HTML to all viewers.
+// processEvent applies a single event and pushes rendered HTML through the
+// event's push callback.
 func (m *SessionModel) processEvent(ev serverMsgEvent) {
+	if ev.done != nil {
+		close(ev.done)
+		return
+	}
 	wasActive := m.HasActivity()
 	wasStoppable := m.CanInterrupt()
 	m.Apply(ev.msg)
@@ -244,33 +278,22 @@ func (m *SessionModel) CanInterrupt() bool {
 	return m.processAlive && (m.turnActive || len(m.PendingPerms) > 0)
 }
 
-// Attach adds a viewer and sends a full snapshot from fromOffset.
-func (m *SessionModel) Attach(v Viewer, fromOffset int) {
-	m.mu.Lock()
-	m.viewers["TODO"] = v                     // placeholder, actual ID management TBD
-	snapCmds := RenderFull(m, m.sessionID, 0) // TODO: reviewCount
-	if len(snapCmds) > 0 {
-		event := FormatSSEDOM(snapCmds)
-		if event != "" {
-			v.Send(event)
-		}
-	}
-	m.mu.Unlock()
-}
-
-// Detach removes a viewer.
-func (m *SessionModel) Detach(viewerID string) {
-	m.mu.Lock()
-	delete(m.viewers, viewerID)
-	m.mu.Unlock()
-}
-
 // Apply updates the model for a single event. It is called both by BuildModel
 // (for page load) and by the internal goroutine (for live events).
 func (m *SessionModel) Apply(msg ServerMsg) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Messages = append(m.Messages, msg)
+	// A live message carrying a uuid not yet linked extends the active
+	// chain by linking to the tip and advancing. This mirrors the session's tip
+	// cursor, so full-page renders walk the same live tree. During the build
+	// fold the chain arrives whole from ModelBase, so nothing links.
+	if !m.folding && msg.UUID != "" && msg.AgentID == "" {
+		if _, linked := m.LineParents[msg.UUID]; !linked {
+			m.LineParents[msg.UUID] = m.Tip
+			m.Tip = msg.UUID
+		}
+	}
 
 	switch msg.Type {
 	case "tool_use":
@@ -402,4 +425,14 @@ func (m *SessionModel) Apply(msg ServerMsg) {
 			}
 		}
 	}
+}
+
+// ChainSnapshot copies the active-branch tip and parent links under the
+// model's mutex. RenderFull runs off the model goroutine and must not read
+// the chain while Apply mutates it, since a map read racing a write is a
+// runtime fatal.
+func (m *SessionModel) ChainSnapshot() (tip string, parents map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.Tip, maps.Clone(m.LineParents)
 }

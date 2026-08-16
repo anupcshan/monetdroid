@@ -139,6 +139,7 @@ type permDenyResponse struct {
 type userMessageEnvelope struct {
 	Type            string      `json:"type"` // "user"
 	SessionID       string      `json:"session_id"`
+	UUID            string      `json:"uuid,omitempty"` // caller-minted, adopted by claude as the message's uuid.
 	Message         userMessage `json:"message"`
 	ParentToolUseID *string     `json:"parent_tool_use_id"`
 }

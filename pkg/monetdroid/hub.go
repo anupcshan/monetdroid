@@ -623,11 +623,16 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 	// Auto-label from first user message
 	s.TryAutoLabel(text)
 
-	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images})
+	// The message's uuid is minted here, before sending. Claude adopts it as
+	// the message's transcript uuid, so the uuid the bubble renders with is
+	// canonical from the moment of sending.
+	uuid := NewUserUUID()
+	s.AdvanceTip(uuid)
+	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images, UUID: uuid})
 	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
 	go func() {
-		if err := proc.SendUserMessage(text, images); err != nil {
+		if err := proc.SendUserMessage(text, images, uuid); err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return
 		}
@@ -652,10 +657,12 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 		}
 
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
-		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next})
+		uuid := NewUserUUID()
+		s.AdvanceTip(uuid)
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next, UUID: uuid})
 		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
-		if err := proc.SendUserMessage(next, nil); err != nil {
+		if err := proc.SendUserMessage(next, nil, uuid); err != nil {
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return
 		}

@@ -229,9 +229,11 @@ func (h *Hub) handleReviewSend(w http.ResponseWriter, r *http.Request) {
 	if queued, queuedText := s.EnqueueMessage(msg); queued {
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)), "", "")
 	} else if s.HasPendingPerms() {
-		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: msg})
+		uuid := NewUserUUID()
+		s.AdvanceTip(uuid)
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: msg, UUID: uuid})
 		if proc := s.GetProc(); proc != nil {
-			proc.SendUserMessage(msg, nil)
+			proc.SendUserMessage(msg, nil, uuid)
 		}
 	} else {
 		h.StartTurn(s, msg, nil)

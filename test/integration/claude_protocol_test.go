@@ -129,7 +129,9 @@ func rewindAndResend(t *testing.T, ctx context.Context, proc claude.Process) (st
 
 	send := func(text string) {
 		t.Helper()
-		if err := proc.SendUserMessage(text, nil); err != nil {
+		// An empty uuid lets claude mint its own. The test reads uuids
+		// back from the transcript.
+		if err := proc.SendUserMessage(text, nil, ""); err != nil {
 			t.Fatalf("send %q: %v", text, err)
 		}
 		if err := proc.WaitForTurnDone(ctx); err != nil {

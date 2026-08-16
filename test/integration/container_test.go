@@ -328,6 +328,60 @@ func Add(a, b int) int {
 		// Wait for first turn to fully complete (stop button disappears)
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
+		// The user bubble is born with its uuid. monetdroid mints the uuid at
+		// send time and claude adopts it as the message's transcript uuid. If
+		// a future CLI stops adopting caller uuids, the DOM uuid and the
+		// transcript's recorded uuid diverge and this check fails. The uuid
+		// must equal the one claude recorded for that user line in the
+		// transcript, so the DOM is checked against the file.
+		userMsg, err := page.Timeout(10 * time.Second).Element(`.msg-user[data-uuid]:not([data-uuid=""])`)
+		if err != nil {
+			t.Fatalf("user bubble never carried a uuid: %v", err)
+		}
+		domUUID, _ := userMsg.Attribute("data-uuid")
+		if domUUID == nil || *domUUID == "" {
+			t.Fatalf("user bubble uuid attribute is empty")
+		}
+		urlNow := page.MustEval(`() => window.location.href`).String()
+		if !strings.Contains(urlNow, "session=") {
+			t.Fatalf("expected session= in URL after first turn, got: %s", urlNow)
+		}
+		sessionID := urlNow[strings.Index(urlNow, "session=")+len("session="):]
+		if i := strings.IndexAny(sessionID, "&#"); i >= 0 {
+			sessionID = sessionID[:i]
+		}
+		transcript := ""
+		for range 10 {
+			transcript, err = f.DockerExec("sh", "-c", `cat "$HOME"/.claude/projects/*/`+sessionID+`.jsonl`)
+			if err == nil && transcript != "" {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		if err != nil || transcript == "" {
+			t.Fatalf("reading transcript for session %s: %v", sessionID, err)
+		}
+		uuidInTranscript := false
+		for line := range strings.SplitSeq(transcript, "\n") {
+			var e struct {
+				UUID    string          `json:"uuid"`
+				Message json.RawMessage `json:"message"`
+			}
+			if json.Unmarshal([]byte(line), &e) != nil || e.UUID == "" {
+				continue
+			}
+			var m struct {
+				Role string `json:"role"`
+			}
+			if json.Unmarshal(e.Message, &m) == nil && m.Role == "user" && e.UUID == *domUUID {
+				uuidInTranscript = true
+				break
+			}
+		}
+		if !uuidInTranscript {
+			t.Fatalf("user bubble uuid %s is not a user line uuid in the transcript", *domUUID)
+		}
+
 		// Cost bar should show
 		WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
 
@@ -336,7 +390,7 @@ func Add(a, b int) int {
 		page.MustElement(`.send-btn`).MustClick()
 
 		// Wait for second user message to render
-		_, err := page.Timeout(30*time.Second).ElementR(".msg-user", "Add function")
+		_, err = page.Timeout(30*time.Second).ElementR(".msg-user", "Add function")
 		if err != nil {
 			t.Fatalf("second user message never appeared: %v", err)
 		}
