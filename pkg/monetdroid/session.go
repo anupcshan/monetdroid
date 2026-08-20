@@ -4,14 +4,15 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/anupcshan/monetdroid/pkg/claude"
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
-	"github.com/google/uuid"
 )
 
 type Session struct {
@@ -218,9 +219,9 @@ func (s *Session) GetProc() claude.Process {
 func (s *Session) LastAssistantText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := len(s.Log) - 1; i >= 0; i-- {
-		if s.Log[i].Type == "text" && s.Log[i].Text != "" {
-			return s.Log[i].Text
+	for _, m := range slices.Backward(s.Log) {
+		if m.Type == "text" && m.Text != "" {
+			return m.Text
 		}
 	}
 	return ""
@@ -876,7 +877,7 @@ func (s *Session) AdvanceTip(uuid string) {
 // on the stdin envelope, and claude adopts it as the message's transcript
 // uuid, so it is canonical from the moment of sending.
 func NewUserUUID() string {
-	return uuid.NewString()
+	return uuid.New().String()
 }
 
 // activeSet walks parent links from the leaf to the root and returns the

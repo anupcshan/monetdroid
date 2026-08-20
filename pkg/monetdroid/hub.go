@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -66,19 +67,11 @@ func (l *EventLog) Append(event string, key string, parent string) uint64 {
 		key = compactKey(event)
 	}
 	if key != "" {
-		for i := len(l.events) - 1; i >= 0; i-- {
-			if i >= len(l.events) {
-				continue
-			}
-			if l.events[i].CompactKey == key {
-				l.events = append(l.events[:i], l.events[i+1:]...)
-				// Remove all events parented to the superseded key.
-				for j := len(l.events) - 1; j >= 0; j-- {
-					if l.events[j].ParentKey == key {
-						l.events = append(l.events[:j], l.events[j+1:]...)
-					}
-				}
-			}
+		matchKey := func(e SSEEvent) bool { return e.CompactKey == key }
+		if slices.ContainsFunc(l.events, matchKey) {
+			l.events = slices.DeleteFunc(l.events, matchKey)
+			// Cascade-remove all events parented to the superseded key.
+			l.events = slices.DeleteFunc(l.events, func(e SSEEvent) bool { return e.ParentKey == key })
 		}
 	}
 	l.seq++
