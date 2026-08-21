@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -28,9 +29,12 @@ var (
 
 // processor de-interleaves and condenses `go test -v` output. Each test's log
 // lines are buffered and emitted as one contiguous block at that test's `---`
-// completion line; passing-test logs are dropped, failing and skipped logs are
-// kept. Because output is buffered per test anyway, de-interleaving parallel
-// tests is the same mechanism, not a second pass.
+// completion line. Passing-test logs are dropped, and failing and skipped
+// logs are kept. A test that never reports, such as one still running when
+// the timeout panic kills the binary, has its held lines emitted by flush
+// when the package summary arrives. Because output is buffered per test
+// anyway, de-interleaving parallel tests is the same mechanism, not a second
+// pass.
 type processor struct {
 	// current is the test that owns subsequently arriving log lines, set by
 	// the last RUN/CONT/NAME marker or restored to a parent on subtest exit.
@@ -83,7 +87,11 @@ func (p *processor) Process(line string) []string {
 		return append(held, line)
 	}
 	if pkgOkRe.MatchString(line) || pkgFailRe.MatchString(line) {
-		return []string{line}
+		// The held lines arrived before the summary line, so they are emitted
+		// first to preserve arrival order.
+		out := p.flush()
+		out = append(out, line)
+		return out
 	}
 	// A log line: hold it under the current test if that test is still
 	// active. Otherwise (package-level output, panics, coverage, the bare
@@ -95,6 +103,32 @@ func (p *processor) Process(line string) []string {
 		}
 	}
 	return []string{line}
+}
+
+// flush emits and clears the held lines of tests that never reported a
+// result. That happens when the timeout panic kills the binary with a test
+// still running. A package summary line arrives after that package's test
+// binary is done. Any buffer still held at that point therefore belongs to a
+// test that will never report. The read loop also calls flush at end of
+// output, which covers a stream that ends with no summary line. Test names
+// are sorted so the output is deterministic. Lines within each test keep
+// arrival order.
+func (p *processor) flush() []string {
+	if len(p.buffers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(p.buffers))
+	for name := range p.buffers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []string
+	for _, name := range names {
+		out = append(out, p.buffers[name]...)
+		delete(p.buffers, name)
+	}
+	p.current = ""
+	return out
 }
 
 // ensure records that a test name has started, with an empty buffer, so later
@@ -167,6 +201,11 @@ func runTest(args []string, record bool) int {
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "mdrdev itest: output truncated, a line exceeded %d bytes\n", maxLineBytes)
+	}
+	// Backstop for output that ends without a package summary line, such as
+	// the go command being killed.
+	for _, out := range proc.flush() {
+		fmt.Println(out)
 	}
 
 	signal.Stop(sigs)

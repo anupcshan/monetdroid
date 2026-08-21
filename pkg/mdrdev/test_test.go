@@ -2,6 +2,7 @@ package mdrdev
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +89,69 @@ func TestProcessorSkippedLogsKept(t *testing.T) {
 	}
 	if got := runProcessor(in); !reflect.DeepEqual(got, want) {
 		t.Errorf("output mismatch:\n got:  %v\n want: %v", got, want)
+	}
+}
+
+func TestProcessorFlushesUnreportedTestAtPackageLine(t *testing.T) {
+	// A test that hangs until the timeout panic never gets a --- line. Its
+	// held log lines and the panic block must surface at the package summary
+	// line, ahead of it, in arrival order. The panic block matches the output
+	// of a real timed-out run, including the tab-indented running list.
+	in := `
+=== RUN  TestHang
+    a_test.go:10: log line before the hang
+panic: test timed out after 1s
+	running tests:
+		TestHang (1s)
+
+goroutine 8 [sleep]:
+time.Sleep(30 * time.Second)
+	/usr/local/go/src/runtime/time.go:368 +0x165
+FAIL	example.com/pkg	1.004s
+FAIL
+`
+	wantBlock := `
+    a_test.go:10: log line before the hang
+panic: test timed out after 1s
+	running tests:
+		TestHang (1s)
+
+goroutine 8 [sleep]:
+time.Sleep(30 * time.Second)
+	/usr/local/go/src/runtime/time.go:368 +0x165
+FAIL	example.com/pkg	1.004s
+FAIL
+`
+	// Trim cuts only the newlines around the literals, since TrimSpace would
+	// also eat the indentation of the first output line.
+	got := strings.Join(runProcessor(strings.Split(strings.Trim(in, "\n"), "\n")), "\n")
+	want := strings.Trim(wantBlock, "\n")
+	if got != want {
+		t.Errorf("output mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestProcessorFlushesUnreportedTestAtEndOfOutput(t *testing.T) {
+	// A stream can end with no package summary line, for example when the go
+	// command is killed. Held lines must still surface when the stream ends.
+	in := `
+=== RUN  TestHang
+    a_test.go:10: log line before the hang
+`
+	wantBlock := `
+    a_test.go:10: log line before the hang
+`
+	p := newProcessor()
+	var got []string
+	for line := range strings.SplitSeq(strings.Trim(in, "\n"), "\n") {
+		got = append(got, p.Process(line)...)
+	}
+	held := p.flush()
+	got = append(got, held...)
+	gotText := strings.Join(got, "\n")
+	want := strings.Trim(wantBlock, "\n")
+	if gotText != want {
+		t.Errorf("output mismatch:\ngot:\n%s\nwant:\n%s", gotText, want)
 	}
 }
 
