@@ -28,6 +28,7 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/kbcli"
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 // sampleImage is the PNG fixture embedded for TestReadImage.
@@ -818,6 +819,182 @@ func TestAutoMode(t *testing.T) {
 		}
 		chip.MustClick()
 		WaitForText(t, page, ".tool-result-output", "probe-two-bbbb", 10*time.Second)
+	})
+}
+
+func TestEditResend(t *testing.T) {
+	t.Parallel()
+	WithProviders(t, "edit_resend.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+		page := f.Page()
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		turn := func(prompt, marker string) {
+			t.Helper()
+			page.MustElement(`textarea[name="text"]`).MustInput(prompt)
+			page.MustElement(`.send-btn`).MustClick()
+			if _, err := page.Timeout(120*time.Second).ElementR(".msg-assistant", marker); err != nil {
+				t.Fatalf("reply %q never appeared: %v", marker, err)
+			}
+			WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+			WaitForElement(t, page, "#turn-state:not(.on)", 10*time.Second)
+			if !page.MustElement(`.msg-edit-btn`).MustVisible() {
+				t.Fatalf("Edit control hidden while idle")
+			}
+		}
+
+		turn("What is 2 plus 3? Answer with just the number.", "5")
+		turn("What is 4 plus 5? Answer with just the number.", "9")
+		turn("What is 6 plus 7? Answer with just the number.", "13")
+
+		Screenshot(t, page, "edit_resend_before")
+
+		// Cancel restores the bubble without sending anything.
+		cancelMsg := page.Timeout(10*time.Second).MustElementR(`.msg-user`, `What is 4 plus 5`)
+		cancelMsg.MustElement(`.msg-edit-btn`).MustClick()
+		cancelBox := page.Timeout(10 * time.Second).MustElement(`.msg-edit-text`)
+		cancelBox.MustSelectAllText().MustInput("never sent")
+		page.Timeout(10 * time.Second).MustElement(`.msg-edit-cancel`).MustClick()
+		if _, err := page.Timeout(10*time.Second).ElementR(`.msg-user`, `What is 4 plus 5`); err != nil {
+			t.Fatalf("cancel did not restore the bubble: %v", err)
+		}
+		if _, err := page.Timeout(3 * time.Second).Element(`.msg-edit-text`); err == nil {
+			t.Fatalf("edit form still open after cancel")
+		}
+
+		// Deep-edit the second user message. The messages below it leave the
+		// active thread, so Send confirms first.
+		secondMsg := page.Timeout(10*time.Second).MustElementR(`.msg-user`, `What is 4 plus 5`)
+		secondMsg.MustElement(`.msg-edit-btn`).MustClick()
+
+		editBox := page.Timeout(10 * time.Second).MustElement(`.msg-edit-text`)
+		if got := editBox.MustText(); !strings.Contains(got, "What is 4 plus 5? Answer with just the number.") {
+			t.Fatalf("edit form not prefilled with the original text, got %q", got)
+		}
+		editBox.MustSelectAllText().MustInput("What is 10 plus 10? Answer with just the number.")
+		Screenshot(t, page, "edit_resend_form")
+
+		// The confirm dialog blocks page JS, so the click runs beside the
+		// wait. Non-Must calls, because a panic on this goroutine kills the
+		// test binary without a failure report.
+		wait, handle := page.MustHandleDialog()
+		clickErr := make(chan error, 1)
+		go func() {
+			btn, err := page.Timeout(30 * time.Second).Element(`.msg-edit-send`)
+			if err == nil {
+				err = btn.Click(proto.InputMouseButtonLeft, 1)
+			}
+			clickErr <- err
+		}()
+		openedCh := make(chan *proto.PageJavascriptDialogOpening, 1)
+		go func() { openedCh <- wait() }()
+		var opened *proto.PageJavascriptDialogOpening
+		select {
+		case opened = <-openedCh:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("confirmation dialog never opened")
+		}
+		if opened.Type != proto.PageDialogTypeConfirm {
+			t.Fatalf("deep edit did not ask for confirmation, dialog type %q", opened.Type)
+		}
+		if !strings.Contains(opened.Message, "Everything below it leaves this thread") {
+			t.Fatalf("unexpected confirmation message: %q", opened.Message)
+		}
+		handle(true, "")
+		if err := <-clickErr; err != nil {
+			t.Fatalf("clicking Send: %v", err)
+		}
+		Screenshot(t, page, "edit_resend_after_send")
+
+		// The resent turn streams in on the truncated thread.
+		if _, err := page.Timeout(120*time.Second).ElementR(".msg-assistant", "20"); err != nil {
+			t.Fatalf("reply to the edited message never appeared: %v", err)
+		}
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+		// Live truncation, no reload. The anchor above renders below every
+		// dormant message, so the absence checks below it are decidable.
+		// Absence checks wait on a short timeout, since the element default
+		// is long enough to dominate the whole test.
+		assertAbsent := func(sel, pattern, what string) {
+			t.Helper()
+			if _, err := page.Timeout(3*time.Second).ElementR(sel, pattern); err == nil {
+				t.Fatalf("%s still rendered after edit", what)
+			}
+		}
+		assertPresent := func(sel, pattern, what string) {
+			t.Helper()
+			if _, err := page.Timeout(30*time.Second).ElementR(sel, pattern); err != nil {
+				t.Fatalf("%s missing: %v", what, err)
+			}
+		}
+
+		Screenshot(t, page, "edit_resend_live_truncated")
+		assertAbsent(`.msg-user`, `What is 4 plus 5`, "edited message")
+		assertAbsent(`.msg-user`, `What is 6 plus 7`, "third turn user message")
+		assertAbsent(`.msg-assistant`, `\b13\b`, "third turn reply")
+		assertAbsent(`.msg-assistant`, `\b9\b`, "second turn reply")
+		// The first turn stays on the active branch and must still render.
+		assertPresent(`.msg-user`, `What is 2 plus 3`, "first turn")
+		assertPresent(`.msg-assistant`, `\b5\b`, "first turn reply")
+
+		// Reload from the transcript. The active branch is the only thing
+		// rendered there too.
+		currentURL := page.MustEval(`() => window.location.href`).String()
+		page.MustNavigate(currentURL).MustWaitStable()
+		WaitForElement(t, page, ".msg-assistant", 10*time.Second)
+
+		assertPresent(`.msg-user`, `What is 10 plus 10`, "edited message after reload")
+		assertAbsent(`.msg-user`, `What is 4 plus 5`, "dormant edited message after reload")
+		assertAbsent(`.msg-user`, `What is 6 plus 7`, "dormant third turn after reload")
+		assertPresent(`.msg-user`, `What is 2 plus 3`, "first turn after reload")
+		Screenshot(t, page, "edit_resend_reloaded")
+
+		// A foreground tool turn runs for a real ten seconds whether the API
+		// traffic is recorded or replayed, so the mid-turn checks below do
+		// not race the turn. A plain command with no substitution needs no
+		// permission, so nothing needs answering afterward either.
+		page.MustElement(`textarea[name="text"]`).MustInput(
+			`Run this exact Bash command, foreground not background: sleep 10`)
+		page.MustElement(`.send-btn`).MustClick()
+		WaitForElement(t, page, ".tool-chip", 60*time.Second)
+		WaitForElement(t, page, "#turn-state.on", 10*time.Second)
+		if page.MustElement(`.msg-edit-btn`).MustVisible() {
+			t.Fatalf("Edit control visible while a tool runs")
+		}
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		WaitForElement(t, page, "#turn-state:not(.on)", 10*time.Second)
+		if !page.MustElement(`.msg-edit-btn`).MustVisible() {
+			t.Fatalf("Edit control hidden while idle after the tool turn")
+		}
+
+		// A shallow edit of the latest user message redoes the turn with no
+		// confirmation. No dialog handler is armed at this point, so an
+		// unexpected confirm would block the submit and the reply below
+		// would never arrive.
+		lastMsg := page.MustElementR(`.msg-user`, `sleep 10`)
+		lastMsg.MustElement(`.msg-edit-btn`).MustClick()
+		shallowBox, err := page.Timeout(10 * time.Second).Element(`.msg-edit-text`)
+		if err != nil {
+			t.Fatalf("shallow edit form never opened: %v", err)
+		}
+		shallowBox.MustSelectAllText().MustInput("What is 137 plus 289? Answer with just the number.")
+		page.MustElement(`.msg-edit-send`).MustClick()
+		if _, err := page.Timeout(120*time.Second).ElementR(".msg-assistant", `\b426\b`); err != nil {
+			t.Fatalf("reply to the shallow edit never appeared: %v", err)
+		}
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		WaitForElement(t, page, "#turn-state:not(.on)", 10*time.Second)
+		if !page.MustElement(`.msg-edit-btn`).MustVisible() {
+			t.Fatalf("Edit control hidden while idle")
+		}
+
+		// The replaced tool turn left the active branch.
+		Screenshot(t, page, "edit_resend_shallow")
+		assertPresent(`.msg-user`, `What is 137 plus 289`, "shallow edit message")
+		assertAbsent(`.msg-user`, `sleep 10`, "replaced tool turn message")
+		assertAbsent(`.tool-chip`, `sleep 10`, "replaced tool turn chip")
+		assertPresent(`.msg-user`, `What is 2 plus 3`, "first turn after shallow edit")
 	})
 }
 

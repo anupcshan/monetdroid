@@ -469,7 +469,12 @@ func RenderMsg(msg ServerMsg) string {
 		}
 		content.WriteString(strings.ReplaceAll(Esc(msg.Text), "\n", "<br>"))
 		// The uuid is the message's transcript uuid, minted at send time.
-		return fmt.Sprintf(`<div class="msg msg-user" data-uuid="%s"><div class="msg-bubble">%s</div></div>`, Esc(msg.UUID), content.String())
+		// The Edit control opens the inline edit form for this message.
+		return fmt.Sprintf(
+			`<div class="msg msg-user" data-uuid="%s">`+
+				`<button type="button" class="msg-edit-btn" aria-label="Edit message" hx-get="/message-edit?session_id=%s&uuid=%s" hx-target="closest .msg" hx-swap="outerHTML">✎</button>`+
+				`<div class="msg-bubble">%s</div></div>`,
+			Esc(msg.UUID), url.QueryEscape(msg.SessionID), url.QueryEscape(msg.UUID), content.String())
 	case "thinking":
 		if strings.TrimSpace(msg.Text) == "" {
 			return ""
@@ -791,6 +796,32 @@ func RenderQueueEdit(sessionID, text string) string {
 			`<button type="button" class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
 			`</div></form></div>`,
 		Esc(sessionID), Esc(text), Esc(sessionID),
+	)
+}
+
+// RenderMessageEdit renders the inline form that replaces a user message
+// bubble while it is being edited. Send rewinds the conversation to the
+// message and sends the edited text as its sibling. Cancel restores the
+// bubble. A deep edit, one with later user messages below it, abandons whole
+// turns and confirms before sending. Redoing the latest turn does not.
+// Cancel opts out of the form's hx-confirm with unset, because htmx inherits
+// it onto every request issued from inside the form.
+func RenderMessageEdit(sessionID, uuid, text string, deep bool) string {
+	confirm := ""
+	if deep {
+		confirm = ` hx-confirm="Sending replaces this message. Everything below it leaves this thread. Continue?"`
+	}
+	return fmt.Sprintf(
+		`<div class="msg msg-user msg-editing">`+
+			`<form class="msg-edit-form" hx-post="/edit-resend" hx-swap="none"%s>`+
+			`<input type="hidden" name="session_id" value="%s">`+
+			`<input type="hidden" name="uuid" value="%s">`+
+			`<textarea class="msg-edit-text" name="text" required>%s</textarea>`+
+			`<div class="msg-edit-actions">`+
+			`<button type="submit" class="msg-edit-send">Send</button>`+
+			`<button type="button" class="msg-edit-cancel" hx-confirm="unset" hx-get="/message-view?session_id=%s&uuid=%s" hx-target="closest .msg" hx-swap="outerHTML">Cancel</button>`+
+			`</div></form></div>`,
+		confirm, Esc(sessionID), Esc(uuid), Esc(text), url.QueryEscape(sessionID), url.QueryEscape(uuid),
 	)
 }
 

@@ -356,6 +356,8 @@ details[open] > .history-group-header::before { content: '▼ '; }
 .msg-user {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
 }
 .msg-user .msg-bubble {
   background: var(--accent);
@@ -367,6 +369,54 @@ details[open] > .history-group-header::before { content: '▼ '; }
   line-height: 1.5;
   word-break: break-word;
 }
+.msg-edit-btn {
+  background: none;
+  border: none;
+  color: var(--text2);
+  font-size: 13px;
+  padding: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  align-self: flex-end;
+  display: none;
+}
+/* The Edit control renders only while the session's claude process runs and
+   no turn or permission is in progress. */
+body:has(#proc-state.proc.alive):not(:has(#turn-state.on)) .msg-edit-btn { display: inline-block; }
+.msg-edit-btn:hover { color: var(--text); }
+.msg-editing { width: 100%; }
+.msg-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 85%;
+}
+.msg-edit-text {
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 3em;
+  max-height: 40vh;
+  field-sizing: content;
+}
+.msg-edit-text:focus { outline: none; border-color: var(--accent); }
+.msg-edit-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.msg-edit-send, .msg-edit-cancel {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.msg-edit-send { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 .msg-img-thumb {
   max-width: 200px;
   max-height: 200px;

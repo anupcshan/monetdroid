@@ -86,9 +86,11 @@ type ModelBase struct {
 	PermMode  claude.PermissionMode
 	Cost      CostInfo // initial cost from session (includes ModelName set by history load)
 	// Tip and LineParents seed the model's chain, which is then extended
-	// live by Apply as messages arrive.
-	Tip         string
-	LineParents map[string]string
+	// live by Apply as messages arrive. ProcessAlive is the initial
+	// process-liveness state, which session_started then maintains live.
+	Tip          string
+	LineParents  map[string]string
+	ProcessAlive bool
 }
 
 // BuildModel folds a base state and an event log into a SessionModel.
@@ -119,7 +121,7 @@ func BuildModel(base ModelBase, log []ServerMsg, sessionID string) *SessionModel
 		sessionID:         sessionID,
 		events:            make(chan serverMsgEvent, 256),
 		stopCh:            make(chan struct{}),
-		processAlive:      true, // live sessions always have a live process
+		processAlive:      base.ProcessAlive,
 		folding:           true,
 	}
 	for _, msg := range log {

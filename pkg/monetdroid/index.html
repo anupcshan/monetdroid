@@ -13,6 +13,12 @@
 
 <div class="app" hx-ext="sse" sse-connect="/events">
   <span id="page-title" style="display:none"></span>
+  <!-- Carries the claude-process liveness state as a class. CSS gates the
+       Edit control on user messages with it. -->
+  <span id="proc-state" style="display:none"></span>
+  <!-- Carries the turn-state (CanInterrupt) as a class. CSS hides the Edit
+       control while it is on. -->
+  <span id="turn-state" style="display:none"></span>
   <!--
     SSE swap target: receives all server-sent events and processes OOB swaps.
     hx-swap="none" means the element itself isn't updated. Only OOB elements

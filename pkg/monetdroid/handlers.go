@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -55,6 +56,9 @@ func RegisterRoutes(hub *Hub) *http.ServeMux {
 	mux.HandleFunc("/label-edit", hub.handleLabelEdit)
 	mux.HandleFunc("/label", hub.handleLabel)
 	mux.HandleFunc("/queue", hub.handleQueue)
+	mux.HandleFunc("/message-edit", hub.handleMessageEdit)
+	mux.HandleFunc("/message-view", hub.handleMessageView)
+	mux.HandleFunc("/edit-resend", hub.handleEditResend)
 	mux.HandleFunc("/close-session", hub.handleCloseSession)
 	mux.HandleFunc("/pull-main", hub.handlePullMain)
 	mux.HandleFunc("/pull-main-stream", hub.handlePullMainStream)
@@ -267,7 +271,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			parents := s.GetLineParents()
 			cost, _ := s.GetCostBarInfo()
 			base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost,
-				Tip: tip, LineParents: parents}
+				Tip: tip, LineParents: parents, ProcessAlive: s.ProcLive()}
 			// Refresh diff stat so the cost bar reflects current repo state.
 			if ds, err := GitDiffStat(NewGitTrace("page-diff-stat"), base.Cwd); err == nil {
 				s.SetDiffStat(ds)
@@ -577,7 +581,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			h.Labels.Set(claudeID, label)
 		}
 
-		base := ModelBase{Cwd: cwd, Label: label, AutoLabel: autoLabel, PermMode: claude.PermDefault}
+		base := ModelBase{Cwd: cwd, Label: label, AutoLabel: autoLabel, PermMode: claude.PermDefault, ProcessAlive: true}
 		if ds, err := GitDiffStat(NewGitTrace("send-diff-stat"), cwd); err == nil {
 			s.SetDiffStat(ds)
 		}
@@ -949,6 +953,202 @@ func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 	h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")), "", "")
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(nil)
+}
+
+// userMsgLoc describes a user message located in the log for editing.
+type userMsgLoc struct {
+	// msg is the located message.
+	msg ServerMsg
+	// laterUserUUIDs holds the uuids of the user messages after it on the
+	// active branch, in log order.
+	laterUserUUIDs []string
+	// rewindable reports whether an assistant message precedes it. Claude
+	// requires a preceding assistant on a rewind target, since it is the
+	// branch point.
+	rewindable bool
+}
+
+// findUserMessage locates a user message by uuid in the log. active is the
+// session's active-branch membership set, which confines the lookup to the
+// messages the render shows.
+func findUserMessage(log []ServerMsg, uuid string, active map[string]bool) (userMsgLoc, bool) {
+	if !active[uuid] {
+		return userMsgLoc{}, false
+	}
+	idx := -1
+	for i := range log {
+		if log[i].Type == "user_message" && log[i].AgentID == "" && log[i].UUID == uuid {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return userMsgLoc{}, false
+	}
+	var rewindable bool
+	for _, m := range log[:idx] {
+		if m.AgentID == "" && active[m.UUID] {
+			switch m.Type {
+			case "text", "thinking", "tool_use", "tool_result":
+				rewindable = true
+			}
+		}
+	}
+	var laterUserUUIDs []string
+	for _, m := range log[idx+1:] {
+		if m.Type == "user_message" && m.AgentID == "" && active[m.UUID] {
+			laterUserUUIDs = append(laterUserUUIDs, m.UUID)
+		}
+	}
+	return userMsgLoc{msg: log[idx], laterUserUUIDs: laterUserUUIDs, rewindable: rewindable}, true
+}
+
+// handleMessageEdit renders the inline edit form for a user message,
+// replacing its bubble.
+func (h *Hub) handleMessageEdit(w http.ResponseWriter, r *http.Request) {
+	sid := r.URL.Query().Get("session_id")
+	uuid := r.URL.Query().Get("uuid")
+	s := h.Sessions.Get(sid)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+	log := s.GetLog()
+	tip := s.GetTip()
+	loc, ok := findUserMessage(log, uuid, activeSet(s.GetLineParents(), tip))
+	if !ok {
+		w.WriteHeader(204)
+		return
+	}
+	deep := len(loc.laterUserUUIDs) > 0
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(RenderMessageEdit(sid, uuid, loc.msg.Text, deep)))
+}
+
+// handleMessageView restores a user message bubble from its edit form.
+func (h *Hub) handleMessageView(w http.ResponseWriter, r *http.Request) {
+	sid := r.URL.Query().Get("session_id")
+	uuid := r.URL.Query().Get("uuid")
+	s := h.Sessions.Get(sid)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+	log := s.GetLog()
+	tip := s.GetTip()
+	loc, ok := findUserMessage(log, uuid, activeSet(s.GetLineParents(), tip))
+	if !ok {
+		w.WriteHeader(204)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(RenderMsg(loc.msg)))
+}
+
+// handleEditResend rewinds the conversation to a user message and sends the
+// edited text as its sibling. claude only accepts the latest active user
+// message as a rewind target, so a deep edit rewinds every user message
+// below the target first, newest first, and the target last. A refusal
+// before the first rewind leaves the conversation untouched, and the error
+// goes to the session's error surface. A rewind failure after that point
+// leaves claude partway through the chain with no way back, so the session
+// is dropped from memory and the client is redirected. The reload rebuilds
+// from the transcript, which never recorded the rewinds.
+func (h *Hub) handleEditResend(w http.ResponseWriter, r *http.Request) {
+	sid := r.FormValue("session_id")
+	uuid := r.FormValue("uuid")
+	text := r.FormValue("text")
+	s := h.Sessions.Get(sid)
+	if s == nil {
+		w.WriteHeader(204)
+		return
+	}
+	log := s.GetLog()
+	tip := s.GetTip()
+	loc, ok := findUserMessage(log, uuid, activeSet(s.GetLineParents(), tip))
+	if !ok {
+		w.WriteHeader(204)
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: "cannot send an empty edit"})
+		w.WriteHeader(204)
+		return
+	}
+	proc := s.GetProc()
+	if proc == nil || proc.IsDead() {
+		h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: "cannot edit while the claude process is not running"})
+		w.WriteHeader(204)
+		return
+	}
+	// Editing mid-turn would chain the old turn's remaining events onto the
+	// new branch, and the failure path's teardown would amputate the
+	// streaming turn. The turn-state sentinel hides the control on the same
+	// condition.
+	if s.Model != nil && s.Model.CanInterrupt() {
+		h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: "cannot edit while the session is active"})
+		w.WriteHeader(204)
+		return
+	}
+	if !loc.rewindable {
+		h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: "cannot edit the first message of a conversation"})
+		w.WriteHeader(204)
+		return
+	}
+	rewind := func(target string) (claude.RewindResult, bool) {
+		result, err := proc.RewindConversation(target)
+		if err != nil {
+			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+			return claude.RewindResult{}, false
+		}
+		return result, true
+	}
+	abandon := func() {
+		h.Sessions.Remove(s.ID)
+		s.Close()
+		w.Header().Set("HX-Redirect", sessionURL(s))
+		w.WriteHeader(204)
+	}
+	for _, laterUUID := range slices.Backward(loc.laterUserUUIDs) {
+		if _, ok := rewind(laterUUID); !ok {
+			abandon()
+			return
+		}
+	}
+	result, ok := rewind(uuid)
+	if !ok {
+		abandon()
+		return
+	}
+
+	// Editing clears the queue. The resent message replaces whatever was
+	// waiting.
+	s.ClearQueue()
+	h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
+
+	// Move the tip to the branch point. The abandoned branch then sits
+	// behind the fork and drops out of the active walk on its own.
+	s.SetTip(result.PrecedingAssistantUUID)
+
+	// Rebuild the model over the truncated active path and push the full
+	// render, so every connected client drops the abandoned messages at
+	// once. The replacement message is not in the log yet, so the render
+	// excludes it and it streams in as the new turn.
+	cost, _ := s.GetCostBarInfo()
+	base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost,
+		Tip: s.GetTip(), LineParents: s.GetLineParents(), ProcessAlive: true}
+	newModel := BuildModel(base, s.GetLog(), s.ID)
+	newModel.DiffStat = s.GetDiffStat()
+	old := s.Model
+	s.Model = newModel
+	if old != nil {
+		old.Close()
+	}
+	h.BroadcastToSession(s.ID, FormatSSEDOM(RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))), "", "")
+
+	h.StartTurn(s, text, nil)
+
+	w.WriteHeader(204)
 }
 
 func (h *Hub) handleNotifications(w http.ResponseWriter, r *http.Request) {

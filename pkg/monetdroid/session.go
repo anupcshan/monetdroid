@@ -216,6 +216,13 @@ func (s *Session) GetProc() claude.Process {
 	return s.proc
 }
 
+// ProcLive reports whether the session's claude process exists and is
+// running.
+func (s *Session) ProcLive() bool {
+	p := s.GetProc()
+	return p != nil && !p.IsDead()
+}
+
 func (s *Session) LastAssistantText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -871,6 +878,15 @@ func (s *Session) AdvanceTip(uuid string) {
 	}
 	s.LineParents[uuid] = s.Tip
 	s.Tip = uuid
+}
+
+// SetTip moves the active-branch tip to uuid. The edit/resend path calls it
+// with the branch point claude reports for a rewind. The abandoned branch
+// then sits behind the fork point and drops out of the active walk.
+func (s *Session) SetTip(uuid string) {
+	s.mu.Lock()
+	s.Tip = uuid
+	s.mu.Unlock()
 }
 
 // NewUserUUID mints the uuid for a user message being sent. The uuid travels

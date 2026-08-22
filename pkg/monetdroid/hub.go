@@ -642,6 +642,12 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 
 		if proc.IsDead() {
 			s.CloseAllBgStops()
+			// A respawn replaces the session's process and announces the
+			// new one with session_started. A stale loop must not flip the
+			// sentinel dead after that.
+			if s.GetProc() == proc {
+				h.Broadcast(ServerMsg{Type: "session_ended", SessionID: s.ID})
+			}
 		}
 
 		interrupted, next := s.DrainQueue()

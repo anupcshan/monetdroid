@@ -12,6 +12,18 @@ import (
 // DOMCmd is an alias for render.Cmd. See the render package for documentation.
 type DOMCmd = render.Cmd
 
+// procStateCmd returns the swap for the process-state sentinel. CSS gates
+// the Edit control on user messages with it, so the control renders only
+// while the session's claude process is running.
+func procStateCmd(alive bool) DOMCmd {
+	cls := ""
+	if alive {
+		cls = " alive"
+	}
+	return DOMCmd{Target: "proc-state", Strategy: "outerHTML",
+		Content: fmt.Sprintf(`<span id="proc-state" class="proc%s"></span>`, cls)}
+}
+
 // RenderFull produces all DOM commands for a full page render. Callers should
 // register bg paths and commands on the session from the model before
 // calling this.
@@ -32,6 +44,7 @@ func RenderFull(m *SessionModel, sessionID string, reviewCount int) []DOMCmd {
 			Content: fmt.Sprintf(`<input type="hidden" name="session_id" id="session-id" value="%s">`, Esc(sessionID))},
 		DOMCmd{Target: "close-btn", Strategy: "outerHTML",
 			Content: `<form id="close-btn" hx-post="/close" hx-swap="none" hx-include="#session-id"><button class="header-btn" type="submit" title="Close session">✕</button></form>`},
+		procStateCmd(m.processAlive),
 	)
 
 	cmds = append(cmds, titleCmd(label)...)
@@ -237,6 +250,15 @@ func RenderEvent(m *SessionModel, msg ServerMsg, sessionID string) []DOMCmd {
 		})
 		return cmds
 
+	case "session_started":
+		// The process runs from this event on, so the sentinel goes live.
+		return []DOMCmd{procStateCmd(true)}
+
+	case "session_ended":
+		// The process is gone, so the sentinel goes dead and CSS hides the
+		// Edit controls.
+		return []DOMCmd{procStateCmd(false)}
+
 	case "user_message":
 		rendered := RenderMsg(msg)
 		if rendered == "" {
@@ -270,6 +292,19 @@ func streamingClearCmds() []DOMCmd {
 	}
 }
 
+// turnStateCmd returns the swap for the turn-state sentinel. CSS hides the
+// Edit control on user messages while it carries the on class. It mirrors
+// CanInterrupt, the same condition the edit handler refuses on, so the
+// control never hides a state the server would accept.
+func turnStateCmd(busy bool) DOMCmd {
+	cls := ""
+	if busy {
+		cls = " on"
+	}
+	return DOMCmd{Target: "turn-state", Strategy: "outerHTML",
+		Content: fmt.Sprintf(`<span id="turn-state" class="%s"></span>`, cls)}
+}
+
 func activeCmds(active, canStop bool) []DOMCmd {
 	var cmds []DOMCmd
 	if active {
@@ -295,6 +330,7 @@ func activeCmds(active, canStop bool) []DOMCmd {
 				Content: `<span id="stop-btn"></span>`},
 		)
 	}
+	cmds = append(cmds, turnStateCmd(canStop))
 	return cmds
 }
 
