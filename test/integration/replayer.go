@@ -118,10 +118,12 @@ type Replayer struct {
 	cassettePath string
 	t            *testing.T
 
-	// pauseMu acts as a gate for incoming requests. Pause() locks it.
-	// Unpause() unlocks it. Requests acquire and immediately release it,
-	// so they pass through instantly when unpaused but block when paused.
-	pauseMu sync.Mutex
+	// gateMu guards gate.
+	gateMu sync.Mutex
+	// gate is closed while unpaused. Pause() replaces it with an open
+	// channel. Unpause() closes it. Requests wait on the current channel,
+	// so they block while paused and pass through once unpaused.
+	gate chan struct{}
 }
 
 // Cassette files are zstd-compressed JSONL on disk. The system prompt
@@ -148,10 +150,26 @@ func init() {
 }
 
 // Pause blocks all future API requests until Unpause is called.
-func (r *Replayer) Pause() { r.pauseMu.Lock() }
+func (r *Replayer) Pause() {
+	r.gateMu.Lock()
+	defer r.gateMu.Unlock()
+	select {
+	case <-r.gate: // unpaused
+		r.gate = make(chan struct{})
+	default: // already paused
+	}
+}
 
 // Unpause releases all blocked API requests and resumes normal flow.
-func (r *Replayer) Unpause() { r.pauseMu.Unlock() }
+func (r *Replayer) Unpause() {
+	r.gateMu.Lock()
+	defer r.gateMu.Unlock()
+	select {
+	case <-r.gate: // already unpaused
+	default:
+		close(r.gate)
+	}
+}
 
 // NewReplayer creates a new replayer. In replay mode, it loads the cassette immediately.
 // In record mode, upstream must be set (e.g. "https://api.anthropic.com").
@@ -161,7 +179,10 @@ func NewReplayer(t *testing.T, cassettePath, mode, upstream string) *Replayer {
 		upstream:     upstream,
 		cassettePath: cassettePath,
 		t:            t,
+		gate:         make(chan struct{}),
 	}
+	// The gate starts closed so the replayer begins unpaused.
+	close(r.gate)
 	if mode == "replay" {
 		r.loadCassette()
 	}
@@ -226,9 +247,10 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
 	req.Body.Close()
 
-	// Gate: blocks while paused, passes through instantly when unpaused.
-	r.pauseMu.Lock()   //nolint:staticcheck // intentional gate pattern
-	r.pauseMu.Unlock() //nolint:staticcheck
+	r.gateMu.Lock()
+	gate := r.gate
+	r.gateMu.Unlock()
+	<-gate
 
 	// Normalize the live body by replacing any live random IDs with their
 	// recorded counterparts so the hash matches. Without this, IDs that leak

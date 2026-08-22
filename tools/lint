@@ -7,6 +7,13 @@ if [ -n "$out" ]; then
 	printf '%s\n' "$out"
 	echo
 fi
+nolint=$(grep -rn '//[[:space:]]*nolint' --include='*.go' .) || [ "$?" -eq 1 ] || rc=1
+if [ -n "$nolint" ]; then
+	echo "nolint directives are banned. Fix the underlying finding instead:"
+	printf '%s\n' "$nolint"
+	echo
+	rc=1
+fi
 go tool golangci-lint run ./... || rc=$?
 go mod tidy || rc=$?
 go build -o /tmp/exportedmutex ./tools/analyzers/cmd/exportedmutex && \
