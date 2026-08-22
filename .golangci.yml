@@ -6,6 +6,7 @@ linters:
   enable:
     - gocritic
     - modernize
+    - nonamedreturns
 output:
   show-stats: false
   formats:

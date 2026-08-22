@@ -319,79 +319,89 @@ func splitDiffByFile(fullDiff string) []string {
 func renderToolDiff(msg ServerMsg) (string, string) {
 	switch msg.Tool {
 	case "Edit", "FileEdit":
-		if fp, old, new_, replAll, ok := editDiffFromInput(msg.Input); ok {
-			if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
-				return diffHTML, editSummary(fp, old, new_)
+		if d, ok := editDiffFromInput(msg.Input); ok {
+			if diffHTML := RenderEditDiffTable(d.filePath, d.oldString, d.newString, d.replaceAll, msg.SessionID, true); diffHTML != "" {
+				return diffHTML, editSummary(d.filePath, d.oldString, d.newString)
 			}
 		}
 	case "Write", "FileWrite":
-		if fp, content, ok := writeDiffFromInput(msg.Input); ok {
-			if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
-				lines := strings.Count(content, "\n") + 1
-				return diffHTML, fmt.Sprintf("Write %s +%d", filepath.Base(fp), lines)
+		if d, ok := writeDiffFromInput(msg.Input); ok {
+			if diffHTML := RenderWriteDiffTable(d.filePath, d.content, msg.SessionID, true); diffHTML != "" {
+				lines := strings.Count(d.content, "\n") + 1
+				return diffHTML, fmt.Sprintf("Write %s +%d", filepath.Base(d.filePath), lines)
 			}
 		}
 	case "mcp__kb__edit":
-		if fp, old, new_, replAll, ok := kbEditDiffFromInput(msg.Input); ok {
-			original, readOK := readKBFile(msg.Cwd, fp)
-			if diffHTML := renderEditDiff(fp, original, old, new_, replAll, msg.SessionID, true, readOK); diffHTML != "" {
-				return diffHTML, editSummary(fp, old, new_)
+		if d, ok := kbEditDiffFromInput(msg.Input); ok {
+			original, readOK := readKBFile(msg.Cwd, d.filePath)
+			if diffHTML := renderEditDiff(d.filePath, original, d.oldString, d.newString, d.replaceAll, msg.SessionID, true, readOK); diffHTML != "" {
+				return diffHTML, editSummary(d.filePath, d.oldString, d.newString)
 			}
 		}
 	case "mcp__kb__write":
-		if fp, content, ok := kbWriteDiffFromInput(msg.Input); ok {
-			original, readOK := readKBFile(msg.Cwd, fp)
-			if diffHTML := renderWriteDiff(fp, original, content, readOK, msg.SessionID, true); diffHTML != "" {
-				lines := strings.Count(content, "\n") + 1
-				return diffHTML, fmt.Sprintf("Write %s +%d", filepath.Base(fp), lines)
+		if d, ok := kbWriteDiffFromInput(msg.Input); ok {
+			original, readOK := readKBFile(msg.Cwd, d.filePath)
+			if diffHTML := renderWriteDiff(d.filePath, original, d.content, readOK, msg.SessionID, true); diffHTML != "" {
+				lines := strings.Count(d.content, "\n") + 1
+				return diffHTML, fmt.Sprintf("Write %s +%d", filepath.Base(d.filePath), lines)
 			}
 		}
 	}
 	return "", ""
 }
 
-func editDiffFromInput(input *protocol.ToolInput) (filePath, oldStr, newStr string, replaceAll, ok bool) {
+// editDiff carries the parts of an Edit tool input needed to render a diff.
+type editDiff struct {
+	filePath   string
+	oldString  string
+	newString  string
+	replaceAll bool
+}
+
+// writeDiff carries the parts of a Write tool input needed to render a diff.
+type writeDiff struct {
+	filePath string
+	content  string
+}
+
+func editDiffFromInput(input *protocol.ToolInput) (editDiff, bool) {
 	if input == nil || input.Edit == nil {
-		return
+		return editDiff{}, false
 	}
-	filePath = input.Edit.FilePath
-	oldStr = input.Edit.OldString
-	newStr = input.Edit.NewString
-	replaceAll = input.Edit.ReplaceAll != nil && *input.Edit.ReplaceAll
-	ok = true
-	return
+	return editDiff{
+		filePath:   input.Edit.FilePath,
+		oldString:  input.Edit.OldString,
+		newString:  input.Edit.NewString,
+		replaceAll: input.Edit.ReplaceAll != nil && *input.Edit.ReplaceAll,
+	}, true
 }
 
-func writeDiffFromInput(input *protocol.ToolInput) (filePath, content string, ok bool) {
+func writeDiffFromInput(input *protocol.ToolInput) (writeDiff, bool) {
 	if input == nil || input.Write == nil {
-		return
+		return writeDiff{}, false
 	}
-	filePath = input.Write.FilePath
-	content = input.Write.Content
-	ok = filePath != "" && content != ""
-	return
+	d := writeDiff{filePath: input.Write.FilePath, content: input.Write.Content}
+	return d, d.filePath != "" && d.content != ""
 }
 
-func kbEditDiffFromInput(input *protocol.ToolInput) (path, oldStr, newStr string, replaceAll, ok bool) {
+func kbEditDiffFromInput(input *protocol.ToolInput) (editDiff, bool) {
 	if input == nil || input.KBEdit == nil {
-		return
+		return editDiff{}, false
 	}
-	path = input.KBEdit.Path
-	oldStr = input.KBEdit.OldString
-	newStr = input.KBEdit.NewString
-	replaceAll = input.KBEdit.ReplaceAll != nil && *input.KBEdit.ReplaceAll
-	ok = true
-	return
+	return editDiff{
+		filePath:   input.KBEdit.Path,
+		oldString:  input.KBEdit.OldString,
+		newString:  input.KBEdit.NewString,
+		replaceAll: input.KBEdit.ReplaceAll != nil && *input.KBEdit.ReplaceAll,
+	}, true
 }
 
-func kbWriteDiffFromInput(input *protocol.ToolInput) (path, content string, ok bool) {
+func kbWriteDiffFromInput(input *protocol.ToolInput) (writeDiff, bool) {
 	if input == nil || input.KBWrite == nil {
-		return
+		return writeDiff{}, false
 	}
-	path = input.KBWrite.Path
-	content = input.KBWrite.Content
-	ok = path != "" && content != ""
-	return
+	d := writeDiff{filePath: input.KBWrite.Path, content: input.KBWrite.Content}
+	return d, d.filePath != "" && d.content != ""
 }
 
 // readKBFile reads a kb store entry's current content for diffing. It uses
@@ -580,25 +590,25 @@ func RenderPermission(msg ServerMsg) string {
 	}
 	var detailHTML string
 	if msg.PermTool == "Edit" || msg.PermTool == "FileEdit" {
-		if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
-			detailHTML = RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true)
+		if d, ok := editDiffFromInput(msg.PermInput); ok {
+			detailHTML = RenderEditDiffTable(d.filePath, d.oldString, d.newString, d.replaceAll, msg.SessionID, true)
 		}
 	}
 	if msg.PermTool == "Write" || msg.PermTool == "FileWrite" {
-		if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
-			detailHTML = RenderWriteDiffTable(fp, content, msg.SessionID, true)
+		if d, ok := writeDiffFromInput(msg.PermInput); ok {
+			detailHTML = RenderWriteDiffTable(d.filePath, d.content, msg.SessionID, true)
 		}
 	}
 	if msg.PermTool == "mcp__kb__edit" {
-		if fp, old, new_, replAll, ok := kbEditDiffFromInput(msg.PermInput); ok {
-			original, readOK := readKBFile(msg.Cwd, fp)
-			detailHTML = renderEditDiff(fp, original, old, new_, replAll, msg.SessionID, true, readOK)
+		if d, ok := kbEditDiffFromInput(msg.PermInput); ok {
+			original, readOK := readKBFile(msg.Cwd, d.filePath)
+			detailHTML = renderEditDiff(d.filePath, original, d.oldString, d.newString, d.replaceAll, msg.SessionID, true, readOK)
 		}
 	}
 	if msg.PermTool == "mcp__kb__write" {
-		if fp, content, ok := kbWriteDiffFromInput(msg.PermInput); ok {
-			original, readOK := readKBFile(msg.Cwd, fp)
-			detailHTML = renderWriteDiff(fp, original, content, readOK, msg.SessionID, true)
+		if d, ok := kbWriteDiffFromInput(msg.PermInput); ok {
+			original, readOK := readKBFile(msg.Cwd, d.filePath)
+			detailHTML = renderWriteDiff(d.filePath, original, d.content, readOK, msg.SessionID, true)
 		}
 	}
 	if detailHTML == "" {

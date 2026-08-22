@@ -104,20 +104,20 @@ func sessionURL(s *Session) string {
 
 // loadSessionFromDisk parses a JSONL file and creates an in-memory session.
 func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
-	allMsgs, claudeID, cwd, branches, sessUsage, parents, err := ParseSessionMessages(jsonlPath)
+	st, err := parseSessionMessages(jsonlPath)
 	if err != nil {
 		return nil
 	}
-	if cwd == "" {
+	if st.cwd == "" {
 		dirKey := filepath.Base(filepath.Dir(jsonlPath))
-		cwd = "/" + strings.ReplaceAll(dirKey, "-", "/")
+		st.cwd = "/" + strings.ReplaceAll(dirKey, "-", "/")
 	}
 
-	s := h.Sessions.Create(claudeID, cwd)
-	s.InitFromHistory(h.Labels.Get(claudeID), jsonlPath, branches, CostInfo(sessUsage))
+	s := h.Sessions.Create(st.claudeID, st.cwd)
+	s.InitFromHistory(h.Labels.Get(st.claudeID), jsonlPath, st.branches, CostInfo(st.usage))
 
 	var lastUUID string
-	for _, m := range allMsgs {
+	for _, m := range st.msgs {
 		sm := ServerMsg{SessionID: s.ID, UUID: m.UUID}
 		switch m.Type {
 		case "user":
@@ -151,7 +151,7 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 		}
 		s.Log = append(s.Log, sm)
 	}
-	s.InitTree(parents, lastUUID)
+	s.InitTree(st.parents, lastUUID)
 	return s
 }
 
@@ -524,17 +524,17 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 				handleRawStreamEvent(ss, &raw, broadcast)
 			}
 		}
-		bsEnv, bsDir, bsSignal := NewBashstreamerEnv(h.baseURL)
+		bs := NewBashstreamerEnv(h.baseURL)
 		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
 			Command:           h.claudeCommand,
 			PermissionHandler: permHandler,
 			OnRawEvent:        onRawEvent,
-			ExtraEnv:          bsEnv,
-			BashstreamerDir:   bsDir,
+			ExtraEnv:          bs.Env,
+			BashstreamerDir:   bs.Dir,
 		})
 		if err != nil {
-			if bsDir != "" {
-				os.RemoveAll(bsDir)
+			if bs.Dir != "" {
+				os.RemoveAll(bs.Dir)
 			}
 			log.Printf("[send] start process failed: %s", err)
 			w.WriteHeader(500)
@@ -575,7 +575,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.InitLive(label, autoLabel, proc)
-		s.BashSignalPath = bsSignal
+		s.BashSignalPath = bs.Signal
 
 		if label != "" {
 			h.Labels.Set(claudeID, label)
@@ -1264,7 +1264,7 @@ func (h *Hub) handlePullMainStream(w http.ResponseWriter, r *http.Request) {
 	streamLines := func(r io.Reader) {
 		defer func() { done <- struct{}{} }()
 		scanner := bufio.NewScanner(r)
-		scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
 			if atEOF && len(data) == 0 {
 				return 0, nil, nil
 			}

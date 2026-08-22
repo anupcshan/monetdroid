@@ -207,20 +207,27 @@ func NewHubWithDataDir(baseURL, dataDir string, claudeCommand []string) (*Hub, e
 	return h, nil
 }
 
+// BashstreamerEnv holds the environment entry, temp directory, and signal
+// file path that NewBashstreamerEnv sets up.
+type BashstreamerEnv struct {
+	Env    []string
+	Dir    string
+	Signal string
+}
+
 // NewBashstreamerEnv creates a per-process temp directory containing a
 // CLAUDE_CODE_SHELL_PREFIX wrapper script and signal file. The wrapper
 // reads the session ID from the signal and embeds it in the push URL so
-// the server can route directly to the correct session. Returns the
-// ExtraEnv entry, the temp directory (for cleanup), and the signal path.
-// Returns nil env if bashstreamer is not on PATH or setup fails, so
-// Claude falls back to its default shell without streaming.
-func NewBashstreamerEnv(baseURL string) (env []string, dir string, signal string) {
+// the server can route directly to the correct session. Env is nil if
+// bashstreamer is not on PATH or setup fails, so Claude falls back to its
+// default shell without streaming.
+func NewBashstreamerEnv(baseURL string) BashstreamerEnv {
 	if _, err := exec.LookPath("bashstreamer"); err != nil {
-		return nil, "", ""
+		return BashstreamerEnv{}
 	}
 	dir, err := os.MkdirTemp("", "monetdroid-bs-")
 	if err != nil {
-		return nil, "", ""
+		return BashstreamerEnv{}
 	}
 	pushURL := baseURL + "/bash-stream/"
 	script := filepath.Join(dir, "bashstreamer-wrapper")
@@ -244,11 +251,13 @@ exec /bin/bash -c "$1"
 `, signalFile, signalFile, signalFile, signalFile, pushURL)
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		os.RemoveAll(dir)
-		return nil, "", ""
+		return BashstreamerEnv{}
 	}
-	return []string{
-		"CLAUDE_CODE_SHELL_PREFIX=" + script,
-	}, dir, signalFile
+	return BashstreamerEnv{
+		Env:    []string{"CLAUDE_CODE_SHELL_PREFIX=" + script},
+		Dir:    dir,
+		Signal: signalFile,
+	}
 }
 
 func (h *Hub) RemoveClient(cid string) {
@@ -498,31 +507,31 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 					upgraded := false
 					switch msg.PermTool {
 					case "Edit", "FileEdit":
-						if fp, old, new_, replAll, ok := editDiffFromInput(msg.PermInput); ok {
-							if diffHTML := RenderEditDiffTable(fp, old, new_, replAll, msg.SessionID, true); diffHTML != "" {
+						if d, ok := editDiffFromInput(msg.PermInput); ok {
+							if diffHTML := RenderEditDiffTable(d.filePath, d.oldString, d.newString, d.replaceAll, msg.SessionID, true); diffHTML != "" {
 								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
 								upgraded = true
 							}
 						}
 					case "Write", "FileWrite":
-						if fp, content, ok := writeDiffFromInput(msg.PermInput); ok {
-							if diffHTML := RenderWriteDiffTable(fp, content, msg.SessionID, true); diffHTML != "" {
+						if d, ok := writeDiffFromInput(msg.PermInput); ok {
+							if diffHTML := RenderWriteDiffTable(d.filePath, d.content, msg.SessionID, true); diffHTML != "" {
 								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
 								upgraded = true
 							}
 						}
 					case "mcp__kb__edit":
-						if fp, old, new_, replAll, ok := kbEditDiffFromInput(msg.PermInput); ok {
-							original, readOK := readKBFile(sess.GetCwd(), fp)
-							if diffHTML := renderEditDiff(fp, original, old, new_, replAll, msg.SessionID, true, readOK); diffHTML != "" {
+						if d, ok := kbEditDiffFromInput(msg.PermInput); ok {
+							original, readOK := readKBFile(sess.GetCwd(), d.filePath)
+							if diffHTML := renderEditDiff(d.filePath, original, d.oldString, d.newString, d.replaceAll, msg.SessionID, true, readOK); diffHTML != "" {
 								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
 								upgraded = true
 							}
 						}
 					case "mcp__kb__write":
-						if fp, content, ok := kbWriteDiffFromInput(msg.PermInput); ok {
-							original, readOK := readKBFile(sess.GetCwd(), fp)
-							if diffHTML := renderWriteDiff(fp, original, content, readOK, msg.SessionID, true); diffHTML != "" {
+						if d, ok := kbWriteDiffFromInput(msg.PermInput); ok {
+							original, readOK := readKBFile(sess.GetCwd(), d.filePath)
+							if diffHTML := renderWriteDiff(d.filePath, original, d.content, readOK, msg.SessionID, true); diffHTML != "" {
 								cmds = append(cmds, DOMCmd{Target: "tool-detail-" + toolUseID, Strategy: "innerHTML", Content: diffHTML})
 								upgraded = true
 							}
@@ -586,7 +595,7 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 		broadcast := func(msg ServerMsg) {
 			h.Broadcast(msg)
 		}
-		bsEnv, bsDir, bsSignal := NewBashstreamerEnv(h.baseURL)
+		bs := NewBashstreamerEnv(h.baseURL)
 		var err error
 		proc, err = claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
 			handleStreamEvent(s, &event, broadcast)
@@ -598,18 +607,18 @@ func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
 			OnRawEvent: func(raw protocol.RawStreamEvent) {
 				handleRawStreamEvent(s, &raw, broadcast)
 			},
-			ExtraEnv:        bsEnv,
-			BashstreamerDir: bsDir,
+			ExtraEnv:        bs.Env,
+			BashstreamerDir: bs.Dir,
 		})
 		if err != nil {
-			if bsDir != "" {
-				os.RemoveAll(bsDir)
+			if bs.Dir != "" {
+				os.RemoveAll(bs.Dir)
 			}
 			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
 			return
 		}
 		s.SetProc(proc)
-		s.BashSignalPath = bsSignal
+		s.BashSignalPath = bs.Signal
 		h.Broadcast(ServerMsg{Type: "session_started", SessionID: s.ID})
 	}
 

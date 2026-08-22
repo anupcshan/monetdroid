@@ -3657,7 +3657,7 @@ func TestModelNameInCostBar(t *testing.T) {
 		WaitForText(t, page, "#cost-bar", modelNameFromProvider(t), 5*time.Second)
 		Screenshot(t, page, "model_name_step1")
 
-		// Step 2: Kill process and reload from JSONL (tests ParseSessionMessages rehydration)
+		// Step 2: Kill process and reload from JSONL (tests parseSessionMessages rehydration)
 		currentURL := page.MustEval(`() => window.location.href`).String()
 		page.MustElement(`#close-btn button`).MustClick()
 		page.MustNavigate(currentURL).MustWaitStable()

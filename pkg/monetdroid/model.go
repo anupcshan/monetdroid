@@ -433,7 +433,7 @@ func (m *SessionModel) Apply(msg ServerMsg) {
 // model's mutex. RenderFull runs off the model goroutine and must not read
 // the chain while Apply mutates it, since a map read racing a write is a
 // runtime fatal.
-func (m *SessionModel) ChainSnapshot() (tip string, parents map[string]string) {
+func (m *SessionModel) ChainSnapshot() (string, map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.Tip, maps.Clone(m.LineParents)

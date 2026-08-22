@@ -406,10 +406,10 @@ func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
 		if jsonlPath == "" {
 			return
 		}
-		used, window, modelName, err := scanTokenUsage(jsonlPath)
-		if err != nil || (used == 0 && window == 0 && modelName == "") {
+		tu, err := scanTokenUsage(jsonlPath)
+		if err != nil || (tu.contextUsed == 0 && tu.contextWindow == 0 && tu.modelName == "") {
 			time.Sleep(2 * time.Second)
-			used, window, modelName, err = scanTokenUsage(jsonlPath)
+			tu, err = scanTokenUsage(jsonlPath)
 		}
 		if err != nil {
 			return
@@ -421,16 +421,16 @@ func refreshTokenCount(s *Session, broadcast func(ServerMsg)) {
 		}
 		cost := &CostInfo{}
 		changed := false
-		if used > 0 && used != s.CostAccum.ContextUsed {
-			cost.ContextUsed = used
+		if tu.contextUsed > 0 && tu.contextUsed != s.CostAccum.ContextUsed {
+			cost.ContextUsed = tu.contextUsed
 			changed = true
 		}
-		if window > 0 && window != s.CostAccum.ContextWindow {
-			cost.ContextWindow = window
+		if tu.contextWindow > 0 && tu.contextWindow != s.CostAccum.ContextWindow {
+			cost.ContextWindow = tu.contextWindow
 			changed = true
 		}
-		if modelName != "" && modelName != s.CostAccum.ModelName {
-			cost.ModelName = modelName
+		if tu.modelName != "" && tu.modelName != s.CostAccum.ModelName {
+			cost.ModelName = tu.modelName
 			changed = true
 		}
 		if changed {

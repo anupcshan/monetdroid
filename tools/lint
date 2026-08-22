@@ -8,6 +8,7 @@ if [ -n "$out" ]; then
 	echo
 fi
 go tool golangci-lint run ./... || rc=$?
+go mod tidy || rc=$?
 go build -o /tmp/exportedmutex ./tools/analyzers/cmd/exportedmutex && \
   go vet -vettool=/tmp/exportedmutex ./... || rc=$?
 

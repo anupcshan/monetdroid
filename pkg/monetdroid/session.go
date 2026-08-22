@@ -183,12 +183,6 @@ func (s *Session) GetCostBarInfo() (CostInfo, DiffStat) {
 	return s.CostAccum, s.DiffStat
 }
 
-func (s *Session) Stats() (msgCount, ctxUsed, ctxWindow int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.Log), s.CostAccum.ContextUsed, s.CostAccum.ContextWindow
-}
-
 func (s *Session) GetTodosCopy() []protocol.Todo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -277,20 +271,20 @@ func (s *Session) SetProc(proc claude.Process) {
 
 // AppendStreamingTextAtomically appends a delta and reports whether it was the
 // first delta of a new stream. Check and mutation happen under one lock.
-func (s *Session) AppendStreamingTextAtomically(delta string) (accumulated string, first bool) {
+func (s *Session) AppendStreamingTextAtomically(delta string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	first = s.StreamingText == ""
+	first := s.StreamingText == ""
 	s.StreamingText += delta
 	return s.StreamingText, first
 }
 
 // AppendStreamingThinkingAtomically appends a thinking delta and reports whether
 // it was the first delta of a new stream.
-func (s *Session) AppendStreamingThinkingAtomically(delta string) (accumulated string, first bool) {
+func (s *Session) AppendStreamingThinkingAtomically(delta string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	first = s.StreamingThinking == ""
+	first := s.StreamingThinking == ""
 	s.StreamingThinking += delta
 	return s.StreamingThinking, first
 }
@@ -311,14 +305,14 @@ func (s *Session) ClearStreaming() {
 }
 
 // DrainStreaming atomically reads and clears both streaming accumulators.
-func (s *Session) DrainStreaming() (text string, thinking string) {
+// It returns the accumulated text and thinking, in that order.
+func (s *Session) DrainStreaming() (string, string) {
 	s.mu.Lock()
-	text = s.StreamingText
-	thinking = s.StreamingThinking
+	text, thinking := s.StreamingText, s.StreamingThinking
 	s.StreamingText = ""
 	s.StreamingThinking = ""
 	s.mu.Unlock()
-	return
+	return text, thinking
 }
 
 func (s *Session) GetDiffStat() DiffStat {
@@ -553,10 +547,11 @@ func (b *BashStreamBuffer) Close() {
 // line is a truncation note. newSeq is the sequence number to pass on
 // the next call. done is true when the buffer is closed and all lines
 // have been returned.
-func (b *BashStreamBuffer) Read(seq int64) (lines []string, newSeq int64, done bool) {
+func (b *BashStreamBuffer) Read(seq int64) ([]string, int64, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	var lines []string
 	if seq < b.startSeq {
 		dropped := b.startSeq - seq
 		lines = append(lines, fmt.Sprintf("… [%d lines truncated] …", dropped))
@@ -564,11 +559,10 @@ func (b *BashStreamBuffer) Read(seq int64) (lines []string, newSeq int64, done b
 	}
 
 	idx := int(seq - b.startSeq)
+	newSeq := seq
 	if idx < len(b.lines) {
 		lines = append(lines, b.lines[idx:]...)
 		newSeq = b.startSeq + int64(len(b.lines))
-	} else {
-		newSeq = seq
 	}
 	return lines, newSeq, b.done
 }
@@ -670,10 +664,10 @@ func (s *Session) BashCmdForTool(toolID string) string {
 // not connected yet), it waits for the connection so an SSE client that
 // attaches during the tool_use-to-connect window still receives output.
 // Returns ok=false if toolID is not the active stream.
-func (s *Session) AwaitBashStreamForTool(toolID string, ctx context.Context) (buf *BashStreamBuffer, cmd string, ok bool) {
+func (s *Session) AwaitBashStreamForTool(toolID string, ctx context.Context) (*BashStreamBuffer, string, bool) {
 	s.mu.Lock()
 	if s.StreamedBashID == toolID && s.BashStreamLines != nil {
-		buf, cmd = s.BashStreamLines, s.BashStreamCmd
+		buf, cmd := s.BashStreamLines, s.BashStreamCmd
 		s.mu.Unlock()
 		return buf, cmd, true
 	}

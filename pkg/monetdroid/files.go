@@ -15,26 +15,33 @@ import (
 
 var chromaFormatterLines = chromahtml.New(chromahtml.WithLineNumbers(true), chromahtml.WithLinkableLineNumbers(true, "L"))
 
-// resolveFilesCwd extracts the working directory from session ID or cwd query param.
-func (h *Hub) resolveFilesCwd(r *http.Request) (sessionID, cwd string, ok bool) {
-	sessionID = r.URL.Query().Get("session")
+// filesCwd carries the files view's session ID and working directory.
+type filesCwd struct {
+	sessionID string
+	cwd       string
+}
+
+// resolveFilesCwd extracts the working directory from the session or cwd
+// query param. The session param wins when it resolves to a live session.
+// The bool result is false when the session param names an unknown session
+// or when neither param yields a cwd.
+func (h *Hub) resolveFilesCwd(r *http.Request) (filesCwd, bool) {
+	sessionID := r.URL.Query().Get("session")
 	if sessionID != "" {
 		s := h.Sessions.Get(sessionID)
 		if s == nil {
-			return "", "", false
+			return filesCwd{}, false
 		}
-		cwd = s.GetCwd()
-		return sessionID, cwd, true
+		return filesCwd{sessionID: sessionID, cwd: s.GetCwd()}, true
 	}
-	cwd = r.URL.Query().Get("cwd")
-	if cwd != "" {
-		return "", cwd, true
+	if cwd := r.URL.Query().Get("cwd"); cwd != "" {
+		return filesCwd{cwd: cwd}, true
 	}
-	return "", "", false
+	return filesCwd{}, false
 }
 
 func (h *Hub) handleFiles(w http.ResponseWriter, r *http.Request) {
-	sessionID, cwd, ok := h.resolveFilesCwd(r)
+	fc, ok := h.resolveFilesCwd(r)
 	if !ok {
 		http.Error(w, "session or cwd required", http.StatusBadRequest)
 		return
@@ -54,21 +61,21 @@ func (h *Hub) handleFiles(w http.ResponseWriter, r *http.Request) {
 	switch tab {
 	case "browse":
 		browsePath := r.URL.Query().Get("path")
-		content = renderBrowseContent(t, sessionID, cwd, browsePath)
+		content = renderBrowseContent(t, fc.sessionID, fc.cwd, browsePath)
 	case "search":
 		query := r.URL.Query().Get("q")
-		content = renderSearchContent(t, sessionID, cwd, query)
+		content = renderSearchContent(t, fc.sessionID, fc.cwd, query)
 	case "commits":
 		if hash := r.URL.Query().Get("commit"); hash != "" {
-			content = renderCommitDetail(t, sessionID, cwd, hash)
+			content = renderCommitDetail(t, fc.sessionID, fc.cwd, hash)
 		} else {
-			content = renderCommitsContent(t, sessionID, cwd)
+			content = renderCommitsContent(t, fc.sessionID, fc.cwd)
 		}
 	default:
-		content = renderChangesContent(t, sessionID, cwd)
+		content = renderChangesContent(t, fc.sessionID, fc.cwd)
 	}
 
-	w.Write([]byte(renderFilesPage(sessionID, cwd, tab, content)))
+	w.Write([]byte(renderFilesPage(fc.sessionID, fc.cwd, tab, content)))
 }
 
 func (h *Hub) handleFilesStage(w http.ResponseWriter, r *http.Request) {

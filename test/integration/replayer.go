@@ -526,7 +526,7 @@ var planFileRe = regexp.MustCompile(`create your plan at ([^\s\\]+\.md)`)
 // detectPlanFileSub extracts the plan file path from the recorded and live
 // request bodies. Returns (old, new) if they differ, or ("", "") if no
 // substitution is needed.
-func detectPlanFileSub(recorded, live string) (old, nw string) {
+func detectPlanFileSub(recorded, live string) (string, string) {
 	rm := planFileRe.FindStringSubmatch(recorded)
 	lm := planFileRe.FindStringSubmatch(live)
 	if len(rm) < 2 || len(lm) < 2 {
@@ -648,13 +648,14 @@ func sseReplacePartial(event, newPartial string) string {
 // summarizeRequest returns a one-line description of a /v1/messages request
 // body for diagnosing replay mismatches, plus the message count and last
 // message role used to identify a structurally matching candidate.
-func summarizeRequest(body []byte) (line string, msgs int, lastRole string) {
+func summarizeRequest(body []byte) (string, int, string) {
 	var s struct {
 		Messages []struct {
 			Role string `json:"role"`
 		} `json:"messages"`
 	}
-	lastRole = "?"
+	var msgs int
+	lastRole := "?"
 	if err := json.Unmarshal(body, &s); err == nil {
 		msgs = len(s.Messages)
 		if msgs > 0 {
@@ -665,8 +666,8 @@ func summarizeRequest(body []byte) (line string, msgs int, lastRole string) {
 	if len(h) > 12 {
 		h = h[:12]
 	}
-	line = fmt.Sprintf("msgs=%d bytes=%d hash=%s lastRole=%s", msgs, len(body), h, lastRole)
-	return
+	line := fmt.Sprintf("msgs=%d bytes=%d hash=%s lastRole=%s", msgs, len(body), h, lastRole)
+	return line, msgs, lastRole
 }
 
 func commonPrefixLen(a, b string) int {

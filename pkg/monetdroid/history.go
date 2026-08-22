@@ -352,15 +352,26 @@ func parseSessionInfo(fpath string) (cachedSessionInfo, error) {
 	return info, scanner.Err()
 }
 
-// scanTokenUsage reads just the token usage fields from a JSONL file.
-// Returns the last non-zero contextUsed from assistant entries and
-// contextWindow from the result entry.
-func scanTokenUsage(fpath string) (used, window int, modelName string, err error) {
+// tokenUsage holds the usage fields scanTokenUsage extracts from a
+// transcript. A struct keeps the two token counts from being swapped at
+// call sites.
+type tokenUsage struct {
+	contextUsed   int
+	contextWindow int
+	modelName     string
+}
+
+// scanTokenUsage reads the token usage fields from a JSONL file.
+// contextUsed holds the last non-zero value from assistant entries.
+// contextWindow holds the value from the result entry. modelName holds
+// the first name seen, skipping synthetic names in assistant entries.
+func scanTokenUsage(fpath string) (tokenUsage, error) {
 	f, err := os.Open(fpath)
 	if err != nil {
-		return 0, 0, "", err
+		return tokenUsage{}, err
 	}
 	defer f.Close()
+	var tu tokenUsage
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -375,37 +386,50 @@ func scanTokenUsage(fpath string) (used, window int, modelName string, err error
 			if u := entry.Message.Usage; u != nil {
 				ctx := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
 				if ctx > 0 {
-					used = ctx
+					tu.contextUsed = ctx
 				}
 			}
-			if modelName == "" && entry.Message.Model != "" && entry.Message.Model != "synthetic" {
-				modelName = entry.Message.Model
+			if tu.modelName == "" && entry.Message.Model != "" && entry.Message.Model != "synthetic" {
+				tu.modelName = entry.Message.Model
 			}
 		}
 		if entry.Type == "result" {
 			for name, mu := range entry.ModelUsage {
-				if modelName == "" && name != "" {
-					modelName = name
+				if tu.modelName == "" && name != "" {
+					tu.modelName = name
 				}
 				if mu.ContextWindow > 0 {
-					window = mu.ContextWindow
+					tu.contextWindow = mu.ContextWindow
 				}
 				break
 			}
 		}
 	}
-	return used, window, modelName, scanner.Err()
+	return tu, scanner.Err()
 }
 
-func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID string, cwd string, branches []string, usage SessionUsage, parents map[string]string, err error) {
+// sessionTranscript holds everything parsed from one session JSONL file.
+type sessionTranscript struct {
+	msgs     []HistoryMessage
+	claudeID string
+	cwd      string
+	branches []string
+	usage    SessionUsage
+	parents  map[string]string
+}
+
+// parseSessionMessages parses a Claude session transcript JSONL file into
+// rendered messages and session metadata.
+func parseSessionMessages(jsonlPath string) (sessionTranscript, error) {
 	f, err := os.Open(jsonlPath)
 	if err != nil {
-		return nil, "", "", nil, usage, nil, err
+		return sessionTranscript{}, err
 	}
 	defer f.Close()
+	var st sessionTranscript
 	toolNames := make(map[string]string) // tool_use id → tool name
 	branchSet := make(map[string]struct{})
-	parents = make(map[string]string)
+	st.parents = make(map[string]string)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -416,8 +440,8 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
-		if entry.CWD != "" && cwd == "" {
-			cwd = entry.CWD
+		if entry.CWD != "" && st.cwd == "" {
+			st.cwd = entry.CWD
 		}
 		if entry.GitBranch != "" {
 			branchSet[entry.GitBranch] = struct{}{}
@@ -427,24 +451,24 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		// link missing from this map ends the walk early, dropping
 		// everything above it.
 		if entry.UUID != "" {
-			parents[entry.UUID] = entry.ParentUUID
+			st.parents[entry.UUID] = entry.ParentUUID
 		}
 		if entry.IsSidechain {
 			continue
 		}
-		msgStart := len(msgs)
+		msgStart := len(st.msgs)
 		switch entry.Type {
 		case "system":
 			if entry.Subtype == "compact_boundary" {
-				msgs = append(msgs, HistoryMessage{Type: "compact_boundary"})
+				st.msgs = append(st.msgs, HistoryMessage{Type: "compact_boundary"})
 			}
 		case "user":
 			if entry.SessionID != "" {
-				claudeID = entry.SessionID
+				st.claudeID = entry.SessionID
 			}
 			c := entry.Message.Content
 			if c.Text != "" && len(c.Blocks) == 0 {
-				msgs = append(msgs, HistoryMessage{Type: "user", Text: c.Text})
+				st.msgs = append(st.msgs, HistoryMessage{Type: "user", Text: c.Text})
 				break
 			}
 			var userText string
@@ -462,7 +486,7 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 				case "tool_result":
 					toolName := toolNames[b.ToolUseID]
 					if len(b.Content.Images) > 0 {
-						msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Images: b.Content.Images})
+						st.msgs = append(st.msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Images: b.Content.Images})
 					} else {
 						output := b.Content.String()
 						if isBoringResult(output) {
@@ -470,53 +494,53 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 						}
 						// Keep the entry even with empty output so the tool chip's
 						// spinner is stripped on replay.
-						msgs = append(msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: output})
+						st.msgs = append(st.msgs, HistoryMessage{Type: "tool_result", Tool: toolName, ToolUseID: b.ToolUseID, Output: output})
 					}
 				}
 			}
 			if userText != "" || len(userImages) > 0 {
-				msgs = append(msgs, HistoryMessage{Type: "user", Text: userText, Images: userImages})
+				st.msgs = append(st.msgs, HistoryMessage{Type: "user", Text: userText, Images: userImages})
 			}
 		case "assistant":
 			if u := entry.Message.Usage; u != nil {
 				ctx := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
 				if ctx > 0 {
-					usage.ContextUsed = ctx
+					st.usage.ContextUsed = ctx
 				}
 			}
-			if usage.ModelName == "" && entry.Message.Model != "" && entry.Message.Model != "synthetic" {
-				usage.ModelName = entry.Message.Model
+			if st.usage.ModelName == "" && entry.Message.Model != "" && entry.Message.Model != "synthetic" {
+				st.usage.ModelName = entry.Message.Model
 			}
 			for _, b := range entry.Message.Content.Blocks {
 				switch b.Type {
 				case "thinking":
 					if b.Thinking != "" {
-						msgs = append(msgs, HistoryMessage{Type: "thinking", Text: b.Thinking})
+						st.msgs = append(st.msgs, HistoryMessage{Type: "thinking", Text: b.Thinking})
 					}
 				case "text":
 					if b.Text != "" {
-						msgs = append(msgs, HistoryMessage{Type: "assistant", Text: b.Text})
+						st.msgs = append(st.msgs, HistoryMessage{Type: "assistant", Text: b.Text})
 					}
 				case "tool_use":
 					if b.ID != "" {
 						toolNames[b.ID] = b.Name
 					}
-					msgs = append(msgs, HistoryMessage{Type: "tool_use", Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput)})
+					st.msgs = append(st.msgs, HistoryMessage{Type: "tool_use", Tool: b.Name, ToolUseID: b.ID, Input: protocol.ParseToolInput(b.Name, b.RawInput)})
 				}
 			}
 		case "result":
 			if entry.ResultSID != "" {
-				claudeID = entry.ResultSID
+				st.claudeID = entry.ResultSID
 			}
 			if entry.TotalCost > 0 {
-				usage.TotalCostUSD = entry.TotalCost
+				st.usage.TotalCostUSD = entry.TotalCost
 			}
 			for name, info := range entry.ModelUsage {
-				if usage.ModelName == "" && name != "" && name != "synthetic" {
-					usage.ModelName = name
+				if st.usage.ModelName == "" && name != "" && name != "synthetic" {
+					st.usage.ModelName = name
 				}
 				if info.ContextWindow > 0 {
-					usage.ContextWindow = info.ContextWindow
+					st.usage.ContextWindow = info.ContextWindow
 				}
 				break
 			}
@@ -525,13 +549,13 @@ func ParseSessionMessages(jsonlPath string) (msgs []HistoryMessage, claudeID str
 		// this entry. Nodes that produce no rendered message still contribute
 		// their uuid to parents above, so the chain stays walkable across
 		// them.
-		for i := msgStart; i < len(msgs); i++ {
-			msgs[i].UUID = entry.UUID
+		for i := msgStart; i < len(st.msgs); i++ {
+			st.msgs[i].UUID = entry.UUID
 		}
 	}
 	for b := range branchSet {
-		branches = append(branches, b)
+		st.branches = append(st.branches, b)
 	}
-	sort.Strings(branches)
-	return msgs, claudeID, cwd, branches, usage, parents, scanner.Err()
+	sort.Strings(st.branches)
+	return st, scanner.Err()
 }
