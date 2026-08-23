@@ -967,6 +967,14 @@ func walkStrings(v any, fn func(string) string) any {
 // normalizeRequestBody produces a canonical JSON representation of the body
 // with per-run noise replaced by sentinels. Returns an error only if the
 // body isn't JSON.
+//
+// Normalization is a last resort. Each rule must be maintained indefinitely,
+// and a rule that matches too broadly masks genuine input drift (a reworded
+// system prompt, a changed tool schema) that the hash comparison exists to
+// surface. Prefer removing the nondeterminism at its source, for example
+// pinning fixture file mtimes so tool output carries no wall-clock times.
+// Re-recording a cassette is cheap compared to the ongoing cost of a
+// normalizer rule. Add a rule only when no source-side fix exists.
 func normalizeRequestBody(body []byte) ([]byte, error) {
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {

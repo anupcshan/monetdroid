@@ -12,6 +12,35 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
+// WaitForTurnComplete asserts the "no pending turn" end state: a new
+// assistant message has appeared and the turn has finished streaming.
+// prevAssistantsCount is the .msg-assistant count captured before the turn
+// started. The wait gates on a new assistant message first because
+// #stop-btn:empty alone matches the leftover empty span between turns.
+func WaitForTurnComplete(t *testing.T, page *rod.Page, prevAssistantsCount int) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for len(page.MustElements(".msg-assistant")) <= prevAssistantsCount {
+		if time.Now().After(deadline) {
+			t.Fatalf("WaitForTurnComplete: no new assistant message after 60s")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+}
+
+// WaitForPendingPermission asserts the "pending permissions" end state: the
+// turn has ended blocked on an unresolved permission prompt, with its Allow
+// control still on screen. No further API call can happen until the prompt
+// is answered, so the test ends with the prompt unanswered and the cassette
+// is complete. Use this or WaitForTurnComplete when a test starts a turn it
+// does not otherwise drive to completion. Ending any other way leaves a
+// turn that can still issue API calls the cassette does not contain.
+func WaitForPendingPermission(t *testing.T, page *rod.Page) {
+	t.Helper()
+	WaitForElement(t, page, ".perm-inline .perm-allow", 60*time.Second)
+}
+
 // Screenshot captures the current page as a PNG and writes its HTML to a
 // sibling .html file.
 func Screenshot(t *testing.T, page *rod.Page, name string) {
@@ -69,6 +98,31 @@ func WaitForElement(t *testing.T, page *rod.Page, selector string, timeout time.
 		t.Fatalf("WaitForElement(%q): %v", selector, err)
 	}
 	return el
+}
+
+// assert carries the running test. Its helpers let error-returning calls
+// chain like rod's Must* variants while failing the test instead of
+// panicking. Prefer these helpers where failure is possible, since a Must*
+// panic aborts the suite and destroys other tests' results.
+type assert struct{ t *testing.T }
+
+// Must returns v, failing the test when err is non-nil. The failure reports
+// the error at the caller's line.
+func (a assert) Must[T any](v T, err error) T {
+	a.t.Helper()
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	return v
+}
+
+// NoError fails the test when err is non-nil, for calls that return only an
+// error. The failure reports the error at the caller's line.
+func (a assert) NoError(err error) {
+	a.t.Helper()
+	if err != nil {
+		a.t.Fatal(err)
+	}
 }
 
 func TestdataDir() string {

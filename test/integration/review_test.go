@@ -111,6 +111,7 @@ func TestEditReviewComment(t *testing.T) {
 		Screenshot(t, page, "edit_review_before_send")
 
 		// Send the review.
+		prevAssistantsCount := len(page.MustElements(".msg-assistant"))
 		page.MustElement(".review-send-btn").MustClick()
 
 		// Review message should appear as a user message.
@@ -128,8 +129,7 @@ func TestEditReviewComment(t *testing.T) {
 			t.Fatalf("review bar should be empty after send, got: %s", reviewBarHTML)
 		}
 
-		// Wait for Claude to respond to the review.
-		WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+		WaitForTurnComplete(t, page, prevAssistantsCount)
 		Screenshot(t, page, "edit_review_response")
 	})
 }
@@ -398,6 +398,7 @@ func TestFilesPageReviewComment(t *testing.T) {
 		Screenshot(t, page, "files_page_before_send")
 
 		// Send the review.
+		prevAssistantsCount := len(page.MustElements(".msg-assistant"))
 		page.MustElement(".review-send-btn").MustClick()
 
 		// Review message should appear as a user message.
@@ -415,8 +416,7 @@ func TestFilesPageReviewComment(t *testing.T) {
 			t.Fatalf("review bar should be empty after send, got: %s", reviewBarHTML)
 		}
 
-		// Wait for Claude to respond to the review.
-		WaitForElement(t, page, "#stop-btn:empty", 120*time.Second)
+		WaitForTurnComplete(t, page, prevAssistantsCount)
 		Screenshot(t, page, "files_page_response")
 	})
 }

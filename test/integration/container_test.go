@@ -115,6 +115,26 @@ func ensureWorkspaceTrust() {
 	}
 }
 
+// fixtureMtime is the fixed modification time stamped on every file and
+// directory the test harness creates. Real mtimes vary per run and appear
+// in tool output such as `ls -l`, which would drift every cassette between
+// record and replay.
+var fixtureMtime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// pinFixtureMtimes stamps fixtureMtime on path and every ancestor directory
+// up to and including the filesystem root. Writing a file refreshes the
+// parent directory's mtime, so ancestors are stamped too.
+func pinFixtureMtimes(path string) error {
+	for p := filepath.Clean(path); ; p = filepath.Dir(p) {
+		if err := os.Chtimes(p, fixtureMtime, fixtureMtime); err != nil {
+			return err
+		}
+		if p == "/" || p == "." {
+			return nil
+		}
+	}
+}
+
 func TestMain(m *testing.M) {
 	switch os.Getenv("KB_CLI_MODE") {
 	case "kb":
@@ -146,6 +166,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
 		// Inside the container: run the monetdroid server.
 		os.MkdirAll(containerWorkdir, 0o755)
+		if err := pinFixtureMtimes(containerWorkdir); err != nil {
+			log.Fatalf("pin fixture mtimes: %v", err)
+		}
 		ensureWorkspaceTrust()
 		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", nil)
 		if err != nil {
@@ -163,6 +186,10 @@ func TestMain(m *testing.M) {
 				return
 			}
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if err := pinFixtureMtimes(path); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
@@ -838,9 +865,7 @@ func TestEditResend(t *testing.T) {
 			}
 			WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 			WaitForElement(t, page, "#turn-state:not(.on)", 10*time.Second)
-			if !page.MustElement(`.msg-edit-btn`).MustVisible() {
-				t.Fatalf("Edit control hidden while idle")
-			}
+			f.NoError(f.Must(page.Timeout(5 * time.Second).Element(`.msg-edit-btn`)).WaitVisible())
 		}
 
 		turn("What is 2 plus 3? Answer with just the number.", "5")
@@ -964,9 +989,7 @@ func TestEditResend(t *testing.T) {
 		}
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 		WaitForElement(t, page, "#turn-state:not(.on)", 10*time.Second)
-		if !page.MustElement(`.msg-edit-btn`).MustVisible() {
-			t.Fatalf("Edit control hidden while idle after the tool turn")
-		}
+		f.NoError(f.Must(page.Timeout(5 * time.Second).Element(`.msg-edit-btn`)).WaitVisible())
 
 		// A shallow edit of the latest user message redoes the turn with no
 		// confirmation. No dialog handler is armed at this point, so an
@@ -985,9 +1008,7 @@ func TestEditResend(t *testing.T) {
 		}
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 		WaitForElement(t, page, "#turn-state:not(.on)", 10*time.Second)
-		if !page.MustElement(`.msg-edit-btn`).MustVisible() {
-			t.Fatalf("Edit control hidden while idle")
-		}
+		f.NoError(f.Must(page.Timeout(5 * time.Second).Element(`.msg-edit-btn`)).WaitVisible())
 
 		// The replaced tool turn left the active branch.
 		Screenshot(t, page, "edit_resend_shallow")
@@ -3405,8 +3426,13 @@ func TestKBWebView(t *testing.T) {
 		page := f.Page()
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+		prevAssistantsCount := len(page.MustElements(".msg-assistant"))
 		page.MustElement(`textarea[name="text"]`).MustInput("hello")
 		page.MustElement(`.send-btn`).MustClick()
+		// The cost bar swaps again when the turn ends. Complete the turn
+		// before grabbing the KB link, or that swap can detach the element
+		// between finding it and clicking it.
+		WaitForTurnComplete(t, page, prevAssistantsCount)
 
 		kbLink := WaitForElement(t, page, `a[href*="/kb/"]`, 30*time.Second)
 		kbLink.MustClick()

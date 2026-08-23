@@ -105,6 +105,7 @@ func buildDockerImage(t *testing.T) {
 // ContainerFixture holds everything needed for a container-based integration test.
 type ContainerFixture struct {
 	T           *testing.T
+	assert      // Must and NoError helpers bound to T
 	containerID string
 	ServerURL   string
 	Browser     *rod.Browser
@@ -351,6 +352,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 
 	return &ContainerFixture{
 		T:           t,
+		assert:      assert{t},
 		containerID: containerID,
 		ServerURL:   serverURL,
 		Browser:     browser,

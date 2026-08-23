@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +86,7 @@ func TestKBEditReviewComment(t *testing.T) {
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
 		// Send the review as a user message.
+		prevAssistantsCount := len(page.MustElements(".msg-assistant"))
 		page.MustElement(".review-send-btn").MustClick()
 		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
 		if err != nil {
@@ -100,6 +100,8 @@ func TestKBEditReviewComment(t *testing.T) {
 		if !strings.Contains(content, "- Done: wire up the health check.") {
 			t.Fatalf("kb edit did not land in the store: %s", content)
 		}
+
+		WaitForTurnComplete(t, page, prevAssistantsCount)
 	})
 }
 
@@ -152,7 +154,7 @@ func TestKBWriteReviewComment(t *testing.T) {
 		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
-		prevAssistants := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
+		prevAssistantsCount := len(page.MustElements(".msg-assistant"))
 		page.MustElement(".review-send-btn").MustClick()
 		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
 		if err != nil {
@@ -161,13 +163,7 @@ func TestKBWriteReviewComment(t *testing.T) {
 		}
 		Screenshot(t, page, "kb_write_review_sent")
 
-		// The review starts a new Claude turn. Wait for it to finish so the
-		// cassette records the full exchange. Gate on a new assistant message
-		// first, because #stop-btn:empty alone matches the leftover empty span
-		// between turns.
-		page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
-			`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
-		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		WaitForTurnComplete(t, page, prevAssistantsCount)
 		Screenshot(t, page, "kb_write_review_response")
 
 		// The new entry must exist in the store.
@@ -248,5 +244,7 @@ func TestKBOverwriteReviewComment(t *testing.T) {
 		if !strings.Contains(content, "Subtract") {
 			t.Fatalf("kb overwrite did not land in the store: %s", content)
 		}
+
+		WaitForPendingPermission(t, page)
 	})
 }
