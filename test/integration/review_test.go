@@ -115,7 +115,7 @@ func TestEditReviewComment(t *testing.T) {
 		page.MustElement(".review-send-btn").MustClick()
 
 		// Review message should appear as a user message.
-		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", `Review comments:[\s\S]*line \d+: \S`)
 		if err != nil {
 			Screenshot(t, page, "edit_review_send_fail")
 			t.Fatalf("review message never appeared: %v", err)
@@ -193,7 +193,7 @@ func TestWriteReviewComment(t *testing.T) {
 
 		// Send the review for the new file.
 		page.MustElement(".review-send-btn").MustClick()
-		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", `Review comments:[\s\S]*line \d+: \S`)
 		if err != nil {
 			Screenshot(t, page, "write_review_new_send_fail")
 			t.Fatalf("review message for new file never appeared: %v", err)
@@ -307,7 +307,7 @@ func TestOverwriteReviewComment(t *testing.T) {
 
 		// Send the review.
 		page.MustElement(".review-send-btn").MustClick()
-		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", `Review comments:[\s\S]*line \d+: \S`)
 		if err != nil {
 			Screenshot(t, page, "overwrite_review_send_fail")
 			t.Fatalf("review message never appeared: %v", err)
@@ -402,7 +402,7 @@ func TestFilesPageReviewComment(t *testing.T) {
 		page.MustElement(".review-send-btn").MustClick()
 
 		// Review message should appear as a user message.
-		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", `Review comments:[\s\S]*line \d+: \S`)
 		if err != nil {
 			Screenshot(t, page, "files_page_send_fail")
 			t.Fatalf("review message never appeared: %v", err)

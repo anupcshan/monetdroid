@@ -13,11 +13,12 @@ import (
 
 // ReviewComment represents a single inline comment on a diff line.
 type ReviewComment struct {
-	ID   string
-	File string
-	Line int
-	Side string // "old" or "new"
-	Text string
+	ID      string
+	File    string
+	Line    int
+	Side    string // "old" or "new"
+	Text    string
+	Content string // the diff line's text, captured when the comment was created
 }
 
 // ReviewStore holds review comments for sessions.
@@ -66,7 +67,8 @@ func (rs *ReviewStore) Count(sessionID string) int {
 	return len(rs.comments[sessionID])
 }
 
-// FormatReviewMessage composes all comments for a session into a markdown message.
+// FormatReviewMessage composes all comments for a session into the message
+// sent to the session on Send Review.
 func (rs *ReviewStore) FormatReviewMessage(sessionID string) string {
 	comments := rs.List(sessionID)
 	if len(comments) == 0 {
@@ -89,14 +91,25 @@ func (rs *ReviewStore) FormatReviewMessage(sessionID string) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("## Code Review Comments\n\n")
+	b.WriteString("Review comments:\n")
 	for _, file := range fileOrder {
-		fmt.Fprintf(&b, "### %s\n\n", file)
+		fmt.Fprintf(&b, "File %s:\n", file)
 		for _, c := range byFile[file] {
-			fmt.Fprintf(&b, "**Line %d:** %s\n\n", c.Line, c.Text)
+			fmt.Fprintf(&b, "line %d: %s\n", c.Line, formatLineContent(c.Content))
+			fmt.Fprintf(&b, "%s\n", c.Text)
 		}
 	}
 	return b.String()
+}
+
+// formatLineContent renders a captured diff line for the review message.
+// A blank or whitespace-only line is quoted so the emptiness is visible.
+// Every other line is unquoted.
+func formatLineContent(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return `"` + content + `"`
+	}
+	return content
 }
 
 func randomID() string {
@@ -128,6 +141,7 @@ func (h *Hub) handleReviewCommentForm(w http.ResponseWriter, r *http.Request) {
 	file := r.URL.Query().Get("file")
 	line := r.URL.Query().Get("line")
 	side := r.URL.Query().Get("side")
+	content := r.URL.Query().Get("content")
 	if side == "" {
 		side = "new"
 	}
@@ -140,13 +154,14 @@ func (h *Hub) handleReviewCommentForm(w http.ResponseWriter, r *http.Request) {
 		`<input type="hidden" name="file" value="%s">`+
 		`<input type="hidden" name="line" value="%s">`+
 		`<input type="hidden" name="side" value="%s">`+
+		`<input type="hidden" name="content" value="%s">`+
 		`<textarea name="text" class="review-textarea" placeholder="Add review comment..." rows="3"></textarea>`+
 		`<div class="review-form-actions">`+
 		`<button type="submit" class="review-submit">Comment</button>`+
 		`<button type="button" class="review-cancel" `+
 		`hx-on:click="this.closest('tr').remove()">Cancel</button>`+
 		`</div></form></td></tr>`,
-		Esc(sessionID), Esc(file), Esc(line), Esc(side))
+		Esc(sessionID), Esc(file), Esc(line), Esc(side), Esc(content))
 }
 
 func (h *Hub) handleReviewComment(w http.ResponseWriter, r *http.Request) {
@@ -164,11 +179,12 @@ func (h *Hub) handleReviewComment(w http.ResponseWriter, r *http.Request) {
 	line, _ := strconv.Atoi(lineStr)
 
 	c := ReviewComment{
-		ID:   randomID(),
-		File: file,
-		Line: line,
-		Side: side,
-		Text: text,
+		ID:      randomID(),
+		File:    file,
+		Line:    line,
+		Side:    side,
+		Text:    text,
+		Content: r.FormValue("content"),
 	}
 	h.Reviews.Add(sessionID, c)
 

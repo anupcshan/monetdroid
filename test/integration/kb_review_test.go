@@ -73,7 +73,7 @@ func TestKBEditReviewComment(t *testing.T) {
 		// Add an inline review comment while blocked.
 		WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second).MustClick()
 		WaitForElement(t, page, ".review-form", 5*time.Second)
-		page.MustElement(".review-textarea").MustInput("Confirm the health check is actually wired before marking this done")
+		page.MustElement(".review-textarea").MustInput("Why is this marked done? The health check isn't wired anywhere. Answer briefly, don't change anything.")
 		page.MustElement(".review-submit").MustClick()
 		WaitForElement(t, page, ".review-comment", 5*time.Second)
 		WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
@@ -88,7 +88,7 @@ func TestKBEditReviewComment(t *testing.T) {
 		// Send the review as a user message.
 		prevAssistantsCount := len(page.MustElements(".msg-assistant"))
 		page.MustElement(".review-send-btn").MustClick()
-		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", `Review comments:[\s\S]*line \d+: \S`)
 		if err != nil {
 			Screenshot(t, page, "kb_edit_review_send_fail")
 			t.Fatalf("review message never appeared: %v", err)
@@ -144,7 +144,7 @@ func TestKBWriteReviewComment(t *testing.T) {
 		// Inline comment while blocked.
 		WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second).MustClick()
 		WaitForElement(t, page, ".review-form", 5*time.Second)
-		page.MustElement(".review-textarea").MustInput("Note the division error case in the plan")
+		page.MustElement(".review-textarea").MustInput("Does the plan handle division by zero? Answer in a sentence, don't edit the entry.")
 		page.MustElement(".review-submit").MustClick()
 		WaitForElement(t, page, ".review-comment", 5*time.Second)
 		WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)
@@ -156,7 +156,7 @@ func TestKBWriteReviewComment(t *testing.T) {
 
 		prevAssistantsCount := len(page.MustElements(".msg-assistant"))
 		page.MustElement(".review-send-btn").MustClick()
-		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", `Review comments:[\s\S]*line \d+: \S`)
 		if err != nil {
 			Screenshot(t, page, "kb_write_review_send_fail")
 			t.Fatalf("review message never appeared: %v", err)
@@ -232,7 +232,7 @@ func TestKBOverwriteReviewComment(t *testing.T) {
 		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
 
 		page.MustElement(".review-send-btn").MustClick()
-		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", "Code Review Comments")
+		_, err := page.Timeout(10*time.Second).ElementR(".msg-user", `Review comments:[\s\S]*line \d+: \S`)
 		if err != nil {
 			Screenshot(t, page, "kb_overwrite_review_send_fail")
 			t.Fatalf("review message never appeared: %v", err)

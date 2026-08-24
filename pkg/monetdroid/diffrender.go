@@ -3,6 +3,7 @@ package monetdroid
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -82,7 +83,7 @@ func renderWriteDiff(filePath, original, content string, readOK bool, sessionID 
 		fmt.Fprintf(&b, `<tr class="diff-line diff-ins">`)
 		fmt.Fprintf(&b, `<td class="diff-gutter diff-gutter-old"></td>`)
 		if reviewEnabled && sessionID != "" {
-			writeCommentGutter(&b, fmt.Sprintf("%d", lineNum), sessionID, filePath, lineNum)
+			writeCommentGutter(&b, fmt.Sprintf("%d", lineNum), sessionID, filePath, lineNum, lines[i])
 		} else {
 			fmt.Fprintf(&b, `<td class="diff-gutter diff-gutter-new">%d</td>`, lineNum)
 		}
@@ -267,7 +268,7 @@ func renderDiffFiles(files []DiffFile, sessionID string, reviewEnabled bool, lin
 
 				// New-line gutter: includes comment button when review is enabled
 				if reviewEnabled && sessionID != "" && dl.Type != DiffLineRemove {
-					writeCommentGutter(&b, gutterNew, sessionID, fileName, dl.NewLine)
+					writeCommentGutter(&b, gutterNew, sessionID, fileName, dl.NewLine, dl.Content)
 				} else {
 					fmt.Fprintf(&b, `<td class="diff-gutter diff-gutter-new">%s</td>`, gutterNew)
 				}
@@ -284,9 +285,11 @@ func renderDiffFiles(files []DiffFile, sessionID string, reviewEnabled bool, lin
 }
 
 // writeCommentGutter writes a gutter cell with a tappable line number and hover comment button.
-func writeCommentGutter(b *strings.Builder, display, sessionID, filePath string, lineNum int) {
-	commentURL := fmt.Sprintf("/review/comment-form?session=%s&amp;file=%s&amp;line=%d&amp;side=new",
-		Esc(sessionID), Esc(filePath), lineNum)
+// content is the diff line's text. The comment carries it so the review
+// message can quote the line as it was when commented on.
+func writeCommentGutter(b *strings.Builder, display, sessionID, filePath string, lineNum int, content string) {
+	commentURL := fmt.Sprintf("/review/comment-form?session=%s&amp;file=%s&amp;line=%d&amp;side=new&amp;content=%s",
+		Esc(sessionID), Esc(filePath), lineNum, Esc(url.QueryEscape(content)))
 	fmt.Fprintf(b, `<td class="diff-gutter diff-gutter-new">`+
 		`<span class="diff-line-num" hx-get="%s" hx-target="closest tr" hx-swap="afterend" hx-trigger="click">%s</span></td>`,
 		commentURL, display)
