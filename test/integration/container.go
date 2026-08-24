@@ -203,7 +203,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 	// In replay mode, cassette must exist
 	if mode == "replay" {
 		if _, err := os.Stat(cassettePath); err != nil {
-			t.Fatalf("cassette %s/%s not found; record it with go tool mdrdev record-cassette", p.Name, cassetteName)
+			t.Fatalf("cassette %s/%s not found. Record it with 'go test ./test/integration/ -run <TestName> -record'", p.Name, cassetteName)
 		}
 	}
 

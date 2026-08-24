@@ -1,7 +1,7 @@
 package integration
 
-// Record cassettes (real upstream calls) with mdrdev:
-//   go tool mdrdev record-cassette ./test/integration/ -run TestFoo
+// Record cassettes (real upstream calls) with:
+//   go test ./test/integration/ -run TestFoo -record
 
 import (
 	"context"

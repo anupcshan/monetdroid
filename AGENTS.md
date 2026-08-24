@@ -12,16 +12,19 @@
 
 ## Running tests
 
-Run tests with `go tool mdrdev test`:
+Run tests with:
 
-  go tool mdrdev test ./... -count=1 -timeout 600s
+  go test ./... -count=1 -timeout 600s
 
-Invoke it bare: no pipes, redirects, or shell expansions. Raw `go test` and
-`go run` are denied.
+Invoke it bare: no pipes, redirects, or shell expansions, so the full output is
+captured for diagnosis.
 
 Record integration cassettes with:
 
-  go tool mdrdev record-cassette ./test/integration/ -run TestFoo
+  go test ./test/integration/ -run TestFoo -record
+
+`-record` must come after the package path. Placed before it, go test consumes
+the package path as the flag's value and tests the wrong package.
 
 Cassettes are recorded API request/response streams, not Claude Code logs or UI
 state. To debug behavior, read the screenshots (`*.png`) and DOM snapshots
