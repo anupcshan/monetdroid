@@ -31,7 +31,6 @@ type SessionModel struct {
 	SuppressedIDs     map[string]bool             // tool_use ids for suppressed tools
 	PendingPerms      map[string]ServerMsg        // unresolved inline permission_request
 	SubagentSections  map[string]*SubagentSection // parent Agent tool_use_id -> section state
-	QueuedText        string                      // next user message queued for sending
 	// Tip and LineParents are the model's active-branch chain, seeded from
 	// the session at build time and extended live by Apply as messages
 	// arrive.

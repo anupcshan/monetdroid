@@ -66,10 +66,16 @@ func Format(cmds []Cmd, extraOOBs ...string) string {
 // is cleared. Otherwise it shows the queued message with Edit and Cancel
 // buttons.
 func QueueBar(sessionID, text string) string {
+	return OOB("queue-bar", "innerHTML", QueueBarContent(sessionID, text))
+}
+
+// QueueBarContent returns the inner HTML of the queue bar. When text is empty
+// it returns empty HTML, which clears the bar.
+func QueueBarContent(sessionID, text string) string {
 	if text == "" {
-		return OOB("queue-bar", "innerHTML", "")
+		return ""
 	}
-	return OOB("queue-bar", "innerHTML", fmt.Sprintf(
+	return fmt.Sprintf(
 		`<div class="queue-content">`+
 			`<span class="queue-label">queued:</span>`+
 			`<span class="queue-preview">%s</span>`+
@@ -77,7 +83,7 @@ func QueueBar(sessionID, text string) string {
 			`<button class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
 			`</div>`,
 		html.EscapeString(text), html.EscapeString(sessionID), html.EscapeString(sessionID),
-	))
+	)
 }
 
 // ReviewBarOOB returns an OOB swap for the review bar. When barHTML is empty,

@@ -1645,6 +1645,14 @@ func Add(a, b int) int {
 		}
 		Screenshot(t, page, "queue_bar_visible")
 
+		// The queue lives in server-side session state. A reload must
+		// restore the same bar from that state.
+		currentURL := page.MustEval(`() => window.location.href`).String()
+		page.MustNavigate(currentURL).MustWaitStable()
+		WaitForElement(t, page, ".queue-content", 10*time.Second)
+		Screenshot(t, page, "queue_bar_after_reload")
+		WaitForText(t, page, ".queue-preview", "Thanks for the help", 5*time.Second)
+
 		// Unpause. All API calls flow through.
 		f.Replayer.Unpause()
 

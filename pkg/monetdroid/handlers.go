@@ -303,7 +303,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				if label == "" {
 					label = ShortPath(s.GetCwd())
 				}
-				cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))
+				cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.GetQueuedText())
 				// Known race: this read is not atomic with the lastSeq snapshot
 				// above. A thinking_delta landing between the two is both baked in
 				// here and replayed by the event loop, duplicating its fragment at
@@ -625,7 +625,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 		// Render the full page for clients that were just bound from
 		// cwd-based to session-based SSE.
-		cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))
+		cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.GetQueuedText())
 		labelText := label
 		if labelText == "" {
 			labelText = ShortPath(cwd)
@@ -1144,7 +1144,7 @@ func (h *Hub) handleEditResend(w http.ResponseWriter, r *http.Request) {
 	if old != nil {
 		old.Close()
 	}
-	h.BroadcastToSession(s.ID, FormatSSEDOM(RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID))), "", "")
+	h.BroadcastToSession(s.ID, FormatSSEDOM(RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.GetQueuedText())), "", "")
 
 	h.StartTurn(s, text, nil)
 

@@ -26,8 +26,9 @@ func procStateCmd(alive bool) DOMCmd {
 
 // RenderFull produces all DOM commands for a full page render. Callers should
 // register bg paths and commands on the session from the model before
-// calling this.
-func RenderFull(m *SessionModel, sessionID string, reviewCount int) []DOMCmd {
+// calling this. queuedText is the session's live queue, passed separately
+// because the model does not track it.
+func RenderFull(m *SessionModel, sessionID string, reviewCount int, queuedText string) []DOMCmd {
 	var cmds []DOMCmd
 
 	// --- Chrome ---
@@ -53,7 +54,7 @@ func RenderFull(m *SessionModel, sessionID string, reviewCount int) []DOMCmd {
 	cmds = append(cmds, costBarCmd(sessionID, m.Cwd, m.Cost, m.DiffStat)...)
 	cmds = append(cmds, modeBarCmd(sessionID, m.PermMode)...)
 	cmds = append(cmds, todoCmds(m.Todos)...)
-	cmds = append(cmds, queueBarCmd(sessionID, m.QueuedText)...)
+	cmds = append(cmds, queueBarCmd(sessionID, queuedText)...)
 	cmds = append(cmds, reviewBarCmd(sessionID, reviewCount)...)
 
 	// --- Messages ---
@@ -407,15 +408,8 @@ func todoCmds(todos []protocol.Todo) []DOMCmd {
 	}
 }
 
-func queueBarCmd(_ /* sessionID */, queuedText string) []DOMCmd {
-	if queuedText == "" {
-		return []DOMCmd{{Target: "queue-bar", Strategy: "innerHTML", Content: ""}}
-	}
-	escaped := Esc(queuedText)
-	return []DOMCmd{{Target: "queue-bar", Strategy: "innerHTML", Content: fmt.Sprintf(
-		`<div class="queue-bar" id="queue-bar"><span>Queued message:</span><span class="queue-text">%s</span><button hx-post="/dequeue" hx-swap="none" hx-include="#session-id">Cancel</button></div>`,
-		escaped,
-	)}}
+func queueBarCmd(sessionID, queuedText string) []DOMCmd {
+	return []DOMCmd{{Target: "queue-bar", Strategy: "innerHTML", Content: render.QueueBarContent(sessionID, queuedText)}}
 }
 
 func reviewBarCmd(sessionID string, count int) []DOMCmd {
