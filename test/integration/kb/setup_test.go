@@ -90,7 +90,6 @@ func Setup(t *testing.T) *Fixture {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
 	containerID := strings.TrimSpace(string(out))
-	t.Logf("started container %s", containerID[:12])
 
 	f := &Fixture{T: t, containerID: containerID}
 

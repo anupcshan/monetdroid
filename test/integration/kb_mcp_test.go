@@ -45,7 +45,6 @@ func setupKBContainer(t *testing.T) *ContainerFixture {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
 	containerID := strings.TrimSpace(string(out))
-	t.Logf("started kb mcp container %s", containerID[:12])
 	t.Cleanup(func() { exec.Command("docker", "stop", "-t", "5", containerID).Run() })
 
 	// kb commits each mutation in its own git repo under /root/.monetdroid/kb,

@@ -2952,23 +2952,7 @@ func getEnv(key, fallback string) string {
 		}
 		Screenshot(t, page, "agent_detail_open")
 
-		// Dump session event log for analysis
 		events := f.SessionLog()
-		t.Logf("=== SESSION EVENT LOG (%d events) ===", len(events))
-		for i, e := range events {
-			line := fmt.Sprintf("[%3d] type=%-20s tool=%-20s toolUseID=%s", i, e.Type, e.Tool, e.ToolUseID)
-			if e.Cost != nil {
-				line += fmt.Sprintf(" cost={used=%d window=%d usd=%.4f}", e.Cost.ContextUsed, e.Cost.ContextWindow, e.Cost.TotalCostUSD)
-			}
-			if e.Text != "" {
-				text := e.Text
-				if len(text) > 80 {
-					text = text[:80] + "..."
-				}
-				line += fmt.Sprintf(" text=%q", text)
-			}
-			t.Logf("%s", line)
-		}
 
 		// Verify each opened sub-agent section contains the sub-agent's internal
 		// tool calls (Read/Grep/Glob), not just the Agent's final summary.
@@ -3102,24 +3086,6 @@ func handleUsers(db *sql.DB) http.HandlerFunc {
 		page := f.Page()
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
-
-		// Dump the event log on exit so the order is visible even when a
-		// wait fatals mid-run.
-		t.Cleanup(func() {
-			events := f.SessionLog()
-			t.Logf("=== SESSION EVENT LOG (%d events) ===", len(events))
-			for i, e := range events {
-				line := fmt.Sprintf("[%3d] type=%-20s toolUseID=%s", i, e.Type, e.ToolUseID)
-				if e.Text != "" {
-					text := e.Text
-					if len(text) > 80 {
-						text = text[:80] + "..."
-					}
-					line += fmt.Sprintf(" text=%q", text)
-				}
-				t.Logf("%s", line)
-			}
-		})
 
 		Screenshot(t, page, "bg_before_send")
 
