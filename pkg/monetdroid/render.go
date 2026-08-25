@@ -557,8 +557,6 @@ func RenderMsg(msg ServerMsg) string {
 		return RenderPermission(msg)
 	case "agent_started", "agent_progress":
 		return "" // Not rendered as a standalone message. The agent_progress stat is stored via UpdateAgentStat.
-	case "compact_boundary":
-		return `<div class="compact-boundary"><span>context compacted</span></div>`
 	case "result":
 		return ""
 	}

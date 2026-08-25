@@ -16,24 +16,17 @@ import (
 // JSONL schema types for the subset of fields we read from Claude session files.
 
 type jsonlEntry struct {
-	CWD             string                    `json:"cwd"`
-	GitBranch       string                    `json:"gitBranch"`
-	Type            string                    `json:"type"`
-	Subtype         string                    `json:"subtype,omitempty"`
-	UUID            string                    `json:"uuid"`
-	ParentUUID      string                    `json:"parentUuid"`
-	IsSidechain     bool                      `json:"isSidechain"`
-	SessionID       string                    `json:"sessionId"`
-	ResultSID       string                    `json:"session_id"`
-	TotalCost       float64                   `json:"total_cost_usd"`
-	ModelUsage      map[string]modelUsageInfo `json:"modelUsage"`
-	Message         jsonlMessage              `json:"message"`
-	CompactMetadata *compactMetadata          `json:"compactMetadata,omitempty"`
-}
-
-type compactMetadata struct {
-	Trigger   string `json:"trigger"`
-	PreTokens int    `json:"preTokens"`
+	CWD         string                    `json:"cwd"`
+	GitBranch   string                    `json:"gitBranch"`
+	Type        string                    `json:"type"`
+	UUID        string                    `json:"uuid"`
+	ParentUUID  string                    `json:"parentUuid"`
+	IsSidechain bool                      `json:"isSidechain"`
+	SessionID   string                    `json:"sessionId"`
+	ResultSID   string                    `json:"session_id"`
+	TotalCost   float64                   `json:"total_cost_usd"`
+	ModelUsage  map[string]modelUsageInfo `json:"modelUsage"`
+	Message     jsonlMessage              `json:"message"`
 }
 
 type jsonlMessage struct {
@@ -458,10 +451,6 @@ func parseSessionMessages(jsonlPath string) (sessionTranscript, error) {
 		}
 		msgStart := len(st.msgs)
 		switch entry.Type {
-		case "system":
-			if entry.Subtype == "compact_boundary" {
-				st.msgs = append(st.msgs, HistoryMessage{Type: "compact_boundary"})
-			}
 		case "user":
 			if entry.SessionID != "" {
 				st.claudeID = entry.SessionID

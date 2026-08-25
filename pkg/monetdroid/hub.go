@@ -679,7 +679,6 @@ func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
 
 // renderContext holds precomputed metadata for rendering a slice of messages.
 type renderContext struct {
-	lastCompact       int
 	toolResults       map[string]ServerMsg            // tool_use id → tool_result message
 	toolUseIndexes    map[string]int                  // tool_use id → log index of its tool_use entry
 	toolResultIndexes map[string]int                  // tool_use id → log index of its tool_result entry
@@ -700,15 +699,12 @@ type subagentRenderState struct {
 }
 
 // precomputeRenderContext scans the full log to build rendering metadata.
-// The scan skips every dormant message, so the tool maps, permission
-// state, and the compacted-region marker cover the active branch only.
-// The marker must sit there, or a dormant boundary would open or close
-// the compacted region for messages that are not rendered. Background
-// task state derives from the whole log, since its slots are only
-// reached from tool chips that render.
+// The scan skips every dormant message, so the tool maps and permission
+// state cover the active branch only. Background task state derives from
+// the whole log, since its slots are only reached from tool chips that
+// render.
 func precomputeRenderContext(log []ServerMsg, active map[string]bool) renderContext {
 	rc := renderContext{
-		lastCompact:       -1,
 		toolResults:       make(map[string]ServerMsg),
 		toolUseIndexes:    make(map[string]int),
 		toolResultIndexes: make(map[string]int),
@@ -722,9 +718,6 @@ func precomputeRenderContext(log []ServerMsg, active map[string]bool) renderCont
 	for i, msg := range log {
 		if msg.UUID != "" && !active[msg.UUID] {
 			continue
-		}
-		if msg.Type == "compact_boundary" {
-			rc.lastCompact = i
 		}
 		if msg.Type == "tool_use" && msg.ToolUseID != "" && msg.AgentID == "" {
 			rc.toolUseIndexes[msg.ToolUseID] = i
@@ -773,19 +766,8 @@ func precomputeRenderContext(log []ServerMsg, active map[string]bool) renderCont
 // renderMessages renders messages from log[start:end] into HTML.
 func renderMessages(log []ServerMsg, start, end int, rc renderContext, sessionID string) string {
 	var b strings.Builder
-	if rc.lastCompact >= 0 && start <= rc.lastCompact {
-		// We're rendering from inside the compacted region
-		if start == 0 {
-			b.WriteString(`<div class="compacted-context">`)
-		}
-	}
 	for i := start; i < end; i++ {
 		msg := log[i]
-		if msg.Type == "compact_boundary" && i == rc.lastCompact {
-			b.WriteString(`</div>`)
-			b.WriteString(RenderMsg(msg))
-			continue
-		}
 		// A uuid-bearing message renders iff its uuid is on the active
 		// branch. Messages without a uuid (synthesized user messages,
 		// errors, live state) are not part of the tree and are unaffected.

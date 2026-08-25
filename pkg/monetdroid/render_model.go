@@ -494,9 +494,6 @@ func renderModelMessages(m *SessionModel, sessionID string) string {
 	log_ := m.Messages
 	if len(log_) > pageSize {
 		start = len(log_) - pageSize
-		if rc.lastCompact >= 0 && start <= rc.lastCompact {
-			start = 0
-		}
 	}
 
 	var b strings.Builder
@@ -548,18 +545,7 @@ func buildRenderContext(m *SessionModel, active map[string]bool) renderContext {
 		}
 	}
 
-	// The compacted-region marker must name an active-branch boundary, for
-	// the reason documented on precomputeRenderContext. Derive it here
-	// from the message list.
-	lastCompact := -1
-	for i, msg := range m.Messages {
-		if msg.Type == "compact_boundary" && (msg.UUID == "" || active[msg.UUID]) {
-			lastCompact = i
-		}
-	}
-
 	return renderContext{
-		lastCompact:       lastCompact,
 		toolResults:       m.ToolResults,
 		toolUseIndexes:    m.ToolUseIndexes,
 		toolResultIndexes: m.ToolResultIndexes,

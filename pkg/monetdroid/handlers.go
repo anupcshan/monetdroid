@@ -141,8 +141,6 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 			sm.ToolUseID = m.ToolUseID
 			sm.Output = m.Output
 			sm.Images = m.Images
-		case "compact_boundary":
-			sm.Type = "compact_boundary"
 		default:
 			continue
 		}
@@ -1589,10 +1587,6 @@ func (h *Hub) handleMessagesBefore(w http.ResponseWriter, r *http.Request) {
 
 	// Determine how far back to render
 	start := max(idx-100, 0)
-	// Don't split inside the compacted region
-	if rc.lastCompact >= 0 && start > 0 && start <= rc.lastCompact {
-		start = 0
-	}
 
 	var b strings.Builder
 	if start > 0 {
