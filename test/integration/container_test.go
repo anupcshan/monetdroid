@@ -580,6 +580,12 @@ func TestSubagentPermission(t *testing.T) {
 		WaitForText(t, page, ".msg-subagent .tool-name", "Allowed", 30*time.Second)
 		Screenshot(t, page, "subagent_perm_allowed")
 
+		// The parent acknowledges the launch with its own assistant message
+		// while the sub-agent runs in the background. Pin its count here so
+		// the wait at the end detects only the notification-driven turn.
+		WaitForElement(t, page, ".msg-assistant", 30*time.Second)
+		prevAssistants := len(page.MustElements(`.msg-assistant`))
+
 		// The sub-agent runs in the background, so the parent's assistant
 		// message appears at launch, not when done.txt is written. Poll the
 		// file itself.
@@ -600,6 +606,13 @@ func TestSubagentPermission(t *testing.T) {
 			t.Fatalf("expected 0 pending permission prompts after reload, got %d", reprompts)
 		}
 		Screenshot(t, page, "subagent_perm_resolved_after_reload")
+
+		// The sub-agent's completion reaches the parent as a CLI-injected
+		// notification that starts a second turn. The turn must be in the
+		// cassette, so the test ends only after it has completed, whether it
+		// landed before or after the reload above.
+		WaitForTurnComplete(t, page, prevAssistants)
+		Screenshot(t, page, "subagent_perm_notified")
 	})
 }
 
@@ -728,14 +741,7 @@ func main() {
 		page.MustElement(`textarea[name="text"]`).MustInput("Now change 'goodbye world' to 'greetings world' in greeting.go")
 		page.MustElement(`.send-btn`).MustClick()
 
-		// Wait for turn 2 to start rendering before waiting for it to end.
-		// #stop-btn:empty alone matches the leftover empty span between turns
-		// (from turn 1's done event), so we first gate on a new .msg-assistant
-		// appearing, which only happens after the SSE init event has swapped
-		// stop-btn to <button>.
-		page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
-			`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
-		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		WaitForTurnComplete(t, page, prevAssistants)
 		Screenshot(t, page, "accept_edits_second_turn")
 
 		// After the first permission was resolved, the perm-inline was cleared. Verify no second prompt appears.
@@ -820,11 +826,7 @@ func TestAutoMode(t *testing.T) {
 		prevAssistants := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
 		page.MustElement(`textarea[name="text"]`).MustInput(`Run this exact shell command and tell me its output: python3 -c 'print("probe-two-bbbb")'`)
 		page.MustElement(`.send-btn`).MustClick()
-		// Gate on a new assistant message before #stop-btn:empty, which otherwise
-		// matches the leftover empty span from turn 1's done event.
-		page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
-			`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
-		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		WaitForTurnComplete(t, page, prevAssistants)
 		Screenshot(t, page, "auto_mode_second_turn")
 
 		// Auto mode auto-approved the command, so no prompt appears. default and
@@ -1264,13 +1266,6 @@ func TestBashSpinner(t *testing.T) {
 		WaitForElement(t, page, ".perm-allow", 10*time.Second)
 		page.MustElement(`.perm-allow`).MustClick()
 
-		// Wait for Claude to respond, confirming the bg task was submitted.
-		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
-
-		// The stop button clears when the turn ends. The assistant bubble
-		// appears earlier during streaming, so wait for the clear.
-		WaitForElement(t, page, "#stop-btn:empty", 30*time.Second)
-
 		// Spinner should still be present because the bg command is still running.
 		if !page.MustHas(".tool-spinner") {
 			Screenshot(t, page, "bash_spinner_gone_too_early")
@@ -1327,6 +1322,13 @@ func TestBashSpinner(t *testing.T) {
 		}
 		// If Element returned error, spinner is already gone, so that's fine.
 		Screenshot(t, page, "bash_spinner_complete")
+
+		// Wait for Claude to respond, confirming the bg task was submitted.
+		WaitForElement(t, page, ".msg-assistant", 60*time.Second)
+
+		// The stop button clears when the turn ends. The assistant bubble
+		// appears earlier during streaming, so wait for the clear.
+		WaitForElement(t, page, "#stop-btn:empty", 30*time.Second)
 
 		// Reload to verify spinners are stripped in replay and the page stabilises.
 		currentURL = page.MustEval(`() => window.location.href`).String()
@@ -3613,9 +3615,7 @@ func TestPermissionSuggestions(t *testing.T) {
 		page.MustElement(`.send-btn`).MustClick()
 
 		// Wait for turn 2 to complete
-		page.Timeout(60 * time.Second).MustWait(fmt.Sprintf(
-			`() => document.querySelectorAll('.msg-assistant').length > %d`, prevAssistants))
-		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		WaitForTurnComplete(t, page, prevAssistants)
 
 		// Verify no new permission prompt appeared (the rule from turn 1 persisted)
 		prompts, err := page.Elements(".perm-inline")
@@ -3673,9 +3673,7 @@ func TestModelNameInCostBar(t *testing.T) {
 		page.MustElement(`textarea[name="text"]`).MustInput("How are you?")
 		prev := page.MustEval(`() => document.querySelectorAll('.msg-assistant').length`).Int()
 		page.MustElement(`.send-btn`).MustClick()
-		page.Timeout(10 * time.Second).MustWait(fmt.Sprintf(
-			`() => document.querySelectorAll('.msg-assistant').length > %d`, prev))
-		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+		WaitForTurnComplete(t, page, prev)
 		WaitForText(t, page, "#cost-bar", modelNameFromProvider(t), 5*time.Second)
 		Screenshot(t, page, "model_name_step3")
 	})
@@ -3738,10 +3736,11 @@ func TestDiffStatInCostBar(t *testing.T) {
 // frontmatter in its own fresh container.
 const yesfileSkillPath = "/root/.claude/skills/yesfile/SKILL.md"
 
-// yesfileBody is the shared instruction body for every variant. It pins a
-// single exact Bash command so the request body claude builds is identical
-// across record and replay, keeping the cassette deterministic.
-const yesfileBody = `Run this exact shell command with the Bash tool. Run it verbatim. Do not paraphrase it, split it into multiple commands, or substitute any part of it.
+// yesfileBody is the shared instruction body for every variant. It pins the
+// whole turn, one exact Bash command and nothing after it, so the request
+// bodies claude builds are identical across record and replay, and the turn
+// ends without the follow-up tool calls a looser prompt invites.
+const yesfileBody = `Run this exact shell command with the Bash tool. Run it verbatim. Run it exactly once. Do not paraphrase it, split it into multiple commands, or substitute any part of it. After the command finishes, do not run any other tool: no Read, no verification, no second attempt. Reply that the file is created, then stop.
 
     yes | head -10 > /tmp/yesfile`
 
@@ -3823,7 +3822,7 @@ func runSkillTest(t *testing.T, v skillVariant) {
 		// re-rendered from the log.
 		sessionURL := page.MustEval(`() => window.location.href`).String()
 		page.MustNavigate(sessionURL).MustWaitStable()
-		WaitForElement(t, page, ".msg-assistant", 5*time.Second)
+		WaitForElement(t, page, ".msg-assistant", 10*time.Second)
 		reprompts := page.MustEval(`() => document.querySelectorAll('.perm-inline').length`).Int()
 		if reprompts != 0 {
 			Screenshot(t, page, v.screenshot+"_reprompts_after_reload")

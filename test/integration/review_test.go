@@ -344,6 +344,11 @@ func TestFilesPageReviewComment(t *testing.T) {
 		initGitRepo(t, f, containerWorkdir)
 		f.WriteFile(containerWorkdir+"/server.go", serverFile)
 
+		// git init stamps wall-clock mtimes on .git and the workdir itself.
+		// Tool output listing those paths would then differ between record
+		// and replay. Re-pin the whole tree.
+		f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+
 		page := f.Page()
 
 		// Create session.
@@ -352,7 +357,7 @@ func TestFilesPageReviewComment(t *testing.T) {
 
 		// Ask Claude to edit something in the middle of the file.
 		page.MustElement("textarea[name=\"text\"]").MustInput(
-			"In server.go, change the handleGreet function to return 'Greetings, <name>!' instead of 'Hello, <name>!'. Use the Edit tool.")
+			"In server.go, change the handleGreet function to return 'Greetings, <name>!' instead of 'Hello, <name>!'. Use the Edit tool. After applying the edit, do not run any shell commands and do not search for or read any other files. Reply with a one-sentence summary of the change and stop.")
 		page.MustElement(".send-btn").MustClick()
 
 		// Wait for permission prompt with diff.
@@ -383,7 +388,7 @@ func TestFilesPageReviewComment(t *testing.T) {
 		Screenshot(t, page, "files_page_review_form")
 
 		// Fill in and submit the comment.
-		page.MustElement(".review-textarea").MustInput("Consider using log.Printf instead of fmt.Fprintf for consistency with the rest of the file")
+		page.MustElement(".review-textarea").MustInput("Consider using log.Printf instead of fmt.Fprintf for consistency with the rest of the file. Do not run any shell commands and do not search for or read any other files. Reply with a one-sentence summary and stop.")
 		page.MustElement(".review-submit").MustClick()
 
 		// Comment chip should appear.

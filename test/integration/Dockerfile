@@ -8,9 +8,9 @@ FROM debian:bookworm-slim
 # These URLs mirror the canonical installer at https://claude.ai/install.sh.
 # If an upgrade breaks tests, check the per-version changelog for what changed:
 #   https://code.claude.com/docs/en/changelog.md
-ARG CLAUDE_VERSION=2.1.240
+ARG CLAUDE_VERSION=2.1.246
 ARG DOWNLOAD_BASE_URL=https://downloads.claude.ai/claude-code-releases
-ARG CLAUDE_CHECKSUM=1386169da77de19a655f07a86ab80f5775983a50eb0c9c27a7daf16e7320322d
+ARG CLAUDE_CHECKSUM=1a0a662dc1bb938eaec38545abce9a4a69113d7d7f7c5e1a553ea276617b906a
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git python3 \
