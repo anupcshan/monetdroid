@@ -20,8 +20,11 @@
     <button class="header-btn" popovertarget="new-session-popover">+</button>
   </div>
 
-  <div class="landing" id="landing" sse-swap="landing" hx-swap="innerHTML">
-    <div class="landing-loading"><span></span><span></span><span></span></div>
+  <div class="landing" id="landing">
+    <div id="landing-panels" sse-swap="panels" hx-swap="innerHTML">
+      <div class="landing-loading"><span></span><span></span><span></span></div>
+    </div>
+    <div id="landing-sessions" sse-swap="sessions" hx-swap="innerHTML"></div>
   </div>
 </div>
 

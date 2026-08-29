@@ -315,12 +315,6 @@ func (s *Session) DrainStreaming() (string, string) {
 	return text, thinking
 }
 
-func (s *Session) GetDiffStat() DiffStat {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.DiffStat
-}
-
 func (s *Session) SetDiffStat(ds DiffStat) {
 	s.mu.Lock()
 	s.DiffStat = ds

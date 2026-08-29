@@ -575,16 +575,21 @@ func TestSubagentPermission(t *testing.T) {
 		WaitForElement(t, page, ".msg-subagent .perm-inline", 60*time.Second)
 		Screenshot(t, page, "subagent_perm_after_reload")
 
+		// The parent acknowledges the launch with its own assistant message
+		// while the sub-agent runs in the background. Pin its count while
+		// the sub-agent is still blocked on the permission above, so the
+		// notification-driven turn cannot have landed yet and the wait at
+		// the end detects exactly that turn.
+		WaitForElement(t, page, ".msg-assistant", 30*time.Second)
+		prevAssistants := len(page.MustElements(`.msg-assistant`))
+
 		// Resolve the permission and confirm the sub-agent's write lands.
+		// The remaining turns can replay to completion within milliseconds
+		// of this click, so no assistant-message counting may happen after
+		// it.
 		page.MustElement(`.msg-subagent .perm-allow`).MustClick()
 		WaitForText(t, page, ".msg-subagent .tool-name", "Allowed", 30*time.Second)
 		Screenshot(t, page, "subagent_perm_allowed")
-
-		// The parent acknowledges the launch with its own assistant message
-		// while the sub-agent runs in the background. Pin its count here so
-		// the wait at the end detects only the notification-driven turn.
-		WaitForElement(t, page, ".msg-assistant", 30*time.Second)
-		prevAssistants := len(page.MustElements(`.msg-assistant`))
 
 		// The sub-agent runs in the background, so the parent's assistant
 		// message appears at launch, not when done.txt is written. Poll the
@@ -1241,6 +1246,60 @@ func TestCloseSession(t *testing.T) {
 		}
 		Screenshot(t, page, "close_from_queue")
 	})
+}
+
+// TestHomeSessionListSlowGit asserts the home page stays responsive when git
+// is slow. Setup runs at full speed: a repo with a workstream, and a real
+// turn whose completion puts the session in the tracked list. Every git
+// invocation except the fast allowlist is then delayed 5s and the server is
+// restarted, so the
+// assertions run against a fresh process with no in-memory state, which must
+// serve the session list and the transcript from disk:
+//
+//   - the tracked session list is visible within 2s of page load
+//   - opening the session from the list renders its history within 2s
+func TestHomeSessionListSlowGit(t *testing.T) {
+	t.Parallel()
+	f := SetupWithContainer(t, AllProviders[0], "home_slow_git.jsonl.zst", testMode())
+
+	// A workstream gives the landing render real git work to do, so the
+	// panel computation is still running while the session list must
+	// already be up.
+	dir := containerWorkdir + "/project-alpha"
+	initGitRepo(t, f, dir)
+	wsPath := "/root/.monetdroid/worktrees/project-alpha/ws"
+	for _, args := range [][]string{
+		{"git", "-C", dir, "branch", "ws"},
+		{"git", "-C", dir, "worktree", "add", wsPath, "ws"},
+		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "ws"},
+	} {
+		if out, err := f.DockerExec(args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	page := f.Page()
+	CreatePlainSession(t, page, dir)
+	WaitForText(t, page, "#session-label", "project-alpha", 5*time.Second)
+
+	// The completed turn puts the session in the tracked list and is the
+	// cassette's only recorded traffic.
+	page.MustElement(`textarea[name="text"]`).MustInput("Say hello")
+	page.MustElement(`.send-btn`).MustClick()
+	WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+	WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+	f.SlowGit(5 * time.Second)
+	f.RestartServer()
+
+	// The tracked session list is visible within 2s of page load.
+	page.MustNavigate(f.ServerURL + "/")
+	f.Must(page.Timeout(2 * time.Second).Element(".queue-item"))
+
+	// Opening the session renders its history within 2s of the click.
+	page.MustElement(".qi-open").MustClick()
+	f.Must(page.Timeout(2 * time.Second).Element(".msg-user"))
+	f.Must(page.Timeout(2 * time.Second).Element(".msg-assistant"))
 }
 
 func TestBashSpinner(t *testing.T) {
@@ -3680,7 +3739,8 @@ func TestModelNameInCostBar(t *testing.T) {
 }
 
 // TestDiffStatInCostBar verifies that git diff stats appear in the cost bar
-// after a turn completes and persist across session reload.
+// after a turn completes and again after the session is reloaded from disk,
+// where the stat is recomputed rather than carried over.
 func TestDiffStatInCostBar(t *testing.T) {
 	t.Parallel()
 	WithProviders(t, "diff_stat_cost_bar.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
@@ -3719,7 +3779,10 @@ func TestDiffStatInCostBar(t *testing.T) {
 		page.MustElement(`#close-btn button`).MustClick()
 		page.Timeout(10 * time.Second).MustWait(`() => window.location.pathname === '/' && window.location.search === ''`)
 		page.MustNavigate(currentURL).MustWaitStable()
-		WaitForElement(t, page, "#cost-bar:not(:empty)", 10*time.Second)
+		// The reloaded session paints its cost bar before the diff stat is
+		// recomputed, and the bar is non-empty from the start because it
+		// carries the files link. Wait for the stat itself.
+		WaitForText(t, page, "#cost-bar", `\+`, 10*time.Second)
 
 		costBar = page.MustElement("#cost-bar").MustText()
 		if !strings.Contains(costBar, "+") {

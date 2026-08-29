@@ -24,8 +24,9 @@ const dockerImage = "monetdroid-claude-test"
 const containerWorkdir = "/work"
 
 // containerTimeout is the maximum lifetime of a test container.
-// The container's entrypoint uses `timeout` to self-terminate after this duration,
-// ensuring cleanup even if the test process crashes or CI is killed.
+// The container's command is `sleep <containerTimeout>`, which self-terminates
+// after this duration, ensuring cleanup even if the test process crashes or
+// CI is killed.
 const containerTimeout = 300 // seconds
 
 var buildOnce sync.Once
@@ -67,6 +68,99 @@ var AllProviders = []ProviderConfig{
 			{HostPath: "~/.mimo/api_key", EnvVar: "ANTHROPIC_AUTH_TOKEN"},
 		},
 	},
+}
+
+// startServer starts the monetdroid server inside the container. The process
+// records its PID in /tmp/server.pid for killServer. Its output is redirected
+// to PID 1's stdout, which is the container log stream, so docker logs keeps
+// capturing it. The process inherits the container's configured environment,
+// including MONETDROID_IN_CONTAINER and the replayer URL.
+func startServer(t *testing.T, containerID string) {
+	t.Helper()
+	script := `/test >/proc/1/fd/1 2>&1 & echo $! > /tmp/server.pid`
+	if out, err := exec.Command("docker", "exec", "-d", containerID, "sh", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("start server: %v\n%s", err, out)
+	}
+}
+
+// killServer kills the server process started by startServer.
+func killServer(t *testing.T, containerID string) {
+	t.Helper()
+	if out, err := exec.Command("docker", "exec", containerID, "sh", "-c",
+		"kill $(cat /tmp/server.pid)").CombinedOutput(); err != nil {
+		t.Fatalf("kill server: %v\n%s", err, out)
+	}
+}
+
+// fastGitSubcommands is the allowlist the slow-git wrapper lets through
+// undelayed. A subcommand belongs here only when a page the slow-git test
+// budgets (session list, session history) invokes it before first paint and
+// its cost does not grow with repository size. Everything unlisted pays the
+// delay, so a new expensive git call on a budgeted page fails the test
+// instead of passing unnoticed. Add to this list deliberately, never by
+// reflex.
+var fastGitSubcommands = []string{"rev-parse"}
+
+// SlowGit installs a git wrapper that delays every git invocation in the
+// container by d, except subcommands in fastGitSubcommands which run at full
+// speed. /usr/local/bin precedes /usr/bin in PATH, so every git lookup
+// resolves to the wrapper once it exists. Setup that runs before SlowGit
+// executes at full speed.
+func (f *ContainerFixture) SlowGit(d time.Duration) {
+	f.T.Helper()
+	fastPaths := strings.Join(fastGitSubcommands, "|")
+	script := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+%s) exec /usr/bin/git "$@" ;;
+esac
+sleep %v
+exec /usr/bin/git "$@"
+`, fastPaths, d.Seconds())
+	f.WriteFile("/usr/local/bin/git", script)
+	if out, err := f.DockerExec("chmod", "+x", "/usr/local/bin/git"); err != nil {
+		f.T.Fatalf("chmod git wrapper: %v\n%s", err, out)
+	}
+}
+
+// RestartServer kills the monetdroid server and starts a fresh one, so the
+// replacement has no in-memory state. Disk state (tracked sessions, labels,
+// transcripts) survives and the host port mapping is unchanged because the
+// container never stops.
+func (f *ContainerFixture) RestartServer() {
+	f.T.Helper()
+	killServer(f.T, f.containerID)
+	// Both loops use a per-request timeout so a server that accepts
+	// connections but never answers cannot block a loop past its stated
+	// deadline.
+	client := &http.Client{Timeout: 2 * time.Second}
+	// The old process must stop serving before the readiness wait below can
+	// mean the replacement is up, otherwise a request could reach the dying
+	// server.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := client.Get(f.ServerURL)
+		if err != nil {
+			break
+		}
+		resp.Body.Close()
+		if time.Now().After(deadline) {
+			f.T.Fatalf("server still accepting connections 10s after kill")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	startServer(f.T, f.containerID)
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		resp, err := client.Get(f.ServerURL)
+		if err == nil {
+			resp.Body.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			f.T.Fatalf("server not ready 30s after restart")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // SetupWithSharedCassette is for tests that share a cassette owned by another
@@ -284,8 +378,11 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 		dockerArgs = append(dockerArgs, "-e", "ANTHROPIC_AUTH_TOKEN=dummy-replay-auth-token")
 	}
 
+	// The server is started and restarted explicitly via startServer. The
+	// sleep only keeps the container alive, and exits after containerTimeout
+	// to terminate abandoned containers.
 	dockerArgs = append(dockerArgs, dockerImage,
-		"timeout", fmt.Sprintf("%d", containerTimeout), "/test",
+		"sleep", fmt.Sprintf("%d", containerTimeout),
 	)
 
 	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
@@ -316,6 +413,8 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 		hostAddr = hostAddr[:i]
 	}
 	serverURL := fmt.Sprintf("http://127.0.0.1:%s", hostAddr[strings.LastIndex(hostAddr, ":")+1:])
+
+	startServer(t, containerID)
 
 	// Wait for server to be ready
 	ready := false

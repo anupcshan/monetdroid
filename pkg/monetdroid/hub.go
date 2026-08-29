@@ -435,7 +435,10 @@ func (h *Hub) Broadcast(msg ServerMsg) {
 			if ds, err := GitDiffStat(t, cwd); err == nil {
 				s.SetDiffStat(ds)
 				if s.Model != nil {
-					s.Model.DiffStat = ds
+					// The "done" event dispatched later in this function
+					// re-renders the cost bar, and channel order guarantees
+					// this update is applied first.
+					s.Model.SetDiffStat(ds, nil)
 				}
 			}
 		}

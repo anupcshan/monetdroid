@@ -75,6 +75,7 @@ type serverMsgEvent struct {
 	permUpgrades func([]DOMCmd) []DOMCmd // extra DOM commands to append after rendering
 	push         func(string)            // callback to push rendered HTML to transport
 	done         chan struct{}           // closed once processed. Set only by Sync
+	diffStat     *DiffStat               // set by SetDiffStat and applied on the model goroutine
 }
 
 // ModelBase holds session-level state that is not derived from the event log.
@@ -84,6 +85,7 @@ type ModelBase struct {
 	AutoLabel bool
 	PermMode  claude.PermissionMode
 	Cost      CostInfo // initial cost from session (includes ModelName set by history load)
+	DiffStat  DiffStat // initial diff stat from session
 	// Tip and LineParents seed the model's chain, which is then extended
 	// live by Apply as messages arrive. ProcessAlive is the initial
 	// process-liveness state, which session_started then maintains live.
@@ -107,6 +109,7 @@ func BuildModel(base ModelBase, log []ServerMsg, sessionID string) *SessionModel
 		AutoLabel:         base.AutoLabel,
 		PermMode:          base.PermMode,
 		Cost:              base.Cost,
+		DiffStat:          base.DiffStat,
 		BgTasks:           make(map[string]*BgTaskState),
 		ToolUseIndexes:    make(map[string]int),
 		ToolResultIndexes: make(map[string]int),
@@ -153,6 +156,13 @@ func (m *SessionModel) HandleEventWithTodos(msg ServerMsg, todosChanged bool, pu
 // DOM commands to the rendered output (used for permission detail upgrades).
 func (m *SessionModel) HandleEventWithUpgrades(msg ServerMsg, todosChanged bool, permUpgrades func([]DOMCmd) []DOMCmd, push func(string)) {
 	m.sendEvent(serverMsgEvent{msg: msg, todosChanged: todosChanged, permUpgrades: permUpgrades, push: push})
+}
+
+// SetDiffStat updates the model's diff stat. When push is non-nil it
+// receives the refreshed cost bar. Like every model state change, it is
+// applied on the model goroutine.
+func (m *SessionModel) SetDiffStat(ds DiffStat, push func(string)) {
+	m.sendEvent(serverMsgEvent{diffStat: &ds, push: push})
 }
 
 // Sync blocks until every event enqueued before it has been applied and
@@ -211,6 +221,14 @@ func (m *SessionModel) run() {
 func (m *SessionModel) processEvent(ev serverMsgEvent) {
 	if ev.done != nil {
 		close(ev.done)
+		return
+	}
+	if ev.diffStat != nil {
+		m.DiffStat = *ev.diffStat
+		if ev.push != nil {
+			cmds := []DOMCmd{{Target: "cost-bar", Strategy: "innerHTML", Content: RenderCostBarModel(m.sessionID, m)}}
+			ev.push(FormatSSEDOM(cmds))
+		}
 		return
 	}
 	wasActive := m.HasActivity()

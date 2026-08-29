@@ -267,18 +267,14 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			logSnapshot := s.GetLog()
 			tip := s.GetTip()
 			parents := s.GetLineParents()
-			cost, _ := s.GetCostBarInfo()
+			cost, ds := s.GetCostBarInfo()
 			base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost,
-				Tip: tip, LineParents: parents, ProcessAlive: s.ProcLive()}
-			// Refresh diff stat so the cost bar reflects current repo state.
-			if ds, err := GitDiffStat(NewGitTrace("page-diff-stat"), base.Cwd); err == nil {
-				s.SetDiffStat(ds)
-			}
+				DiffStat: ds,
+				Tip:      tip, LineParents: parents, ProcessAlive: s.ProcLive()}
 			if s.Model != nil {
 				s.Model.Close()
 			}
 			s.Model = BuildModel(base, logSnapshot, s.ID)
-			s.Model.DiffStat = s.GetDiffStat()
 			_, lastSeq = s.EventLog.Snapshot()
 			if isCold {
 				// On cold load all processes are dead. Mark bg tasks
@@ -316,6 +312,22 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				event := FormatSSEDOM(cmds, TitleOob(label), FaviconOob(label))
 				fmt.Fprint(w, event)
 				flusher.Flush()
+
+				// Refresh the diff stat off the connect path. It blocks on
+				// git, which would otherwise delay the history render above
+				// on large repos. The update goes through the model's event
+				// loop, which re-pushes the cost bar when it lands.
+				m := s.Model
+				go func() {
+					ds, err := GitDiffStat(NewGitTrace("page-diff-stat"), base.Cwd)
+					if err != nil {
+						return
+					}
+					s.SetDiffStat(ds)
+					m.SetDiffStat(ds, func(event string) {
+						h.BroadcastToSession(s.ID, event, "", "")
+					})
+				}()
 			}
 		}
 	} else {
@@ -346,12 +358,19 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
 		} else {
-			// No active session, so render the landing page.
-			content := h.renderLanding()
-			if content == "" {
-				content = `<div class="empty-state"><p>No active workstreams. Click + to create one.</p></div>`
+			// No active session, so render the landing page. The session
+			// list goes out first so it does not wait on the panel render,
+			// which blocks on git and can take arbitrarily long on large
+			// repos. It is sent even when empty so a reconnect corrects
+			// stale content instead of leaving it in the DOM.
+			sess := h.renderSessions()
+			fmt.Fprint(w, FormatSSE("sessions", sess))
+			flusher.Flush()
+			panels := h.renderPanels()
+			if panels == "" && sess == "" {
+				panels = `<div class="empty-state"><p>No active workstreams. Click + to create one.</p></div>`
 			}
-			fmt.Fprint(w, FormatSSE("landing", content))
+			fmt.Fprint(w, FormatSSE("panels", panels))
 			flusher.Flush()
 		}
 	}
@@ -582,9 +601,9 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		base := ModelBase{Cwd: cwd, Label: label, AutoLabel: autoLabel, PermMode: claude.PermDefault, ProcessAlive: true}
 		if ds, err := GitDiffStat(NewGitTrace("send-diff-stat"), cwd); err == nil {
 			s.SetDiffStat(ds)
+			base.DiffStat = ds
 		}
 		s.Model = BuildModel(base, s.GetLog(), s.ID)
-		s.Model.DiffStat = s.GetDiffStat()
 
 		// Link the minted uuid and broadcast the user message before the
 		// buffered replay, so replayed reply events chain onto the message
@@ -1132,11 +1151,11 @@ func (h *Hub) handleEditResend(w http.ResponseWriter, r *http.Request) {
 	// render, so every connected client drops the abandoned messages at
 	// once. The replacement message is not in the log yet, so the render
 	// excludes it and it streams in as the new turn.
-	cost, _ := s.GetCostBarInfo()
+	cost, ds := s.GetCostBarInfo()
 	base := ModelBase{Cwd: s.GetCwd(), Label: s.GetLabel(), PermMode: s.GetPermMode(), Cost: cost,
-		Tip: s.GetTip(), LineParents: s.GetLineParents(), ProcessAlive: true}
+		DiffStat: ds,
+		Tip:      s.GetTip(), LineParents: s.GetLineParents(), ProcessAlive: true}
 	newModel := BuildModel(base, s.GetLog(), s.ID)
-	newModel.DiffStat = s.GetDiffStat()
 	old := s.Model
 	s.Model = newModel
 	if old != nil {
@@ -1426,10 +1445,23 @@ func (h *Hub) handleMassSync(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Hub) renderLanding() string {
+// renderSessions renders the tracked session list for the landing page. The
+// caller sends it before the git-bound panel render so the list appears
+// immediately.
+func (h *Hub) renderSessions() string {
+	t := NewGitTrace("sessions")
+	defer t.Log()
+	sessHTML := RenderTrackedSessions(t, h.Tracker.List())
+	if sessHTML == "" {
+		return ""
+	}
+	return `<div class="queue-header">Sessions</div>` + sessHTML
+}
+
+func (h *Hub) renderPanels() string {
 	t := NewGitTrace("landing")
 	defer t.Log()
-	var landingHTML strings.Builder
+	var panelsHTML strings.Builder
 	panels := AllWorkstreams(t)
 	names := make([]string, 0, len(panels))
 	for name := range panels {
@@ -1437,12 +1469,9 @@ func (h *Hub) renderLanding() string {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		landingHTML.WriteString(RenderWorkstreamStatus(panels[name]))
+		panelsHTML.WriteString(RenderWorkstreamStatus(panels[name]))
 	}
-	if sessHTML := RenderTrackedSessions(t, h.Tracker.List()); sessHTML != "" {
-		landingHTML.WriteString(`<div class="queue-header">Sessions</div>` + sessHTML)
-	}
-	return landingHTML.String()
+	return panelsHTML.String()
 }
 
 func (h *Hub) handleRefreshBranches(w http.ResponseWriter, r *http.Request) {
