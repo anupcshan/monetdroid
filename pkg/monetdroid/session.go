@@ -22,7 +22,6 @@ type Session struct {
 	Cwd            string
 	Branches       []string
 	PermissionMode claude.PermissionMode
-	Interrupted    bool
 	CreatedAt      time.Time
 	JSONLPath      string
 	Log            []ServerMsg
@@ -30,9 +29,12 @@ type Session struct {
 	// branch, seeded when a transcript is loaded and advanced live as
 	// messages arrive. LineParents maps every transcript line's uuid to
 	// its parent's uuid. Both feed the active-path walk at render time.
-	Tip               string
-	LineParents       map[string]string
-	QueuedText        string
+	Tip         string
+	LineParents map[string]string
+	// Queue holds user messages sent to claude's native command queue that
+	// have not started running yet. An entry leaves on the started lifecycle
+	// frame (it becomes a chat message) or when cancelled. Guarded by mu.
+	Queue             []QueueEntry
 	CostAccum         CostInfo
 	StreamContext     bool // true when the assistant stream carried a non-zero context-used this turn
 	Todos             []protocol.Todo
@@ -196,12 +198,6 @@ func (s *Session) GetPermChan(id string) (chan protocol.PermResponse, bool) {
 	defer s.mu.Unlock()
 	ch, ok := s.PermChans[id]
 	return ch, ok
-}
-
-func (s *Session) HasPendingPerms() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.PermChans) > 0
 }
 
 func (s *Session) GetProc() claude.Process {
@@ -374,16 +370,85 @@ func (s *Session) SetPermissionMode(mode claude.PermissionMode) {
 	s.mu.Unlock()
 }
 
-func (s *Session) ClearQueue() {
-	s.mu.Lock()
-	s.QueuedText = ""
-	s.mu.Unlock()
+// QueueEntry is a user message waiting in claude's native command queue. The
+// uuid is the one minted at send time. Claude's lifecycle frames and cancel
+// requests address the entry by it.
+type QueueEntry struct {
+	UUID   string
+	Text   string
+	Images []protocol.ImageData
 }
 
-func (s *Session) GetQueuedText() string {
+// AddQueued registers a message entering claude's command queue.
+func (s *Session) AddQueued(e QueueEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.QueuedText
+	s.Queue = append(s.Queue, e)
+}
+
+// PeekQueued returns a copy of the pending entry for uuid, if any, without
+// removing it.
+func (s *Session) PeekQueued(uuid string) (QueueEntry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.Queue {
+		if e.UUID == uuid {
+			return e, true
+		}
+	}
+	return QueueEntry{}, false
+}
+
+// TakeQueued removes and returns the pending entry for uuid, if any.
+func (s *Session) TakeQueued(uuid string) (QueueEntry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, e := range s.Queue {
+		if e.UUID == uuid {
+			s.Queue = slices.Delete(s.Queue, i, i+1)
+			return e, true
+		}
+	}
+	return QueueEntry{}, false
+}
+
+// RemoveQueued drops the pending entry for uuid, if any.
+func (s *Session) RemoveQueued(uuid string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, e := range s.Queue {
+		if e.UUID == uuid {
+			s.Queue = slices.Delete(s.Queue, i, i+1)
+			return
+		}
+	}
+}
+
+// QueuedEntries returns a copy of the pending entries, oldest first.
+func (s *Session) QueuedEntries() []QueueEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.Queue)
+}
+
+// ReconcileQueued drops every pending entry whose uuid is not in stillQueued.
+func (s *Session) ReconcileQueued(stillQueued []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.Queue[:0]
+	for _, e := range s.Queue {
+		if slices.Contains(stillQueued, e.UUID) {
+			kept = append(kept, e)
+		}
+	}
+	s.Queue = kept
+}
+
+// IsBusy reports whether a message sent now would wait in the queue rather
+// than start immediately - a turn is running or a permission is pending.
+// This is a rendering hint only.
+func (s *Session) IsBusy() bool {
+	return s.Model != nil && s.Model.CanInterrupt()
 }
 
 // --- Map operations ---
@@ -926,51 +991,6 @@ func (s *Session) SetPermModeAndGetProc(mode claude.PermissionMode) claude.Proce
 	proc := s.proc
 	s.mu.Unlock()
 	return proc
-}
-
-func (s *Session) InterruptAndGetProc() claude.Process {
-	s.mu.Lock()
-	s.Interrupted = true
-	proc := s.proc
-	s.mu.Unlock()
-	return proc
-}
-
-func (s *Session) ResetInterruptAndGetProc() claude.Process {
-	s.mu.Lock()
-	s.Interrupted = false
-	proc := s.proc
-	s.mu.Unlock()
-	return proc
-}
-
-// EnqueueMessage adds text to the queue if actively streaming (running with
-// no pending permission requests). Returns whether queued and the full queue text.
-// When permission-blocked, returns false so the caller can inject immediately.
-func (s *Session) EnqueueMessage(text string) (bool, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.Model == nil || !s.Model.CanInterrupt() || len(s.PermChans) > 0 {
-		return false, ""
-	}
-	if s.QueuedText != "" {
-		s.QueuedText += "\n" + text
-	} else {
-		s.QueuedText = text
-	}
-	return true, s.QueuedText
-}
-
-// DrainQueue returns the interrupted flag and queued text, clearing it if not interrupted.
-func (s *Session) DrainQueue() (bool, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	interrupted := s.Interrupted
-	next := s.QueuedText
-	if !interrupted {
-		s.QueuedText = ""
-	}
-	return interrupted, next
 }
 
 type SessionManager struct {

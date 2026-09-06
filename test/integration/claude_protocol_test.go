@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -373,4 +375,309 @@ func clip(s string, n int) string {
 		return s[:n] + "..."
 	}
 	return s
+}
+
+// Probes for claude's native command queue over the stream-json control
+// protocol: mid-turn sends enqueue server-side (multi-entry), state is
+// observable through command_lifecycle frames, entries are removable via
+// cancel_async_message, and an interrupt reports a queue receipt.
+//
+// Determinism comes from parking a turn on an unanswered permission prompt:
+// the turn blocks indefinitely, so messages sent after the prompt arrives are
+// provably mid-turn. Each probe owns its cassette.
+
+// lifecycleLog records command_lifecycle frames in arrival order.
+type lifecycleLog struct {
+	mu     sync.Mutex
+	events []protocol.CommandLifecycleEvent
+	notify chan struct{}
+}
+
+func newLifecycleLog() *lifecycleLog {
+	return &lifecycleLog{notify: make(chan struct{}, 1)}
+}
+
+func (l *lifecycleLog) onEvent(ev protocol.CommandLifecycleEvent) {
+	l.mu.Lock()
+	l.events = append(l.events, ev)
+	l.mu.Unlock()
+	select {
+	case l.notify <- struct{}{}:
+	default:
+	}
+}
+
+// states returns the state sequence observed for uuid, in arrival order.
+func (l *lifecycleLog) states(uuid string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, ev := range l.events {
+		if ev.CommandUUID == uuid {
+			out = append(out, ev.State)
+		}
+	}
+	return out
+}
+
+// waitForState blocks until uuid has reached state or the timeout expires.
+func (l *lifecycleLog) waitForState(t *testing.T, uuid, state string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if slices.Contains(l.states(uuid), state) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("uuid %s never reached state %q; observed %v", uuid, state, l.states(uuid))
+		}
+		select {
+		case <-l.notify:
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// dump logs the full lifecycle sequence for diagnosis.
+func (l *lifecycleLog) dump(t *testing.T) {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t.Logf("=== command_lifecycle sequence (%d events) ===", len(l.events))
+	for i, ev := range l.events {
+		t.Logf("  [%d] %s %s", i, clip(ev.CommandUUID, 8), ev.State)
+	}
+}
+
+// parkedPermissions routes permission requests through channels so a test can
+// park a turn by withholding the answer, then release it later.
+type parkedPermissions struct {
+	requests chan protocol.PermissionRequest
+	release  chan protocol.PermResponse
+}
+
+func newParkedPermissions() *parkedPermissions {
+	return &parkedPermissions{
+		requests: make(chan protocol.PermissionRequest, 8),
+		release:  make(chan protocol.PermResponse, 8),
+	}
+}
+
+func (p *parkedPermissions) handler(req protocol.PermissionRequest) protocol.PermResponse {
+	p.requests <- req
+	return <-p.release
+}
+
+// waitForRequest blocks for the next permission request. A turn that has
+// reached its permission prompt is parked: no further API call or queue drain
+// happens until the test answers.
+func (p *parkedPermissions) waitForRequest(t *testing.T) protocol.PermissionRequest {
+	t.Helper()
+	select {
+	case req := <-p.requests:
+		return req
+	case <-time.After(60 * time.Second):
+		t.Fatal("no permission request arrived within 60s")
+		return protocol.PermissionRequest{}
+	}
+}
+
+func (p *parkedPermissions) allow() {
+	p.release <- protocol.PermResponse{Allow: true}
+}
+
+// startQueueProbe starts a claude process with lifecycle capture and parked
+// permissions.
+func startQueueProbe(t *testing.T) (*claude.ClaudeProcess, *lifecycleLog, *parkedPermissions) {
+	t.Helper()
+	ensureWorkspaceTrust()
+
+	life := newLifecycleLog()
+	perms := newParkedPermissions()
+	proc, err := claude.StartProcessWithConfig(containerWorkdir, func(protocol.StreamEvent) {}, "", &claude.ProcessConfig{
+		PermissionHandler:  perms.handler,
+		OnCommandLifecycle: life.onEvent,
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		life.dump(t)
+		proc.Kill()
+	})
+	return proc, life, perms
+}
+
+const (
+	queueUUIDA = "aaaaaaaa-0000-4000-8000-00000000000a"
+	queueUUIDB = "bbbbbbbb-0000-4000-8000-00000000000b"
+	queueUUIDC = "cccccccc-0000-4000-8000-00000000000c"
+)
+
+// TestNativeQueue probes the native command queue with a live turn: mid-turn
+// sends enqueue server-side (multi-entry), command_lifecycle frames expose each
+// entry's state, and cancel_async_message removes a queued entry by uuid.
+//
+// The test runs in two passes: on the host it stands up the container and
+// re-invokes this binary inside it; in the container it drives the real
+// claude process and asserts. See TestRewindConversation for the pattern.
+func TestNativeQueue(t *testing.T) {
+	if os.Getenv(CLAUDE_PROTOCOL_IN_CONTAINER) == "1" {
+		assertNativeQueueContract(t)
+		return
+	}
+
+	f := SetupWithContainer(t, AllProviders[0], "native_queue.jsonl.zst", testMode())
+	cmd := exec.Command("docker", "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
+		f.containerID, "/test", "-test.run=^TestNativeQueue$", "-test.v")
+	out, err := cmd.CombinedOutput()
+	t.Logf("native queue protocol test output:\n%s", out)
+	if err != nil {
+		t.Fatalf("native queue protocol test failed: %v", err)
+	}
+}
+
+func assertNativeQueueContract(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	proc, life, perms := startQueueProbe(t)
+
+	// Turn A parks on the Write permission prompt.
+	if err := proc.SendUserMessage("Create a file called probe_a.txt containing 'turn-a'", nil, queueUUIDA); err != nil {
+		t.Fatalf("send A: %v", err)
+	}
+	req := perms.waitForRequest(t)
+	if req.ToolName != "Write" {
+		t.Fatalf("expected the Write permission to park turn A, got tool %q", req.ToolName)
+	}
+	life.waitForState(t, queueUUIDA, "started", 30*time.Second)
+
+	// B and C are sent while turn A is parked, so they are provably mid-turn.
+	// The queue holds both at once.
+	if err := proc.SendUserMessage("Reply with just the number 11111.", nil, queueUUIDB); err != nil {
+		t.Fatalf("send B: %v", err)
+	}
+	if err := proc.SendUserMessage("Reply with just the number 22222.", nil, queueUUIDC); err != nil {
+		t.Fatalf("send C: %v", err)
+	}
+	life.waitForState(t, queueUUIDB, "queued", 30*time.Second)
+	life.waitForState(t, queueUUIDC, "queued", 30*time.Second)
+
+	// Cancelling B removes it from the queue and emits a terminal frame.
+	cancelled, err := proc.CancelAsyncMessage(queueUUIDB)
+	if err != nil {
+		t.Fatalf("cancel B: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel B reported cancelled=false while B was queued")
+	}
+	life.waitForState(t, queueUUIDB, "cancelled", 30*time.Second)
+
+	// A second cancel of B and a cancel of an unknown uuid both report
+	// false: neither is in the queue.
+	cancelled, err = proc.CancelAsyncMessage(queueUUIDB)
+	if err != nil {
+		t.Fatalf("re-cancel B: %v", err)
+	}
+	if cancelled {
+		t.Fatal("re-cancel B reported cancelled=true; B was already removed")
+	}
+	cancelled, err = proc.CancelAsyncMessage("bbbbbbbb-0000-4000-8000-000000000000")
+	if err != nil {
+		t.Fatalf("cancel unknown uuid: %v", err)
+	}
+	if cancelled {
+		t.Fatal("cancel of a never-sent uuid reported cancelled=true")
+	}
+
+	// Release the permission. Turn A completes, then C drains. Whether C
+	// folds into turn A's continuation or runs as its own turn, it must reach
+	// a terminal completed state.
+	perms.allow()
+	if err := proc.WaitForTurnDone(ctx); err != nil {
+		t.Fatalf("turn A never completed: %v", err)
+	}
+	life.waitForState(t, queueUUIDA, "completed", 60*time.Second)
+	life.waitForState(t, queueUUIDC, "completed", 60*time.Second)
+
+	// B must never run: its only terminal state is cancelled, and no user
+	// message with B's text may exist in the transcript.
+	if states := life.states(queueUUIDB); states[len(states)-1] != "cancelled" || len(states) > 2 {
+		t.Fatalf("cancelled B must not run; observed states %v", states)
+	}
+	sessionID, err := proc.WaitForSessionID(ctx)
+	if err != nil {
+		t.Fatalf("session id: %v", err)
+	}
+	for _, m := range waitForUserMessages(ctx, sessionID, 2) {
+		if strings.Contains(m.Raw, "11111") {
+			t.Fatalf("cancelled message B ran anyway; transcript contains its text")
+		}
+	}
+}
+
+// TestNativeQueueInterrupt probes the interrupt queue receipt: a plain
+// interrupt lists the uuids that survive under still_queued, and the queued
+// messages then drain as a coalesced turn.
+//
+// The test runs in two passes; see TestRewindConversation for the pattern.
+func TestNativeQueueInterrupt(t *testing.T) {
+	if os.Getenv(CLAUDE_PROTOCOL_IN_CONTAINER) == "1" {
+		assertNativeQueueInterruptContract(t)
+		return
+	}
+
+	f := SetupWithContainer(t, AllProviders[0], "native_queue_interrupt.jsonl.zst", testMode())
+	// The interrupt must arrive after the CLI dispatches the tool
+	// permission and before the streamed response finishes. Outside that
+	// window the CLI spells the interrupt marker differently, and the
+	// changed text breaks the next request's cassette hash. The gap
+	// recreates the window during replay.
+	f.Replayer.ToolUseStreamGap = 500 * time.Millisecond
+	cmd := exec.Command("docker", "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
+		f.containerID, "/test", "-test.run=^TestNativeQueueInterrupt$", "-test.v")
+	out, err := cmd.CombinedOutput()
+	t.Logf("native queue interrupt protocol test output:\n%s", out)
+	if err != nil {
+		t.Fatalf("native queue interrupt protocol test failed: %v", err)
+	}
+}
+
+func assertNativeQueueInterruptContract(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	proc, life, perms := startQueueProbe(t)
+
+	// Turn A parks on the Write permission prompt; B and C queue behind it.
+	if err := proc.SendUserMessage("Create a file called probe_b.txt containing 'parked'", nil, queueUUIDA); err != nil {
+		t.Fatalf("send A: %v", err)
+	}
+	perms.waitForRequest(t)
+	if err := proc.SendUserMessage("Reply with just the number 33333.", nil, queueUUIDB); err != nil {
+		t.Fatalf("send B: %v", err)
+	}
+	if err := proc.SendUserMessage("Reply with just the number 44444.", nil, queueUUIDC); err != nil {
+		t.Fatalf("send C: %v", err)
+	}
+	life.waitForState(t, queueUUIDB, "queued", 30*time.Second)
+	life.waitForState(t, queueUUIDC, "queued", 30*time.Second)
+
+	// A plain interrupt aborts turn A and reports the survivors.
+	stillQueued, err := proc.Interrupt()
+	if err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	if !slices.Contains(stillQueued, queueUUIDB) || !slices.Contains(stillQueued, queueUUIDC) {
+		t.Fatalf("interrupt still_queued %v does not list both queued uuids", stillQueued)
+	}
+
+	// The parked turn is gone; the queued messages drain as a coalesced turn
+	// and both reach a terminal completed state.
+	life.waitForState(t, queueUUIDB, "completed", 10*time.Second)
+	life.waitForState(t, queueUUIDC, "completed", 90*time.Second)
+	if err := proc.WaitForTurnDone(ctx); err != nil {
+		t.Fatalf("drained turn never completed: %v", err)
+	}
 }

@@ -62,28 +62,47 @@ func Format(cmds []Cmd, extraOOBs ...string) string {
 	return SSE("htmx", strings.Join(oobs, "\n"))
 }
 
-// QueueBar returns an OOB swap for the queue bar. When text is empty the bar
-// is cleared. Otherwise it shows the queued message with Edit and Cancel
-// buttons.
-func QueueBar(sessionID, text string) string {
-	return OOB("queue-bar", "innerHTML", QueueBarContent(sessionID, text))
+// QueueItem is one pending queue entry in render terms. The bar shows one
+// row per item; the buttons address the entry by its uuid.
+type QueueItem struct {
+	UUID      string
+	Text      string
+	HasImages bool
 }
 
-// QueueBarContent returns the inner HTML of the queue bar. When text is empty
-// it returns empty HTML, which clears the bar.
-func QueueBarContent(sessionID, text string) string {
-	if text == "" {
+// QueueBar returns an OOB swap for the queue bar. With no items the bar is
+// cleared. Otherwise it shows one row per queued message with Edit and Cancel
+// buttons.
+func QueueBar(sessionID string, items []QueueItem) string {
+	return OOB("queue-bar", "innerHTML", QueueBarContent(sessionID, items))
+}
+
+// QueueBarContent returns the inner HTML of the queue bar. With no items it
+// returns empty HTML, which clears the bar.
+func QueueBarContent(sessionID string, items []QueueItem) string {
+	if len(items) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(
-		`<div class="queue-content">`+
-			`<span class="queue-label">queued:</span>`+
-			`<span class="queue-preview">%s</span>`+
-			`<button class="queue-btn" hx-post="/cancel-queue" hx-vals='{"session_id":"%s","edit":"true"}' hx-target="#queue-bar" hx-swap="innerHTML">Edit</button>`+
-			`<button class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
-			`</div>`,
-		html.EscapeString(text), html.EscapeString(sessionID), html.EscapeString(sessionID),
-	)
+	sid := html.EscapeString(sessionID)
+	var b strings.Builder
+	b.WriteString(`<div class="queue-content">`)
+	for _, it := range items {
+		preview := it.Text
+		if it.HasImages {
+			preview = "[image] " + preview
+		}
+		uuid := html.EscapeString(it.UUID)
+		fmt.Fprintf(&b,
+			`<div class="queue-entry">`+
+				`<span class="queue-label">queued:</span>`+
+				`<span class="queue-preview">%s</span>`+
+				`<button class="queue-btn" hx-post="/cancel-queue" hx-vals='{"session_id":"%s","uuid":"%s","edit":"true"}' hx-target="#queue-edit" hx-swap="innerHTML">Edit</button>`+
+				`<button class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s","uuid":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
+				`</div>`,
+			html.EscapeString(preview), sid, uuid, sid, uuid)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
 }
 
 // ReviewBarOOB returns an OOB swap for the review bar. When barHTML is empty,

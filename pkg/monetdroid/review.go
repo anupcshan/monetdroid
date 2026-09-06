@@ -241,19 +241,8 @@ func (h *Hub) handleReviewSend(w http.ResponseWriter, r *http.Request) {
 
 	h.Reviews.Clear(sessionID)
 
-	// Send as a user message
-	if queued, queuedText := s.EnqueueMessage(msg); queued {
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)), "", "")
-	} else if s.HasPendingPerms() {
-		uuid := NewUserUUID()
-		s.AdvanceTip(uuid)
-		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: msg, UUID: uuid})
-		if proc := s.GetProc(); proc != nil {
-			proc.SendUserMessage(msg, nil, uuid)
-		}
-	} else {
-		h.StartTurn(s, msg, nil)
-	}
+	// Send as a user message through the native queue path.
+	h.SendMessage(s, msg, nil)
 
 	// Clear the review bar
 	barHTML := `<div class="review-bar" id="review-bar"></div>`

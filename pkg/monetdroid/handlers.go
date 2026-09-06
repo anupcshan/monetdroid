@@ -297,7 +297,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				if label == "" {
 					label = ShortPath(s.GetCwd())
 				}
-				cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.GetQueuedText())
+				cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.QueuedEntries())
 				// Known race: this read is not atomic with the lastSeq snapshot
 				// above. A thinking_delta landing between the two is both baked in
 				// here and replayed by the event loop, duplicating its fragment at
@@ -541,13 +541,22 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 				handleRawStreamEvent(ss, &raw, broadcast)
 			}
 		}
+		onLifecycle := func(ev protocol.CommandLifecycleEvent) {
+			mu.Lock()
+			ss := sess
+			mu.Unlock()
+			if ss != nil {
+				h.handleCommandLifecycle(ss, ev)
+			}
+		}
 		bs := NewBashstreamerEnv(h.baseURL)
 		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
-			Command:           h.claudeCommand,
-			PermissionHandler: permHandler,
-			OnRawEvent:        onRawEvent,
-			ExtraEnv:          bs.Env,
-			BashstreamerDir:   bs.Dir,
+			Command:            h.claudeCommand,
+			PermissionHandler:  permHandler,
+			OnRawEvent:         onRawEvent,
+			OnCommandLifecycle: onLifecycle,
+			ExtraEnv:           bs.Env,
+			BashstreamerDir:    bs.Dir,
 		})
 		if err != nil {
 			if bs.Dir != "" {
@@ -642,7 +651,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 		// Render the full page for clients that were just bound from
 		// cwd-based to session-based SSE.
-		cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.GetQueuedText())
+		cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.QueuedEntries())
 		labelText := label
 		if labelText == "" {
 			labelText = ShortPath(cwd)
@@ -653,31 +662,16 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		// the buffered replay above.
 		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
 
-		// Wait for turn completion and drain queue in background
-		go func() {
-			h.waitAndDrainLoop(s, proc)
-		}()
+		h.watchProcessDeath(s, proc)
 
 		w.Header().Set("HX-Replace-Url", sessionURL(s))
 		return
 	}
 
-	if queued, queuedText := s.EnqueueMessage(text); queued {
-		// Actively streaming: show editable queue bar
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, queuedText)), "", "")
-	} else if s.HasPendingPerms() {
-		// Permission-blocked: inject message directly into stdin.
-		// The CLI queues it internally and processes it after the current turn.
-		uuid := NewUserUUID()
-		s.AdvanceTip(uuid)
-		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images, UUID: uuid})
-		if proc := s.GetProc(); proc != nil {
-			proc.SendUserMessage(text, images, uuid)
-		}
-	} else {
-		// Idle: start a new turn
-		h.StartTurn(s, text, images)
-	}
+	// Claude's native command queue holds the message whether the session is
+	// idle (starts immediately) or busy (waits, or folds into the running
+	// turn). monetdroid only tracks per-uuid state.
+	h.SendMessage(s, text, images)
 
 	w.Header().Set("HX-Replace-Url", sessionURL(s))
 }
@@ -919,13 +913,24 @@ func (h *Hub) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proc := s.InterruptAndGetProc()
-
-	if proc != nil && !proc.IsDead() {
-		if err := proc.Interrupt(); err != nil {
-			log.Printf("[stop] error sending interrupt: %v", err)
-		}
+	proc := s.GetProc()
+	if proc == nil || proc.IsDead() {
+		w.WriteHeader(204)
+		return
 	}
+
+	// The interrupt aborts the running turn. Queued messages stay queued
+	// and run as the next turn. The response's still_queued list is a queue
+	// inventory, so any pending entry missing from it is no longer queued
+	// and leaves the bar.
+	stillQueued, err := proc.Interrupt()
+	if err != nil {
+		log.Printf("[stop] error sending interrupt: %v", err)
+		w.WriteHeader(204)
+		return
+	}
+	s.ReconcileQueued(stillQueued)
+	h.pushQueueBar(s)
 
 	w.WriteHeader(204)
 }
@@ -949,8 +954,15 @@ func (h *Hub) handleClose(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+// handleCancelQueue cancels one queued message by uuid. The entry leaves
+// monetdroid's queue only when claude confirms the cancellation, because a
+// message claude already dequeued still runs and its started frame is the
+// only renderer of its bubble. With edit=true the response is an inline edit
+// form prefilled with the entry's text. Without a uuid the response is
+// empty, which is how the edit form's ✕ closes it.
 func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.FormValue("session_id")
+	uuid := r.FormValue("uuid")
 	edit := r.FormValue("edit") == "true"
 	s := h.Sessions.Get(sessionID)
 	if s == nil {
@@ -958,18 +970,37 @@ func (h *Hub) handleCancelQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if edit {
-		text := s.GetQueuedText()
-		s.ClearQueue()
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(RenderQueueEdit(sessionID, text)))
+	w.Header().Set("Content-Type", "text/html")
+	if uuid == "" {
 		return
 	}
 
-	s.ClearQueue()
-	h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, "")), "", "")
-	w.Header().Set("Content-Type", "text/html")
-	w.Write(nil)
+	entry, ok := s.PeekQueued(uuid)
+	if !ok {
+		w.Write([]byte(RenderQueueBarContent(sessionID, s.QueuedEntries())))
+		return
+	}
+	proc := s.GetProc()
+	if proc == nil || proc.IsDead() {
+		// The queue died with the process, so the entry cannot run.
+		s.RemoveQueued(uuid)
+	} else if cancelled, err := proc.CancelAsyncMessage(uuid); err != nil {
+		// Leave the entry pending. Lifecycle frames resolve it either way,
+		// and the row staying visible reports the failed cancel.
+		log.Printf("[cancel-queue] cancel %s: %v", uuid, err)
+	} else if cancelled {
+		// cancelled=false means claude already dequeued the message and it
+		// will run. The entry must stay so its started frame can render it.
+		s.RemoveQueued(uuid)
+	}
+
+	entries := s.QueuedEntries()
+	if edit {
+		w.Write([]byte(RenderQueueEdit(sessionID, entry.Text)))
+	} else {
+		w.Write([]byte(RenderQueueBarContent(sessionID, entries)))
+	}
+	h.BroadcastToSession(sessionID, FormatSSE("htmx", RenderQueueBar(sessionID, entries)), "", "")
 }
 
 // userMsgLoc describes a user message located in the log for editing.
@@ -1138,10 +1169,21 @@ func (h *Hub) handleEditResend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Editing clears the queue. The resent message replaces whatever was
-	// waiting.
-	s.ClearQueue()
-	h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
+	// Editing replaces whatever was waiting in the queue. An entry leaves
+	// only when claude confirms the cancellation. One already dequeued for
+	// the imminent turn still runs, so it stays registered for its started
+	// lifecycle frame to render.
+	for _, e := range s.QueuedEntries() {
+		cancelled, err := proc.CancelAsyncMessage(e.UUID)
+		if err != nil {
+			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: fmt.Sprintf("cancel queued message: %v", err)})
+			continue
+		}
+		if cancelled {
+			s.RemoveQueued(e.UUID)
+		}
+	}
+	h.pushQueueBar(s)
 
 	// Move the tip to the branch point. The abandoned branch then sits
 	// behind the fork and drops out of the active walk on its own.
@@ -1161,9 +1203,9 @@ func (h *Hub) handleEditResend(w http.ResponseWriter, r *http.Request) {
 	if old != nil {
 		old.Close()
 	}
-	h.BroadcastToSession(s.ID, FormatSSEDOM(RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.GetQueuedText())), "", "")
+	h.BroadcastToSession(s.ID, FormatSSEDOM(RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.QueuedEntries())), "", "")
 
-	h.StartTurn(s, text, nil)
+	h.SendMessage(s, text, nil)
 
 	w.WriteHeader(204)
 }

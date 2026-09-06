@@ -1689,22 +1689,37 @@ func Add(a, b int) int {
 		page.MustElement(`textarea[name="text"]`).MustInput("What functions are defined in each file?")
 		page.MustElement(`.send-btn`).MustClick()
 
-		// Wait for the running indicator (proves StartTurn ran and set Running=true).
+		// Wait for the running indicator (proves the turn started).
 		WaitForElement(t, page, "#stop-btn button", 10*time.Second)
 		Screenshot(t, page, "queue_turn2_paused")
 
-		// Send a third message while Claude is streaming. It should be queued.
+		// Send two more messages while the turn is blocked. Both enter
+		// claude's native queue and render as separate bar entries.
 		page.MustElement(`textarea[name="text"]`).MustInput("Thanks for the help")
 		page.MustElement(`.send-btn`).MustClick()
+		page.MustElement(`textarea[name="text"]`).MustInput("Summarize both files in one sentence")
+		page.MustElement(`.send-btn`).MustClick()
 
-		// Queue bar should appear with the queued text.
 		WaitForElement(t, page, ".queue-content", 5*time.Second)
-		queueText := page.MustElement(`.queue-preview`).MustText()
-		if !strings.Contains(queueText, "Thanks for the help") {
-			Screenshot(t, page, "queue_wrong_text")
-			t.Fatalf("expected queue to contain 'Thanks for the help', got: %s", queueText)
+		entries := page.MustElements(".queue-entry")
+		if len(entries) != 2 {
+			Screenshot(t, page, "queue_wrong_entry_count")
+			t.Fatalf("expected 2 queue entries, got %d", len(entries))
 		}
 		Screenshot(t, page, "queue_bar_visible")
+
+		// Cancel the first queued entry. Its row disappears. The second
+		// stays.
+		first := page.Timeout(10*time.Second).MustElementR(".queue-entry", "Thanks for the help")
+		first.MustElement(".queue-cancel").MustClick()
+		if err := page.Timeout(10 * time.Second).Wait(rod.Eval(
+			`() => document.querySelectorAll('.queue-entry').length === 1`,
+		)); err != nil {
+			Screenshot(t, page, "queue_cancel_failed")
+			t.Fatalf("cancelling the first entry did not leave exactly one row: %v", err)
+		}
+		WaitForText(t, page, ".queue-preview", "Summarize both files", 5*time.Second)
+		Screenshot(t, page, "queue_cancelled_one")
 
 		// The queue lives in server-side session state. A reload must
 		// restore the same bar from that state.
@@ -1712,17 +1727,21 @@ func Add(a, b int) int {
 		page.MustNavigate(currentURL).MustWaitStable()
 		WaitForElement(t, page, ".queue-content", 10*time.Second)
 		Screenshot(t, page, "queue_bar_after_reload")
-		WaitForText(t, page, ".queue-preview", "Thanks for the help", 5*time.Second)
+		WaitForText(t, page, ".queue-preview", "Summarize both files", 5*time.Second)
 
 		// Unpause. All API calls flow through.
 		f.Replayer.Unpause()
 
-		// Turn 2 completes, queue drains, turn 3 starts and completes.
-		// Wait for the queued message to appear in chat.
-		_, err := page.Timeout(120*time.Second).ElementR(".msg-user", "Thanks for the help")
+		// The blocked turn completes and the surviving queued message runs.
+		// The cancelled one must never run.
+		_, err := page.Timeout(120*time.Second).ElementR(".msg-user", "Summarize both files")
 		if err != nil {
 			Screenshot(t, page, "queue_drain_fail")
 			t.Fatalf("queued message never appeared in chat: %v", err)
+		}
+		if _, err := page.Timeout(5*time.Second).ElementR(".msg-user", "Thanks for the help"); err == nil {
+			Screenshot(t, page, "queue_cancelled_ran")
+			t.Fatal("cancelled queued message ran anyway")
 		}
 
 		// Queue bar should be gone.

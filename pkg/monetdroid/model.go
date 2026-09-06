@@ -48,10 +48,11 @@ type SessionModel struct {
 	pendingCommands map[string]string
 
 	// Activity tracking: derived from event observations. turnActive is set by
-	// the "running" broadcast, emitted from handleSend (a new session's first
-	// turn), StartTurn, and waitAndDrainLoop. It is cleared by "done" (the
-	// result event handler). processAlive is set true on session_started and
-	// false on session_ended.
+	// the "running" broadcast, emitted when a message starts running: on
+	// handleSend's new-session path (the first turn) and on the started
+	// command_lifecycle frame (every later message). It is cleared by "done"
+	// (the result event handler). processAlive is set true on session_started
+	// and false on session_ended.
 	turnActive   bool
 	processAlive bool
 

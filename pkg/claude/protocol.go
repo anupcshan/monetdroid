@@ -110,6 +110,30 @@ type ctlRewindRequest struct {
 	TargetMessageUUID string `json:"target_message_uuid"`
 }
 
+type ctlCancelAsyncRequest struct {
+	Subtype     string `json:"subtype"` // "cancel_async_message"
+	MessageUUID string `json:"message_uuid"`
+}
+
+// ctlCancelAsyncResponse is the body of a cancel_async_message
+// control_response. Cancelled reports whether claude removed the message
+// from its queue. It is false when the message was already dequeued for
+// execution or was never enqueued. A removed message emits a terminal
+// cancelled command_lifecycle frame.
+type ctlCancelAsyncResponse struct {
+	Cancelled bool `json:"cancelled"`
+}
+
+// ctlInterruptResponse is the body of an interrupt control_response.
+// StillQueued lists the uuids of user messages that were pending when the
+// interrupt arrived. That covers messages still in the command queue and
+// any batch already dequeued for the next turn. Only messages sent with a
+// uuid appear. The list can carry uuids the client never sent, such as
+// scheduled task triggers.
+type ctlInterruptResponse struct {
+	StillQueued []string `json:"still_queued"`
+}
+
 // ctlRewindResponse is the body of a rewind_conversation control_response.
 // The outer subtype is "success" even when Rewound is false, so Rewound is the
 // real success signal.

@@ -124,6 +124,18 @@ type Replayer struct {
 	// channel. Unpause() closes it. Requests wait on the current channel,
 	// so they block while paused and pass through once unpaused.
 	gate chan struct{}
+
+	// ToolUseStreamGap, when positive, pauses a replayed SSE stream after
+	// the content_block_stop of each tool_use block. Recording serves that
+	// body over time, and the CLI dispatches the tool permission while the
+	// stream is still open. A bulk-write replay delivers the whole body in
+	// one pass, so the stream is closed by the time the permission
+	// dispatches. The pause holds the stream open for the gap so replay
+	// reproduces the recorded state.
+	//
+	// The zero value keeps the single bulk write. Assign it before the
+	// replayer starts serving. It has no effect in record mode.
+	ToolUseStreamGap time.Duration
 }
 
 // Cassette files are zstd-compressed JSONL on disk. The system prompt
@@ -235,7 +247,15 @@ func (r *Replayer) saveCassette() {
 	r.t.Logf("replayer: saved %d interactions to %s", len(r.interactions), r.cassettePath)
 }
 
+// ServeHTTP admits requests only while unpaused. The wait sits before the
+// mode dispatch, so replay holds a request before cassette matching and
+// record holds it before the upstream proxy.
 func (r *Replayer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	r.gateMu.Lock()
+	gate := r.gate
+	r.gateMu.Unlock()
+	<-gate
+
 	if r.mode == "record" {
 		r.handleRecord(w, req)
 	} else {
@@ -246,11 +266,6 @@ func (r *Replayer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
 	req.Body.Close()
-
-	r.gateMu.Lock()
-	gate := r.gate
-	r.gateMu.Unlock()
-	<-gate
 
 	// Normalize the live body by replacing any live random IDs with their
 	// recorded counterparts so the hash matches. Without this, IDs that leak
@@ -365,12 +380,60 @@ func (r *Replayer) handleReplay(w http.ResponseWriter, req *http.Request) {
 	}
 	w.WriteHeader(interaction.Response.Status)
 
+	if r.ToolUseStreamGap > 0 && strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+		writeSSEWithToolUseGap(w, responseBody, r.ToolUseStreamGap)
+		return
+	}
 	// For SSE responses, flush to ensure the client receives the stream
 	if flusher, ok := w.(http.Flusher); ok {
 		w.Write([]byte(responseBody))
 		flusher.Flush()
 	} else {
 		w.Write([]byte(responseBody))
+	}
+}
+
+// writeSSEWithToolUseGap writes an SSE body event by event and pauses after
+// the content_block_stop of each tool_use block. See ToolUseStreamGap for
+// why the pause exists. The events keep their original separators, so the
+// bytes delivered are identical to a bulk write.
+func writeSSEWithToolUseGap(w http.ResponseWriter, body string, gap time.Duration) {
+	flusher, _ := w.(http.Flusher)
+	events := strings.Split(body, "\n\n")
+	blockTypes := map[int]string{}
+	write := func(s string) {
+		w.Write([]byte(s))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	for i, event := range events {
+		write(event)
+		if i < len(events)-1 {
+			write("\n\n")
+		}
+		data := sseDataLine(event)
+		if data == "" {
+			continue
+		}
+		var parsed struct {
+			Type         string `json:"type"`
+			Index        int    `json:"index"`
+			ContentBlock struct {
+				Type string `json:"type"`
+			} `json:"content_block"`
+		}
+		if json.Unmarshal([]byte(data), &parsed) != nil {
+			continue
+		}
+		switch parsed.Type {
+		case "content_block_start":
+			blockTypes[parsed.Index] = parsed.ContentBlock.Type
+		case "content_block_stop":
+			if blockTypes[parsed.Index] == "tool_use" {
+				time.Sleep(gap)
+			}
+		}
 	}
 }
 

@@ -26,9 +26,9 @@ func procStateCmd(alive bool) DOMCmd {
 
 // RenderFull produces all DOM commands for a full page render. Callers should
 // register bg paths and commands on the session from the model before
-// calling this. queuedText is the session's live queue, passed separately
+// calling this. entries is the session's live queue, passed separately
 // because the model does not track it.
-func RenderFull(m *SessionModel, sessionID string, reviewCount int, queuedText string) []DOMCmd {
+func RenderFull(m *SessionModel, sessionID string, reviewCount int, entries []QueueEntry) []DOMCmd {
 	var cmds []DOMCmd
 
 	// --- Chrome ---
@@ -54,7 +54,7 @@ func RenderFull(m *SessionModel, sessionID string, reviewCount int, queuedText s
 	cmds = append(cmds, costBarCmd(sessionID, m.Cwd, m.Cost, m.DiffStat)...)
 	cmds = append(cmds, modeBarCmd(sessionID, m.PermMode)...)
 	cmds = append(cmds, todoCmds(m.Todos)...)
-	cmds = append(cmds, queueBarCmd(sessionID, queuedText)...)
+	cmds = append(cmds, queueBarCmd(sessionID, entries)...)
 	cmds = append(cmds, reviewBarCmd(sessionID, reviewCount)...)
 
 	// --- Messages ---
@@ -408,8 +408,8 @@ func todoCmds(todos []protocol.Todo) []DOMCmd {
 	}
 }
 
-func queueBarCmd(sessionID, queuedText string) []DOMCmd {
-	return []DOMCmd{{Target: "queue-bar", Strategy: "innerHTML", Content: render.QueueBarContent(sessionID, queuedText)}}
+func queueBarCmd(sessionID string, entries []QueueEntry) []DOMCmd {
+	return []DOMCmd{{Target: "queue-bar", Strategy: "innerHTML", Content: render.QueueBarContent(sessionID, queueItems(entries))}}
 }
 
 func reviewBarCmd(sessionID string, count int) []DOMCmd {

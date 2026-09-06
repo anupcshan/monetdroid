@@ -56,8 +56,16 @@ type Process interface {
 	// is cancelled. Returns ErrProcessDead if the process exits first.
 	WaitForTurnDone(ctx context.Context) error
 
-	// Interrupt requests that the current turn be aborted.
-	Interrupt() error
+	// Interrupt aborts the running turn and returns the still_queued uuids
+	// from the interrupt response.
+	Interrupt() ([]string, error)
+
+	// CancelAsyncMessage removes a pending queued message by the uuid it
+	// was sent with and reports whether claude cancelled it.
+	CancelAsyncMessage(messageUUID string) (bool, error)
+
+	// Dead returns a channel closed when the process exits.
+	Dead() <-chan struct{}
 
 	// SetPermissionMode changes the permission mode mid-session.
 	SetPermissionMode(mode PermissionMode) error
@@ -113,6 +121,12 @@ type ProcessConfig struct {
 	// (--include-partial-messages). Used for live text/thinking display.
 	OnRawEvent func(protocol.RawStreamEvent)
 
+	// OnCommandLifecycle, when set, is called for every command_lifecycle
+	// frame the CLI emits for a uuid-stamped user message, so the caller can
+	// track the native command queue: queued, started, and the terminal
+	// states.
+	OnCommandLifecycle func(protocol.CommandLifecycleEvent)
+
 	// ExtraEnv is appended to the subprocess environment after the
 	// built-in variables. Each entry is "KEY=VALUE". Use for
 	// session-specific variables (e.g. bashstreamer URL).
@@ -140,10 +154,11 @@ type ClaudeProcess struct {
 	dead        chan struct{} // closed when process exits (by scan goroutine)
 	sessionIDCh chan string   // receives the ClaudeID from the first system event
 
-	permHandler PermissionHandler
-	onEvent     func(protocol.StreamEvent)
-	onRawEvent  func(protocol.RawStreamEvent)
-	bsDir       string // bashstreamer wrapper dir, removed in Kill()
+	permHandler        PermissionHandler
+	onEvent            func(protocol.StreamEvent)
+	onRawEvent         func(protocol.RawStreamEvent)
+	onCommandLifecycle func(protocol.CommandLifecycleEvent)
+	bsDir              string // bashstreamer wrapper dir, removed in Kill()
 }
 
 // StartProcess starts a new claude CLI subprocess with default configuration.
@@ -219,9 +234,11 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 
 	var permHandler PermissionHandler
 	var onRawEvent func(protocol.RawStreamEvent)
+	var onCommandLifecycle func(protocol.CommandLifecycleEvent)
 	if cfg != nil {
 		permHandler = cfg.PermissionHandler
 		onRawEvent = cfg.OnRawEvent
+		onCommandLifecycle = cfg.OnCommandLifecycle
 	}
 
 	var bsDir string
@@ -229,16 +246,17 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		bsDir = cfg.BashstreamerDir
 	}
 	p := &ClaudeProcess{
-		cmd:         cmd,
-		stdin:       stdin,
-		pending:     make(map[string]chan ctlRespPayload),
-		turnDone:    make(chan struct{}, 1),
-		dead:        make(chan struct{}),
-		sessionIDCh: make(chan string, 1),
-		permHandler: permHandler,
-		onEvent:     onEvent,
-		onRawEvent:  onRawEvent,
-		bsDir:       bsDir,
+		cmd:                cmd,
+		stdin:              stdin,
+		pending:            make(map[string]chan ctlRespPayload),
+		turnDone:           make(chan struct{}, 1),
+		dead:               make(chan struct{}),
+		sessionIDCh:        make(chan string, 1),
+		permHandler:        permHandler,
+		onEvent:            onEvent,
+		onRawEvent:         onRawEvent,
+		onCommandLifecycle: onCommandLifecycle,
+		bsDir:              bsDir,
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -317,6 +335,22 @@ func (p *ClaudeProcess) scan(stdout io.Reader, logLabel string) {
 			}
 			if p.onRawEvent != nil {
 				p.onRawEvent(raw)
+			}
+
+		case "command_lifecycle":
+			var ev protocol.CommandLifecycleEvent
+			if err := json.Unmarshal(line, &ev); err != nil {
+				log.Printf("[parse error][%s] command_lifecycle: %s", logLabel, err)
+				continue
+			}
+			if ev.SessionID != "" {
+				select {
+				case p.sessionIDCh <- ev.SessionID:
+				default:
+				}
+			}
+			if p.onCommandLifecycle != nil {
+				p.onCommandLifecycle(ev)
 			}
 
 		default:
@@ -513,10 +547,36 @@ func (p *ClaudeProcess) SendUserMessage(text string, images []protocol.ImageData
 	return err
 }
 
-// Interrupt sends an interrupt control request to abort the current turn.
-func (p *ClaudeProcess) Interrupt() error {
-	_, err := p.sendControlRequest(ctlInterruptRequest{Subtype: "interrupt"})
-	return err
+// Interrupt aborts the running turn and returns the still_queued uuids from
+// the interrupt response.
+func (p *ClaudeProcess) Interrupt() ([]string, error) {
+	resp, err := p.sendControlRequest(ctlInterruptRequest{Subtype: "interrupt"})
+	if err != nil {
+		return nil, err
+	}
+	var body ctlInterruptResponse
+	if len(resp.Response) > 0 {
+		if err := json.Unmarshal(resp.Response, &body); err != nil {
+			return nil, fmt.Errorf("parse interrupt response: %w", err)
+		}
+	}
+	return body.StillQueued, nil
+}
+
+// CancelAsyncMessage removes a pending queued message by the uuid it was
+// sent with and reports whether claude cancelled it.
+func (p *ClaudeProcess) CancelAsyncMessage(messageUUID string) (bool, error) {
+	resp, err := p.sendControlRequest(ctlCancelAsyncRequest{Subtype: "cancel_async_message", MessageUUID: messageUUID})
+	if err != nil {
+		return false, err
+	}
+	var body ctlCancelAsyncResponse
+	if len(resp.Response) > 0 {
+		if err := json.Unmarshal(resp.Response, &body); err != nil {
+			return false, fmt.Errorf("parse cancel_async_message response: %w", err)
+		}
+	}
+	return body.Cancelled, nil
 }
 
 // SetPermissionMode changes the permission mode mid-session.
@@ -567,6 +627,11 @@ func (p *ClaudeProcess) IsDead() bool {
 	default:
 		return false
 	}
+}
+
+// Dead returns a channel closed when the process exits.
+func (p *ClaudeProcess) Dead() <-chan struct{} {
+	return p.dead
 }
 
 // WaitForSessionID blocks until the CLI reports a session ID or the context

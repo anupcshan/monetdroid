@@ -912,15 +912,21 @@ body:has(#proc-state.proc.alive):not(:has(#turn-state.on)) .msg-edit-btn { displ
 
 /* --- Queue bar --- */
 .queue-bar:empty { display: none; }
+.queue-edit:empty { display: none; }
 .queue-content {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   padding: 8px 16px;
   background: var(--surface);
   border-top: 1px solid var(--border);
   font-family: var(--mono);
   font-size: 11px;
+}
+.queue-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .queue-content form { display: contents; }
 .queue-label {

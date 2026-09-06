@@ -1,7 +1,6 @@
 package monetdroid
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -590,94 +589,123 @@ func isStreamingFlushTrigger(msg ServerMsg) bool {
 	return false
 }
 
-func (h *Hub) StartTurn(s *Session, text string, images []protocol.ImageData) {
-	proc := s.ResetInterruptAndGetProc()
-
-	// Ensure process is alive
-	if proc == nil || proc.IsDead() {
-		broadcast := func(msg ServerMsg) {
-			h.Broadcast(msg)
-		}
-		bs := NewBashstreamerEnv(h.baseURL)
-		var err error
-		proc, err = claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
-			handleStreamEvent(s, &event, broadcast)
-		}, s.ID, &claude.ProcessConfig{
-			Command: h.claudeCommand,
-			PermissionHandler: func(req protocol.PermissionRequest) protocol.PermResponse {
-				return s.HandlePermission(req, func(msg ServerMsg) { h.Broadcast(msg) })
-			},
-			OnRawEvent: func(raw protocol.RawStreamEvent) {
-				handleRawStreamEvent(s, &raw, broadcast)
-			},
-			ExtraEnv:        bs.Env,
-			BashstreamerDir: bs.Dir,
-		})
-		if err != nil {
-			if bs.Dir != "" {
-				os.RemoveAll(bs.Dir)
-			}
-			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
-			return
-		}
-		s.SetProc(proc)
-		s.BashSignalPath = bs.Signal
-		h.Broadcast(ServerMsg{Type: "session_started", SessionID: s.ID})
+// SendMessage delivers a user message to the session's claude process and
+// registers it in the native command queue. Claude queues mid-turn sends
+// itself and drains them when the current turn ends, so no client-side drain
+// loop exists.
+func (h *Hub) SendMessage(s *Session, text string, images []protocol.ImageData) {
+	proc := h.ensureProcess(s)
+	if proc == nil {
+		return
 	}
 
-	// Auto-label from first user message
 	s.TryAutoLabel(text)
 
 	// The message's uuid is minted here, before sending. Claude adopts it as
 	// the message's transcript uuid, so the uuid the bubble renders with is
-	// canonical from the moment of sending.
+	// canonical from the moment of sending. The uuid is the handle every
+	// lifecycle frame and cancel request addresses, so it is registered in
+	// the queue before the send.
 	uuid := NewUserUUID()
-	s.AdvanceTip(uuid)
-	h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: text, Images: images, UUID: uuid})
-	h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
+	s.AddQueued(QueueEntry{UUID: uuid, Text: text, Images: images})
 
+	// A message sent to an idle session starts within milliseconds, so the
+	// queue bar is only pushed when the session is busy and the entry will
+	// visibly wait. Claude decides queueing, not monetdroid.
+	if s.IsBusy() {
+		h.pushQueueBar(s)
+	}
+
+	if err := proc.SendUserMessage(text, images, uuid); err != nil {
+		s.RemoveQueued(uuid)
+		h.pushQueueBar(s)
+		h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+	}
+}
+
+// ensureProcess returns the session's live claude process, starting one when
+// none exists or the previous one died.
+func (h *Hub) ensureProcess(s *Session) claude.Process {
+	if proc := s.GetProc(); proc != nil && !proc.IsDead() {
+		return proc
+	}
+
+	broadcast := func(msg ServerMsg) {
+		h.Broadcast(msg)
+	}
+	bs := NewBashstreamerEnv(h.baseURL)
+	proc, err := claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
+		handleStreamEvent(s, &event, broadcast)
+	}, s.ID, &claude.ProcessConfig{
+		Command: h.claudeCommand,
+		PermissionHandler: func(req protocol.PermissionRequest) protocol.PermResponse {
+			return s.HandlePermission(req, func(msg ServerMsg) { h.Broadcast(msg) })
+		},
+		OnRawEvent: func(raw protocol.RawStreamEvent) {
+			handleRawStreamEvent(s, &raw, broadcast)
+		},
+		OnCommandLifecycle: func(ev protocol.CommandLifecycleEvent) {
+			h.handleCommandLifecycle(s, ev)
+		},
+		ExtraEnv:        bs.Env,
+		BashstreamerDir: bs.Dir,
+	})
+	if err != nil {
+		if bs.Dir != "" {
+			os.RemoveAll(bs.Dir)
+		}
+		h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+		return nil
+	}
+	s.SetProc(proc)
+	s.BashSignalPath = bs.Signal
+	h.Broadcast(ServerMsg{Type: "session_started", SessionID: s.ID})
+	h.watchProcessDeath(s, proc)
+	return proc
+}
+
+// watchProcessDeath clears session state that only lives as long as the
+// claude process and announces the end of the session. A respawn replaces
+// the session's process and announces the new one with session_started, so a
+// stale watcher must not fire after that.
+func (h *Hub) watchProcessDeath(s *Session, proc claude.Process) {
 	go func() {
-		if err := proc.SendUserMessage(text, images, uuid); err != nil {
-			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+		<-proc.Dead()
+		if s.GetProc() != proc {
 			return
 		}
-		h.waitAndDrainLoop(s, proc)
+		s.ReconcileQueued(nil)
+		s.CloseAllBgStops()
+		h.pushQueueBar(s)
+		h.Broadcast(ServerMsg{Type: "session_ended", SessionID: s.ID})
 	}()
 }
 
-// waitAndDrainLoop waits for the current turn to complete, then drains
-// any queued messages, sending each as a new turn. Loops until the queue
-// is empty or the session is interrupted.
-func (h *Hub) waitAndDrainLoop(s *Session, proc claude.Process) {
-	for {
-		proc.WaitForTurnDone(context.Background())
-
-		if proc.IsDead() {
-			s.CloseAllBgStops()
-			// A respawn replaces the session's process and announces the
-			// new one with session_started. A stale loop must not flip the
-			// sentinel dead after that.
-			if s.GetProc() == proc {
-				h.Broadcast(ServerMsg{Type: "session_ended", SessionID: s.ID})
-			}
-		}
-
-		interrupted, next := s.DrainQueue()
-		if interrupted || next == "" {
-			break
-		}
-
-		h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, "")), "", "")
-		uuid := NewUserUUID()
-		s.AdvanceTip(uuid)
-		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: next, UUID: uuid})
-		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
-
-		if err := proc.SendUserMessage(next, nil, uuid); err != nil {
-			h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: err.Error()})
+// handleCommandLifecycle maps a command_lifecycle frame onto the queue bar
+// and the message stream. A message that starts running leaves the queue and
+// becomes a chat bubble here. Claude emits no user echo of its own, so this
+// broadcast is the only thing that renders the message. Frames for uuids
+// monetdroid did not register (claude-internal commands) are ignored.
+func (h *Hub) handleCommandLifecycle(s *Session, ev protocol.CommandLifecycleEvent) {
+	switch ev.State {
+	case "started":
+		entry, ok := s.TakeQueued(ev.CommandUUID)
+		if !ok {
 			return
 		}
+		s.AdvanceTip(entry.UUID)
+		h.Broadcast(ServerMsg{Type: "user_message", SessionID: s.ID, Text: entry.Text, Images: entry.Images, UUID: entry.UUID})
+		h.Broadcast(ServerMsg{Type: "running", SessionID: s.ID})
+		h.pushQueueBar(s)
+	case "cancelled", "discarded", "refused":
+		s.RemoveQueued(ev.CommandUUID)
+		h.pushQueueBar(s)
 	}
+}
+
+// pushQueueBar re-renders the queue bar from the session's pending entries.
+func (h *Hub) pushQueueBar(s *Session) {
+	h.BroadcastToSession(s.ID, FormatSSE("htmx", RenderQueueBar(s.ID, s.QueuedEntries())), "", "")
 }
 
 // renderContext holds precomputed metadata for rendering a slice of messages.

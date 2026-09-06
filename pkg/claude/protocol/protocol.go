@@ -26,6 +26,20 @@ type RawStreamEvent struct {
 	} `json:"event"`
 }
 
+// CommandLifecycleEvent reports a state transition of a queued command. The
+// CLI emits one for every inbound user message that carries a caller-minted
+// uuid: "queued" when it enters the command queue, "started" when it drains
+// into a turn, then exactly one terminal state ("completed", "cancelled",
+// "discarded", "refused"). Messages sent without a uuid emit no lifecycle
+// events.
+type CommandLifecycleEvent struct {
+	Type        string `json:"type"` // "command_lifecycle"
+	CommandUUID string `json:"command_uuid"`
+	State       string `json:"state"`
+	UUID        string `json:"uuid"`
+	SessionID   string `json:"session_id"`
+}
+
 // StreamEvent is the top-level envelope for all non-control events from the CLI.
 type StreamEvent struct {
 	Type            string                    `json:"type"` // "user", "assistant", "result", "system"

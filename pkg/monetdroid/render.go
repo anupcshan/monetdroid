@@ -789,19 +789,40 @@ func RenderCostBar(s *Session) string {
 	return strings.Join(parts, " · ")
 }
 
-func RenderQueueBar(sessionID, text string) string {
-	return render.QueueBar(sessionID, text)
+// RenderQueueBar returns an OOB swap for the queue bar showing one row per
+// pending entry.
+func RenderQueueBar(sessionID string, entries []QueueEntry) string {
+	return render.QueueBar(sessionID, queueItems(entries))
 }
 
+// RenderQueueBarContent returns the queue bar's inner HTML for one row per
+// pending entry.
+func RenderQueueBarContent(sessionID string, entries []QueueEntry) string {
+	return render.QueueBarContent(sessionID, queueItems(entries))
+}
+
+func queueItems(entries []QueueEntry) []render.QueueItem {
+	items := make([]render.QueueItem, len(entries))
+	for i, e := range entries {
+		items[i] = render.QueueItem{UUID: e.UUID, Text: e.Text, HasImages: len(e.Images) > 0}
+	}
+	return items
+}
+
+// RenderQueueEdit renders the inline edit form for a cancelled entry into
+// its own #queue-edit element. The queue bar never writes there, so bar
+// pushes cannot overwrite an open form. Send posts the edited text as a
+// fresh message and the empty /send response clears the form. The ✕ posts
+// with no uuid and its empty response closes the form the same way.
 func RenderQueueEdit(sessionID, text string) string {
 	return fmt.Sprintf(
 		`<div class="queue-content queue-editing">`+
-			`<form hx-post="/send" hx-swap="none">`+
+			`<form hx-post="/send" hx-target="#queue-edit" hx-swap="innerHTML">`+
 			`<input type="hidden" name="session_id" value="%s">`+
 			`<textarea class="queue-text" name="text">%s</textarea>`+
 			`<div class="queue-actions">`+
 			`<button type="submit" class="queue-btn queue-send">Send</button>`+
-			`<button type="button" class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-bar" hx-swap="innerHTML">✕</button>`+
+			`<button type="button" class="queue-btn queue-cancel" hx-post="/cancel-queue" hx-vals='{"session_id":"%s"}' hx-target="#queue-edit" hx-swap="innerHTML">✕</button>`+
 			`</div></form></div>`,
 		Esc(sessionID), Esc(text), Esc(sessionID),
 	)

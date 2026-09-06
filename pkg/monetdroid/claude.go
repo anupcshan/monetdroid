@@ -67,7 +67,8 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 	// Advance the tip cursor once per parentless user or assistant event
 	// carrying a uuid. These are the transcript's main-branch lines. Result,
 	// system, task, and parented (sidechain) events are not. Sent user
-	// messages advance the tip at send time with their minted uuid.
+	// messages advance the tip on the started command_lifecycle frame with
+	// their minted uuid.
 	if pid == "" && event.UUID != "" && (event.Type == "user" || event.Type == "assistant") {
 		s.AdvanceTip(event.UUID)
 	}
@@ -279,10 +280,10 @@ func handleStreamEvent(s *Session, event *protocol.StreamEvent, broadcast func(S
 
 		// Parent user events are broadcast normally. Only claude-generated
 		// user events arrive here. monetdroid broadcasts each typed message
-		// itself at send time with its minted uuid, so no typed message
-		// reaches this handler. The tool_result loop below finds nothing on
-		// claude-generated text prompts. The task-notification scan still
-		// applies to them.
+		// itself on the started command_lifecycle frame with its minted uuid,
+		// so no typed message reaches this handler. The tool_result loop below
+		// finds nothing on claude-generated text prompts. The task-notification
+		// scan still applies to them.
 		for _, b := range event.Message.Content.Blocks {
 			if b.Type == "tool_result" {
 				suppressed := s.RemoveSuppressed(b.ToolUseID)
