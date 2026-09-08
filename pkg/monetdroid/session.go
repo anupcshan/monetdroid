@@ -73,10 +73,14 @@ type Session struct {
 	StreamingText     string                // accumulated text from text_delta events
 	StreamingThinking string                // accumulated text from thinking_delta events
 	Model             *SessionModel
-	proc              claude.Process
-	mu                sync.Mutex
-	ctx               context.Context
-	cancel            context.CancelFunc
+	// ClaudeCommand is the model invocation the session runs under, fixed
+	// at first send. Empty means no model has been chosen. Sends are
+	// rejected until one is set. Guarded by mu.
+	ClaudeCommand string
+	proc          claude.Process
+	mu            sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // SubagentSection holds the rendered state of a sub-agent section. AgentID
@@ -262,6 +266,21 @@ func (s *Session) FindPermInput(permID string) *protocol.ToolInput {
 func (s *Session) SetProc(proc claude.Process) {
 	s.mu.Lock()
 	s.proc = proc
+	s.mu.Unlock()
+}
+
+// GetClaudeCommand returns the model invocation the session runs under, or
+// empty when no model has been chosen.
+func (s *Session) GetClaudeCommand() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ClaudeCommand
+}
+
+// SetClaudeCommand fixes the session's model invocation.
+func (s *Session) SetClaudeCommand(cmd string) {
+	s.mu.Lock()
+	s.ClaudeCommand = cmd
 	s.mu.Unlock()
 }
 

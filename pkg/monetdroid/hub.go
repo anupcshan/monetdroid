@@ -128,13 +128,12 @@ type Hub struct {
 	Tracker       *SessionTracker
 	Labels        *LabelStore
 	Reviews       *ReviewStore
+	// ModelCommands persists the model invocation each session runs under.
+	ModelCommands *ModelCommandStore
 	// baseURL is the http://host:port that prefixes bashstreamer push URLs.
-	baseURL string
-	// claudeCommand overrides the claude CLI invocation. Nil/empty means
-	// use the default "claude" in PATH (resolved by
-	// claude.StartProcessWithConfig). Set at construction; read-only after.
-	claudeCommand []string
-	mu            sync.RWMutex
+	baseURL          string
+	selectableModels []ModelEntry
+	mu               sync.RWMutex
 }
 
 // Close kills all active claude processes.
@@ -174,19 +173,23 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".monetdroid")
 }
 
-// NewHub constructs a Hub. claudeCommand overrides the claude CLI
-// invocation; nil/empty uses the default "claude" in PATH. When non-empty,
-// claudeCommand[0] is validated with exec.LookPath so a missing binary
-// fails here rather than at session start.
-func NewHub(baseURL string, claudeCommand []string) (*Hub, error) {
-	return NewHubWithDataDir(baseURL, defaultDataDir(), claudeCommand)
+// NewHub constructs a Hub. claudeBin is the claude executable to invoke,
+// with an empty value using the default "claude" in PATH. When non-empty,
+// it is validated with exec.LookPath so a missing binary fails here
+// rather than at session start. scan configures model discovery.
+func NewHub(baseURL, claudeBin string, scan ModelScanSpec) (*Hub, error) {
+	return NewHubWithDataDir(baseURL, defaultDataDir(), claudeBin, scan)
 }
 
-func NewHubWithDataDir(baseURL, dataDir string, claudeCommand []string) (*Hub, error) {
-	if len(claudeCommand) > 0 {
-		if _, err := exec.LookPath(claudeCommand[0]); err != nil {
-			return nil, fmt.Errorf("claude binary %q: %w", claudeCommand[0], err)
+func NewHubWithDataDir(baseURL, dataDir, claudeBin string, scan ModelScanSpec) (*Hub, error) {
+	if claudeBin != "" {
+		if _, err := exec.LookPath(claudeBin); err != nil {
+			return nil, fmt.Errorf("claude binary %q: %w", claudeBin, err)
 		}
+	}
+	models, err := buildModelList(claudeBin, scan)
+	if err != nil {
+		return nil, err
 	}
 	go func() {
 		t := NewGitTrace("warm-cache")
@@ -194,16 +197,35 @@ func NewHubWithDataDir(baseURL, dataDir string, claudeCommand []string) (*Hub, e
 		ScanHistory(t)
 	}()
 	h := &Hub{
-		clients:       make(map[string]*SSEClient),
-		notifyClients: make(map[string]*NotifyClient),
-		Sessions:      NewSessionManager(),
-		Tracker:       NewSessionTracker(dataDir),
-		Labels:        NewLabelStore(dataDir),
-		Reviews:       NewReviewStore(),
-		baseURL:       baseURL,
-		claudeCommand: append([]string(nil), claudeCommand...),
+		clients:          make(map[string]*SSEClient),
+		notifyClients:    make(map[string]*NotifyClient),
+		Sessions:         NewSessionManager(),
+		Tracker:          NewSessionTracker(dataDir),
+		Labels:           NewLabelStore(dataDir),
+		ModelCommands:    NewModelCommandStore(dataDir),
+		Reviews:          NewReviewStore(),
+		baseURL:          baseURL,
+		selectableModels: models,
 	}
 	return h, nil
+}
+
+// buildModelList returns the model list assembled from the claudeBin
+// default entry plus the spec's scan. Without a scan dir the list holds
+// only the default entry.
+func buildModelList(claudeBin string, scan ModelScanSpec) ([]ModelEntry, error) {
+	if scan.Dir == "" {
+		return []ModelEntry{defaultModelEntry(claudeBin)}, nil
+	}
+	pattern := scan.Pattern
+	if pattern == "" {
+		pattern = DefaultModelPattern
+	}
+	scanned, err := discoverModels(scan.Dir, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("model scan %s: %w", scan.Dir, err)
+	}
+	return mergeModels(defaultModelEntry(claudeBin), scanned), nil
 }
 
 // BashstreamerEnv holds the environment entry, temp directory, and signal
@@ -630,6 +652,18 @@ func (h *Hub) ensureProcess(s *Session) claude.Process {
 		return proc
 	}
 
+	cmd := s.GetClaudeCommand()
+	if cmd == "" {
+		h.Broadcast(ServerMsg{Type: "error", SessionID: s.ID, Error: "no model selected for this session"})
+		return nil
+	}
+	// A session restored with a single model configured adopts that model
+	// in memory only, and loading a page must not write state, so the
+	// record is made here at spawn time. The process spawns under the
+	// record's winner, so the two cannot disagree.
+	cmd = h.ModelCommands.GetOrSet(s.ID, cmd)
+	s.SetClaudeCommand(cmd)
+
 	broadcast := func(msg ServerMsg) {
 		h.Broadcast(msg)
 	}
@@ -637,7 +671,7 @@ func (h *Hub) ensureProcess(s *Session) claude.Process {
 	proc, err := claude.StartProcessWithConfig(s.GetCwd(), func(event protocol.StreamEvent) {
 		handleStreamEvent(s, &event, broadcast)
 	}, s.ID, &claude.ProcessConfig{
-		Command: h.claudeCommand,
+		Command: []string{cmd},
 		PermissionHandler: func(req protocol.PermissionRequest) protocol.PermResponse {
 			return s.HandlePermission(req, func(msg ServerMsg) { h.Broadcast(msg) })
 		},

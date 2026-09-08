@@ -150,6 +150,17 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 		s.Log = append(s.Log, sm)
 	}
 	s.InitTree(st.parents, lastUUID)
+	// Resume under the model the session was spawned with. A missing
+	// record (session started outside monetdroid) leaves the command
+	// unset, which blocks sends until a model is picked. A single
+	// configured model leaves nothing to pick, so the session adopts it
+	// in memory. Loading a page must not write state, so the record is
+	// written when a process next spawns under the command.
+	if cmd := h.ModelCommands.Get(st.claudeID); cmd != "" {
+		s.SetClaudeCommand(cmd)
+	} else if len(h.selectableModels) == 1 {
+		s.SetClaudeCommand(h.selectableModels[0].Command)
+	}
 	return s
 }
 
@@ -298,6 +309,14 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 					label = ShortPath(s.GetCwd())
 				}
 				cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.QueuedEntries())
+				// A session with no model command renders the model row
+				// with an unset select. The select is required, so the
+				// send form refuses to submit until a model is chosen.
+				if s.GetClaudeCommand() == "" {
+					cmds = append(cmds,
+						DOMCmd{Target: "model-row", Strategy: "innerHTML", Content: h.renderModelSelect("", true)},
+					)
+				}
 				// Known race: this read is not atomic with the lastSeq snapshot
 				// above. A thinking_delta landing between the two is both baked in
 				// here and replayed by the event loop, duplicating its fragment at
@@ -355,6 +374,7 @@ func (h *Hub) handleEvents(w http.ResponseWriter, r *http.Request) {
 				OobSwap("cwd-row", "outerHTML",
 					fmt.Sprintf(`<span class="cwd-text">%s</span><button class="cwd-copy" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent)">📋</button>`, Esc(ShortPath(cwd)))))
 			chromeParts = append(chromeParts, OobSwap("msg-content", "innerHTML", ""))
+			chromeParts = append(chromeParts, OobSwap("model-row", "innerHTML", h.renderModelSelect(r.URL.Query().Get("model"), false)))
 			fmt.Fprint(w, FormatSSE("htmx", strings.Join(chromeParts, "\n")))
 			flusher.Flush()
 		} else {
@@ -478,7 +498,8 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	// /clear is handled client-side by the Claude CLI in stream-json mode
 	// but doesn't actually reset the conversation the LLM sees. Intercept
-	// it here. Redirect to a fresh session in the same cwd.
+	// it here. Redirect to a fresh session in the same cwd, carrying the
+	// session's model so the fresh page preselects it.
 	if strings.TrimSpace(text) == "/clear" {
 		cwd := r.FormValue("cwd")
 		if s != nil {
@@ -488,8 +509,31 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(204)
 			return
 		}
-		w.Header().Set("HX-Redirect", "/?cwd="+url.QueryEscape(cwd))
+		u := "/?cwd=" + url.QueryEscape(cwd)
+		if s != nil {
+			if label := h.labelForCommand(s.GetClaudeCommand()); label != "" {
+				u += "&model=" + url.QueryEscape(label)
+			}
+		}
+		w.Header().Set("HX-Redirect", u)
 		return
+	}
+
+	// A session with no model command takes one with the first send. The
+	// value arrives from the same select the pre-session page uses, so the
+	// choice can be changed any time before that send. An empty label is
+	// rejected rather than read as the default, so the choice stays
+	// explicit. The record's winner is adopted, so concurrent first sends
+	// converge on one model.
+	if s != nil && s.GetClaudeCommand() == "" {
+		label := r.FormValue("model")
+		entry, ok := h.resolveModel(label)
+		if label == "" || !ok {
+			http.Error(w, "select a model first", http.StatusBadRequest)
+			return
+		}
+		s.SetClaudeCommand(h.ModelCommands.GetOrSet(s.ID, entry.Command))
+		h.BroadcastToSession(s.ID, FormatSSE("htmx", OobSwap("model-row", "innerHTML", "")), "", "")
 	}
 
 	if s == nil {
@@ -497,6 +541,11 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		cwd := r.FormValue("cwd")
 		if cwd == "" {
 			w.WriteHeader(204)
+			return
+		}
+		entry, ok := h.resolveModel(r.FormValue("model"))
+		if !ok {
+			http.Error(w, "unknown model", http.StatusBadRequest)
 			return
 		}
 		label := r.FormValue("label")
@@ -551,7 +600,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		bs := NewBashstreamerEnv(h.baseURL)
 		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
-			Command:            h.claudeCommand,
+			Command:            []string{entry.Command},
 			PermissionHandler:  permHandler,
 			OnRawEvent:         onRawEvent,
 			OnCommandLifecycle: onLifecycle,
@@ -601,6 +650,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.InitLive(label, autoLabel, proc)
+		s.SetClaudeCommand(h.ModelCommands.GetOrSet(claudeID, entry.Command))
 		s.BashSignalPath = bs.Signal
 
 		if label != "" {
@@ -650,8 +700,10 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		h.mu.RUnlock()
 
 		// Render the full page for clients that were just bound from
-		// cwd-based to session-based SSE.
+		// cwd-based to session-based SSE. The model row's work is done, so
+		// the full render clears it.
 		cmds := RenderFull(s.Model, s.ID, h.Reviews.Count(s.ID), s.QueuedEntries())
+		cmds = append(cmds, DOMCmd{Target: "model-row", Strategy: "innerHTML", Content: ""})
 		labelText := label
 		if labelText == "" {
 			labelText = ShortPath(cwd)

@@ -170,7 +170,8 @@ func TestMain(m *testing.M) {
 			log.Fatalf("pin fixture mtimes: %v", err)
 		}
 		ensureWorkspaceTrust()
-		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", nil)
+		os.MkdirAll(modelsDir, 0o755)
+		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", "", monetdroid.ModelScanSpec{Dir: modelsDir})
 		if err != nil {
 			panic(err)
 		}
@@ -1097,6 +1098,120 @@ func Add(a, b int) int {
 			t.Fatalf("not scrolled to bottom: scrollTop=%d scrollHeight=%d clientHeight=%d distFromBottom=%d", scrollTop, scrollHeight, clientHeight, distFromBottom)
 		}
 		Screenshot(t, page, "session_reload_scrolled")
+	})
+}
+
+// TestModelSelect verifies that a session started from the model picker
+// spawns under the chosen wrapper. The picker lists the scanned wrappers
+// next to the default, the first send commits the choice, and the recorded
+// command maps the session to the wrapper.
+func TestModelSelect(t *testing.T) {
+	t.Parallel()
+	WithSharedProviders(t, "multi_turn.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+		// Same fixture files and prompts as TestMultiTurn, whose cassette
+		// this test shares.
+		f.WriteFile(containerWorkdir+"/main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`)
+		f.WriteFile(containerWorkdir+"/util.go", `package main
+
+// Add returns the sum of two integers.
+func Add(a, b int) int {
+	return a + b
+}
+`)
+
+		f.InstallModelWrappers()
+		page := f.Page()
+
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		WaitForElement(t, page, "#model-select", 5*time.Second).MustSelect("b")
+
+		page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
+		page.MustElement(`.send-btn`).MustClick()
+		WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+		if got := f.ModelSpawns(); len(got) != 1 || got[0] != "b" {
+			t.Fatalf("expected one spawn under claude-b, got %v", got)
+		}
+		// The committed choice clears the picker and lands in the
+		// session-to-command record.
+		WaitForElement(t, page, "#model-row:empty", 5*time.Second)
+		if cmd := f.ReadFile("/root/.monetdroid/model-commands.json"); !strings.Contains(cmd, "/models/claude-b") {
+			t.Fatalf("model-commands.json does not record claude-b: %s", cmd)
+		}
+		Screenshot(t, page, "model_select")
+	})
+}
+
+// TestModelRestartResume verifies that a session resumes under its recorded
+// model after a server restart. The on-disk record is the only state that
+// survives, so the resumed session must respawn the same wrapper rather
+// than the default, and must not ask for a model again. The test owns its
+// cassette because a resumed claude issues requests, such as a connectivity
+// probe, that a same-process recording never sees.
+func TestModelRestartResume(t *testing.T) {
+	t.Parallel()
+	WithProviders(t, "model_restart.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+		f.WriteFile(containerWorkdir+"/main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`)
+		f.WriteFile(containerWorkdir+"/util.go", `package main
+
+// Add returns the sum of two integers.
+func Add(a, b int) int {
+	return a + b
+}
+`)
+
+		f.InstallModelWrappers()
+		page := f.Page()
+
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		WaitForElement(t, page, "#model-select", 5*time.Second).MustSelect("b")
+
+		page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
+		page.MustElement(`.send-btn`).MustClick()
+		WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+		sessionURL := page.MustEval(`() => window.location.href`).String()
+		if !strings.Contains(sessionURL, "session=") {
+			t.Fatalf("expected session= in URL after first turn, got: %s", sessionURL)
+		}
+		Screenshot(t, page, "model_restart_turn1")
+
+		f.RestartServer()
+		page.MustNavigate(sessionURL).MustWaitStable()
+		WaitForElement(t, page, ".msg-assistant", 10*time.Second)
+		WaitForElement(t, page, "#model-row:empty", 5*time.Second)
+
+		page.MustElement(`textarea[name="text"]`).MustInput("Can main.go call the Add function from util.go? Just explain, don't modify any files.")
+		page.MustElement(`.send-btn`).MustClick()
+		if _, err := page.Timeout(120*time.Second).ElementR(".msg-assistant", "Add"); err != nil {
+			t.Fatalf("post-restart response never appeared: %v", err)
+		}
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+		if got := f.ModelSpawns(); len(got) != 2 || got[0] != "b" || got[1] != "b" {
+			t.Fatalf("expected both spawns under claude-b, got %v", got)
+		}
+		Screenshot(t, page, "model_restart_turn2")
 	})
 }
 

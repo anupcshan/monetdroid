@@ -23,6 +23,11 @@ const dockerImage = "monetdroid-claude-test"
 
 const containerWorkdir = "/work"
 
+// modelsDir is the directory the in-container server scans for model
+// wrappers. TestMain creates it empty, which leaves only the default
+// model, so tests that do not install wrappers see no picker.
+const modelsDir = "/models"
+
 // containerTimeout is the maximum lifetime of a test container.
 // The container's command is `sleep <containerTimeout>`, which self-terminates
 // after this duration, ensuring cleanup even if the test process crashes or
@@ -161,6 +166,36 @@ func (f *ContainerFixture) RestartServer() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// InstallModelWrappers writes claude-a and claude-b wrapper scripts into
+// modelsDir and restarts the server so its scan picks them up. Each wrapper
+// appends its label to /tmp/model-spawns and execs the real claude, so tests
+// can assert which wrapper a session spawned under. Call before Page, since
+// the restart drops open pages' SSE connections.
+func (f *ContainerFixture) InstallModelWrappers() {
+	f.T.Helper()
+	for _, name := range []string{"a", "b"} {
+		script := fmt.Sprintf("#!/bin/sh\necho %s >>/tmp/model-spawns\nexec claude \"$@\"\n", name)
+		f.WriteFile(modelsDir+"/claude-"+name, script)
+		if out, err := f.DockerExec("chmod", "+x", modelsDir+"/claude-"+name); err != nil {
+			f.T.Fatalf("chmod %s/claude-%s: %v\n%s", modelsDir, name, err, out)
+		}
+	}
+	f.RestartServer()
+}
+
+// ModelSpawns returns the labels of the wrappers invoked so far, in order.
+// The wrappers are installed by InstallModelWrappers.
+func (f *ContainerFixture) ModelSpawns() []string {
+	f.T.Helper()
+	var labels []string
+	for line := range strings.SplitSeq(f.ReadFile("/tmp/model-spawns"), "\n") {
+		if line != "" {
+			labels = append(labels, line)
+		}
+	}
+	return labels
 }
 
 // SetupWithSharedCassette is for tests that share a cassette owned by another

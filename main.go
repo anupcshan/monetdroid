@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strings"
 
 	"github.com/anupcshan/monetdroid/pkg/monetdroid"
 )
@@ -13,13 +12,18 @@ import (
 func main() {
 	addr := flag.String("addr", ":8222", "listen address")
 	trace := flag.Bool("trace", false, "enable git trace logging")
-	claudeBin := flag.String("claude-bin", "", `claude CLI to invoke (whitespace-separated tokens, e.g. "podman run -i --rm img claude"). Defaults to "claude" in PATH.`)
+	claudeBin := flag.String("claude-bin", "", `path to the claude CLI executable. For a complex invocation, write a wrapper script and pass its path. Defaults to "claude" in PATH.`)
+	modelDir := flag.String("model-dir", "", "directory scanned for model wrappers, offered in the new-session model picker")
+	modelPattern := flag.String("model-pattern", monetdroid.DefaultModelPattern, "regex filtering scanned model names. The first capture group becomes the picker label.")
 	flag.Parse()
 	monetdroid.SetTraceEnabled(*trace)
 
-	hub, err := monetdroid.NewHub(httpURL(*addr, "127.0.0.1"), strings.Fields(*claudeBin))
+	hub, err := monetdroid.NewHub(httpURL(*addr, "127.0.0.1"), *claudeBin, monetdroid.ModelScanSpec{
+		Dir:     *modelDir,
+		Pattern: *modelPattern,
+	})
 	if err != nil {
-		log.Fatalf("claude-bin: %s", err)
+		log.Fatalf("startup: %s", err)
 	}
 	mux := monetdroid.RegisterRoutes(hub)
 
