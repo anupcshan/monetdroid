@@ -10,7 +10,6 @@ package monetdroid
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,9 +18,7 @@ import (
 	"sync"
 )
 
-// DefaultModelPattern filters scanned model file names. Its capture group
-// strips the claude- prefix, so a wrapper named claude-foo lists as foo.
-const DefaultModelPattern = `^claude-(.+)$`
+const DefaultModelPattern = `^claude-`
 
 // ModelEntry is one selectable claude invocation.
 type ModelEntry struct {
@@ -42,9 +39,7 @@ type ModelScanSpec struct {
 }
 
 // discoverModels lists executable files in dir whose base name matches
-// pattern. The picker label is the pattern's first capture group when it
-// has one, else the base name. Entries are ordered by label, and a file
-// deriving an already-listed label is skipped.
+// pattern. The picker label is the base name. Entries are ordered by label.
 func discoverModels(dir, pattern string) ([]ModelEntry, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
@@ -55,7 +50,6 @@ func discoverModels(dir, pattern string) ([]ModelEntry, error) {
 		return nil, err
 	}
 	var models []ModelEntry
-	seen := make(map[string]bool)
 	for _, de := range dirEntries {
 		if de.IsDir() {
 			continue
@@ -67,20 +61,10 @@ func discoverModels(dir, pattern string) ([]ModelEntry, error) {
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
 			continue
 		}
-		m := re.FindStringSubmatch(de.Name())
-		if m == nil {
+		if !re.MatchString(de.Name()) {
 			continue
 		}
-		name := de.Name()
-		if len(m) > 1 {
-			name = m[1]
-		}
-		if seen[name] {
-			log.Printf("[models] skipping %s: duplicate label", full)
-			continue
-		}
-		seen[name] = true
-		models = append(models, ModelEntry{PickerLabel: name, Command: full})
+		models = append(models, ModelEntry{PickerLabel: de.Name(), Command: full})
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].PickerLabel < models[j].PickerLabel })
 	return models, nil
@@ -97,17 +81,15 @@ func defaultModelEntry(command string) ModelEntry {
 	return ModelEntry{PickerLabel: filepath.Base(cmd), Command: cmd, IsDefault: true}
 }
 
-// mergeModels combines the default entry with scanned entries. The
-// default entry comes first, then scanned entries by label.
+// mergeModels returns one entry per command, ordered by label.
 func mergeModels(def ModelEntry, scanned []ModelEntry) []ModelEntry {
-	out := append([]ModelEntry(nil), scanned...)
-	out = append(out, def)
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].IsDefault != out[j].IsDefault {
-			return out[i].IsDefault
+	out := []ModelEntry{def}
+	for _, s := range scanned {
+		if s.Command != def.Command {
+			out = append(out, s)
 		}
-		return out[i].PickerLabel < out[j].PickerLabel
-	})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PickerLabel < out[j].PickerLabel })
 	return out
 }
 

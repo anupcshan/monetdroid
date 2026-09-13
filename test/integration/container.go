@@ -79,11 +79,17 @@ var AllProviders = []ProviderConfig{
 // records its PID in /tmp/server.pid for killServer. Its output is redirected
 // to PID 1's stdout, which is the container log stream, so docker logs keeps
 // capturing it. The process inherits the container's configured environment,
-// including MONETDROID_IN_CONTAINER and the replayer URL.
-func startServer(t *testing.T, containerID string) {
+// including MONETDROID_IN_CONTAINER and the replayer URL. claudeBin, when
+// non-empty, is passed as MONETDROID_CLAUDE_BIN.
+func startServer(t *testing.T, containerID, claudeBin string) {
 	t.Helper()
 	script := `/test >/proc/1/fd/1 2>&1 & echo $! > /tmp/server.pid`
-	if out, err := exec.Command("docker", "exec", "-d", containerID, "sh", "-c", script).CombinedOutput(); err != nil {
+	args := []string{"exec", "-d"}
+	if claudeBin != "" {
+		args = append(args, "-e", "MONETDROID_CLAUDE_BIN="+claudeBin)
+	}
+	args = append(args, containerID, "sh", "-c", script)
+	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
 		t.Fatalf("start server: %v\n%s", err, out)
 	}
 }
@@ -153,7 +159,7 @@ func (f *ContainerFixture) RestartServer() {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	startServer(f.T, f.containerID)
+	startServer(f.T, f.containerID, f.claudeBin)
 	deadline = time.Now().Add(30 * time.Second)
 	for {
 		resp, err := client.Get(f.ServerURL)
@@ -166,6 +172,12 @@ func (f *ContainerFixture) RestartServer() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// SetClaudeBin sets the -claude-bin value for the server's next start and
+// every restart after it. Empty means the plain claude in PATH.
+func (f *ContainerFixture) SetClaudeBin(path string) {
+	f.claudeBin = path
 }
 
 // InstallModelWrappers writes claude-a and claude-b wrapper scripts into
@@ -240,6 +252,7 @@ type ContainerFixture struct {
 	Browser     *rod.Browser
 	ReplayerURL string
 	Replayer    *Replayer
+	claudeBin   string
 }
 
 // WriteFile writes a file inside the container via the test HTTP endpoint.
@@ -449,7 +462,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 	}
 	serverURL := fmt.Sprintf("http://127.0.0.1:%s", hostAddr[strings.LastIndex(hostAddr, ":")+1:])
 
-	startServer(t, containerID)
+	startServer(t, containerID, "")
 
 	// Wait for server to be ready
 	ready := false

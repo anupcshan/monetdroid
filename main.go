@@ -14,7 +14,7 @@ func main() {
 	trace := flag.Bool("trace", false, "enable git trace logging")
 	claudeBin := flag.String("claude-bin", "", `path to the claude CLI executable. For a complex invocation, write a wrapper script and pass its path. Defaults to "claude" in PATH.`)
 	modelDir := flag.String("model-dir", "", "directory scanned for model wrappers, offered in the new-session model picker")
-	modelPattern := flag.String("model-pattern", monetdroid.DefaultModelPattern, "regex filtering scanned model names. The first capture group becomes the picker label.")
+	modelPattern := flag.String("model-pattern", monetdroid.DefaultModelPattern, "regex filtering scanned model names")
 	flag.Parse()
 	monetdroid.SetTraceEnabled(*trace)
 

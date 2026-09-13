@@ -171,7 +171,7 @@ func TestMain(m *testing.M) {
 		}
 		ensureWorkspaceTrust()
 		os.MkdirAll(modelsDir, 0o755)
-		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", "", monetdroid.ModelScanSpec{Dir: modelsDir})
+		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", os.Getenv("MONETDROID_CLAUDE_BIN"), monetdroid.ModelScanSpec{Dir: modelsDir})
 		if err != nil {
 			panic(err)
 		}
@@ -1132,7 +1132,7 @@ func Add(a, b int) int {
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-		WaitForElement(t, page, "#model-select", 5*time.Second).MustSelect("b")
+		WaitForElement(t, page, "#model-select", 5*time.Second).MustSelect("claude-b")
 
 		page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
 		page.MustElement(`.send-btn`).MustClick()
@@ -1183,7 +1183,7 @@ func Add(a, b int) int {
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-		WaitForElement(t, page, "#model-select", 5*time.Second).MustSelect("b")
+		WaitForElement(t, page, "#model-select", 5*time.Second).MustSelect("claude-b")
 
 		page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
 		page.MustElement(`.send-btn`).MustClick()
@@ -1212,6 +1212,65 @@ func Add(a, b int) int {
 			t.Fatalf("expected both spawns under claude-b, got %v", got)
 		}
 		Screenshot(t, page, "model_restart_turn2")
+	})
+}
+
+// TestModelDefaultInModelDir verifies that a -claude-bin naming a wrapper
+// that also lives in the model dir yields one picker entry for that wrapper
+// and stays the default. The wrapper is offered under its file name, and a
+// send that never touches the picker spawns it.
+func TestModelDefaultInModelDir(t *testing.T) {
+	t.Parallel()
+	WithSharedProviders(t, "multi_turn.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
+		// Same fixture files and prompts as TestMultiTurn, whose cassette
+		// this test shares.
+		f.WriteFile(containerWorkdir+"/main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello world")
+}
+`)
+		f.WriteFile(containerWorkdir+"/util.go", `package main
+
+// Add returns the sum of two integers.
+func Add(a, b int) int {
+	return a + b
+}
+`)
+
+		f.SetClaudeBin(modelsDir + "/claude-b")
+		f.InstallModelWrappers()
+		page := f.Page()
+
+		CreatePlainSession(t, page, containerWorkdir)
+		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
+
+		WaitForElement(t, page, "#model-select", 5*time.Second)
+		var labels []string
+		for _, o := range page.MustElements("#model-select option") {
+			labels = append(labels, o.MustText())
+		}
+		slices.Sort(labels)
+		want := []string{"claude-a", "claude-b"}
+		if !slices.Equal(labels, want) {
+			t.Fatalf("expected options %v, got %v", want, labels)
+		}
+
+		// The picker is left alone, so the submitted value is the preselect.
+		page.MustElement(`textarea[name="text"]`).MustInput("Read main.go and util.go and tell me what they do")
+		page.MustElement(`.send-btn`).MustClick()
+		WaitForElement(t, page, ".msg-assistant", 120*time.Second)
+		WaitForElement(t, page, "#stop-btn:empty", 60*time.Second)
+
+		if got := f.ModelSpawns(); len(got) != 1 || got[0] != "b" {
+			t.Fatalf("expected one spawn under claude-b, got %v", got)
+		}
+		if cmd := f.ReadFile("/root/.monetdroid/model-commands.json"); !strings.Contains(cmd, "/models/claude-b") {
+			t.Fatalf("model-commands.json does not record claude-b: %s", cmd)
+		}
+		Screenshot(t, page, "model_default_in_dir")
 	})
 }
 
