@@ -12,8 +12,8 @@ import (
 func main() {
 	addr := flag.String("addr", ":8222", "listen address")
 	trace := flag.Bool("trace", false, "enable git trace logging")
-	claudeBin := flag.String("claude-bin", "", `path to the claude CLI executable. For a complex invocation, write a wrapper script and pass its path. Defaults to "claude" in PATH.`)
-	modelDir := flag.String("model-dir", "", "directory scanned for model wrappers, offered in the new-session model picker")
+	claudeBin := flag.String("claude-bin", "claude", `claude executable to run, by name on PATH. For a complex invocation, write a wrapper script, put it in PATH, and pass its name.`)
+	modelDir := flag.String("model-dir", "", "directory scanned for model wrappers, offered in the new-session model picker. The directory is expected to be on PATH, since models are invoked by name.")
 	modelPattern := flag.String("model-pattern", monetdroid.DefaultModelPattern, "regex filtering scanned model names")
 	flag.Parse()
 	monetdroid.SetTraceEnabled(*trace)

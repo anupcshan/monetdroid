@@ -1,5 +1,9 @@
 FROM debian:bookworm-slim
 
+# Model wrappers live in /models and the server invokes them by name, so the
+# directory has to be on PATH.
+ENV PATH=/models:$PATH
+
 # Upgrade: update CLAUDE_VERSION and CLAUDE_CHECKSUM together.
 # Latest version: curl -fsSL https://downloads.claude.ai/claude-code-releases/latest
 # Checksum is platforms["linux-x64"].checksum in this manifest:

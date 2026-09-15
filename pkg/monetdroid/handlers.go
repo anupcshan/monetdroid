@@ -158,8 +158,8 @@ func (h *Hub) loadSessionFromDisk(jsonlPath string) *Session {
 	// written when a process next spawns under the command.
 	if cmd := h.ModelCommands.Get(st.claudeID); cmd != "" {
 		s.SetClaudeCommand(cmd)
-	} else if len(h.selectableModels) == 1 {
-		s.SetClaudeCommand(h.selectableModels[0].Command)
+	} else if len(h.sortedModels) == 1 {
+		s.SetClaudeCommand(h.sortedModels[0])
 	}
 	return s
 }
@@ -511,8 +511,8 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		u := "/?cwd=" + url.QueryEscape(cwd)
 		if s != nil {
-			if label := h.labelForCommand(s.GetClaudeCommand()); label != "" {
-				u += "&model=" + url.QueryEscape(label)
+			if cmd := s.GetClaudeCommand(); slices.Contains(h.sortedModels, cmd) {
+				u += "&model=" + url.QueryEscape(cmd)
 			}
 		}
 		w.Header().Set("HX-Redirect", u)
@@ -521,18 +521,17 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	// A session with no model command takes one with the first send. The
 	// value arrives from the same select the pre-session page uses, so the
-	// choice can be changed any time before that send. An empty label is
+	// choice can be changed any time before that send. An empty model is
 	// rejected rather than read as the default, so the choice stays
 	// explicit. The record's winner is adopted, so concurrent first sends
 	// converge on one model.
 	if s != nil && s.GetClaudeCommand() == "" {
-		label := r.FormValue("model")
-		entry, ok := h.resolveModel(label)
-		if label == "" || !ok {
+		model := r.FormValue("model")
+		if !slices.Contains(h.sortedModels, model) {
 			http.Error(w, "select a model first", http.StatusBadRequest)
 			return
 		}
-		s.SetClaudeCommand(h.ModelCommands.GetOrSet(s.ID, entry.Command))
+		s.SetClaudeCommand(h.ModelCommands.GetOrSet(s.ID, model))
 		h.BroadcastToSession(s.ID, FormatSSE("htmx", OobSwap("model-row", "innerHTML", "")), "", "")
 	}
 
@@ -543,8 +542,11 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(204)
 			return
 		}
-		entry, ok := h.resolveModel(r.FormValue("model"))
-		if !ok {
+		model := r.FormValue("model")
+		if model == "" {
+			model = h.defaultModel
+		}
+		if !slices.Contains(h.sortedModels, model) {
 			http.Error(w, "unknown model", http.StatusBadRequest)
 			return
 		}
@@ -600,7 +602,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		bs := NewBashstreamerEnv(h.baseURL)
 		proc, err := claude.StartProcessWithConfig(cwd, onEvent, "", &claude.ProcessConfig{
-			Command:            []string{entry.Command},
+			Command:            []string{model},
 			PermissionHandler:  permHandler,
 			OnRawEvent:         onRawEvent,
 			OnCommandLifecycle: onLifecycle,
@@ -650,7 +652,7 @@ func (h *Hub) handleSend(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.InitLive(label, autoLabel, proc)
-		s.SetClaudeCommand(h.ModelCommands.GetOrSet(claudeID, entry.Command))
+		s.SetClaudeCommand(h.ModelCommands.GetOrSet(claudeID, model))
 		s.BashSignalPath = bs.Signal
 
 		if label != "" {

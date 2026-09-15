@@ -131,9 +131,11 @@ type Hub struct {
 	// ModelCommands persists the model invocation each session runs under.
 	ModelCommands *ModelCommandStore
 	// baseURL is the http://host:port that prefixes bashstreamer push URLs.
-	baseURL          string
-	selectableModels []ModelEntry
-	mu               sync.RWMutex
+	baseURL      string
+	sortedModels []string
+	// defaultModel is always in sortedModels.
+	defaultModel string
+	mu           sync.RWMutex
 }
 
 // Close kills all active claude processes.
@@ -173,21 +175,22 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".monetdroid")
 }
 
-// NewHub constructs a Hub. claudeBin is the claude executable to invoke,
-// with an empty value using the default "claude" in PATH. When non-empty,
-// it is validated with exec.LookPath so a missing binary fails here
-// rather than at session start. scan configures model discovery.
+// NewHub constructs a Hub. claudeBin is the name of the claude executable
+// to invoke on PATH, validated with exec.LookPath so a missing binary
+// fails here rather than at session start. scan configures model
+// discovery.
 func NewHub(baseURL, claudeBin string, scan ModelScanSpec) (*Hub, error) {
 	return NewHubWithDataDir(baseURL, defaultDataDir(), claudeBin, scan)
 }
 
 func NewHubWithDataDir(baseURL, dataDir, claudeBin string, scan ModelScanSpec) (*Hub, error) {
-	if claudeBin != "" {
-		if _, err := exec.LookPath(claudeBin); err != nil {
-			return nil, fmt.Errorf("claude binary %q: %w", claudeBin, err)
-		}
+	if strings.Contains(claudeBin, "/") {
+		return nil, fmt.Errorf("claude binary %q must be a name on PATH, not a path", claudeBin)
 	}
-	models, err := buildModelList(claudeBin, scan)
+	if _, err := exec.LookPath(claudeBin); err != nil {
+		return nil, fmt.Errorf("claude binary %q: %w", claudeBin, err)
+	}
+	sortedModels, err := buildModelList(claudeBin, scan)
 	if err != nil {
 		return nil, err
 	}
@@ -197,35 +200,38 @@ func NewHubWithDataDir(baseURL, dataDir, claudeBin string, scan ModelScanSpec) (
 		ScanHistory(t)
 	}()
 	h := &Hub{
-		clients:          make(map[string]*SSEClient),
-		notifyClients:    make(map[string]*NotifyClient),
-		Sessions:         NewSessionManager(),
-		Tracker:          NewSessionTracker(dataDir),
-		Labels:           NewLabelStore(dataDir),
-		ModelCommands:    NewModelCommandStore(dataDir),
-		Reviews:          NewReviewStore(),
-		baseURL:          baseURL,
-		selectableModels: models,
+		clients:       make(map[string]*SSEClient),
+		notifyClients: make(map[string]*NotifyClient),
+		Sessions:      NewSessionManager(),
+		Tracker:       NewSessionTracker(dataDir),
+		Labels:        NewLabelStore(dataDir),
+		ModelCommands: NewModelCommandStore(dataDir),
+		Reviews:       NewReviewStore(),
+		baseURL:       baseURL,
+		sortedModels:  sortedModels,
+		defaultModel:  claudeBin,
 	}
 	return h, nil
 }
 
-// buildModelList returns the model list assembled from the claudeBin
-// default entry plus the spec's scan. Without a scan dir the list holds
-// only the default entry.
-func buildModelList(claudeBin string, scan ModelScanSpec) ([]ModelEntry, error) {
+// buildModelList returns the sorted model names, always including claudeBin.
+func buildModelList(claudeBin string, scan ModelScanSpec) ([]string, error) {
 	if scan.Dir == "" {
-		return []ModelEntry{defaultModelEntry(claudeBin)}, nil
+		return []string{claudeBin}, nil
 	}
 	pattern := scan.Pattern
 	if pattern == "" {
 		pattern = DefaultModelPattern
 	}
-	scanned, err := discoverModels(scan.Dir, pattern)
+	names, err := discoverModels(scan.Dir, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("model scan %s: %w", scan.Dir, err)
 	}
-	return mergeModels(defaultModelEntry(claudeBin), scanned), nil
+	if !slices.Contains(names, claudeBin) {
+		names = append(names, claudeBin)
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 // BashstreamerEnv holds the environment entry, temp directory, and signal

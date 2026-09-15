@@ -2,21 +2,16 @@ package monetdroid
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestNewHubClaudeCommand(t *testing.T) {
-	t.Run("empty value succeeds with plain claude default", func(t *testing.T) {
-		h, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), "", ModelScanSpec{})
-		if err != nil {
-			t.Fatalf("NewHubWithDataDir: %v", err)
-		}
-		if len(h.selectableModels) != 1 || !h.selectableModels[0].IsDefault {
-			t.Fatalf("expected single default model, got %v", h.selectableModels)
-		}
-		if got := h.selectableModels[0].Command; got != "claude" {
-			t.Errorf("expected default command claude, got %q", got)
+	t.Run("empty value returns error", func(t *testing.T) {
+		_, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), "", ModelScanSpec{})
+		if err == nil {
+			t.Fatal("expected error for empty binary")
 		}
 	})
 
@@ -27,20 +22,29 @@ func TestNewHubClaudeCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("valid binary is stored", func(t *testing.T) {
-		exe, err := os.Executable()
-		if err != nil {
-			t.Fatalf("os.Executable: %v", err)
+	t.Run("path value returns error", func(t *testing.T) {
+		_, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), "/nonexistent/claude-x", ModelScanSpec{})
+		if err == nil {
+			t.Fatal("expected error for path value")
 		}
-		h, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), exe, ModelScanSpec{})
+	})
+
+	t.Run("valid binary is the only model and the default", func(t *testing.T) {
+		dir := t.TempDir()
+		const name = "claude-test-bin"
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o755); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		h, err := NewHubWithDataDir("http://127.0.0.1:0", t.TempDir(), name, ModelScanSpec{})
 		if err != nil {
 			t.Fatalf("NewHubWithDataDir: %v", err)
 		}
-		if len(h.selectableModels) != 1 || !h.selectableModels[0].IsDefault {
-			t.Fatalf("expected single default model, got %v", h.selectableModels)
+		if len(h.sortedModels) != 1 || h.sortedModels[0] != name {
+			t.Fatalf("expected only %q, got %v", name, h.sortedModels)
 		}
-		if got := h.selectableModels[0].Command; got != exe {
-			t.Errorf("expected command %q, got %q", exe, got)
+		if h.defaultModel != name {
+			t.Errorf("expected default %q, got %q", name, h.defaultModel)
 		}
 	})
 }

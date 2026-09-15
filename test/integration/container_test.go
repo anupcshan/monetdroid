@@ -171,7 +171,11 @@ func TestMain(m *testing.M) {
 		}
 		ensureWorkspaceTrust()
 		os.MkdirAll(modelsDir, 0o755)
-		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", os.Getenv("MONETDROID_CLAUDE_BIN"), monetdroid.ModelScanSpec{Dir: modelsDir})
+		claudeBin := os.Getenv("MONETDROID_CLAUDE_BIN")
+		if claudeBin == "" {
+			claudeBin = "claude"
+		}
+		hub, err := monetdroid.NewHub("http://127.0.0.1:8222", claudeBin, monetdroid.ModelScanSpec{Dir: modelsDir})
 		if err != nil {
 			panic(err)
 		}
@@ -1145,7 +1149,7 @@ func Add(a, b int) int {
 		// The committed choice clears the picker and lands in the
 		// session-to-command record.
 		WaitForElement(t, page, "#model-row:empty", 5*time.Second)
-		if cmd := f.ReadFile("/root/.monetdroid/model-commands.json"); !strings.Contains(cmd, "/models/claude-b") {
+		if cmd := f.ReadFile("/root/.monetdroid/model-commands.json"); !strings.Contains(cmd, `"claude-b"`) {
 			t.Fatalf("model-commands.json does not record claude-b: %s", cmd)
 		}
 		Screenshot(t, page, "model_select")
@@ -1240,7 +1244,7 @@ func Add(a, b int) int {
 }
 `)
 
-		f.SetClaudeBin(modelsDir + "/claude-b")
+		f.SetClaudeBin("claude-b")
 		f.InstallModelWrappers()
 		page := f.Page()
 
@@ -1267,7 +1271,7 @@ func Add(a, b int) int {
 		if got := f.ModelSpawns(); len(got) != 1 || got[0] != "b" {
 			t.Fatalf("expected one spawn under claude-b, got %v", got)
 		}
-		if cmd := f.ReadFile("/root/.monetdroid/model-commands.json"); !strings.Contains(cmd, "/models/claude-b") {
+		if cmd := f.ReadFile("/root/.monetdroid/model-commands.json"); !strings.Contains(cmd, `"claude-b"`) {
 			t.Fatalf("model-commands.json does not record claude-b: %s", cmd)
 		}
 		Screenshot(t, page, "model_default_in_dir")
