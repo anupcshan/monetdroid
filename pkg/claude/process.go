@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/anupcshan/monetdroid/pkg/claude/protocol"
@@ -203,6 +204,14 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 
 	cmd := exec.Command(binCmd[0], args...)
 	cmd.Dir = cwd
+	// Claude runs in its own session so nothing under it can reach
+	// monetdroid's controlling terminal via /dev/tty. Pdeathsig makes the
+	// kernel kill claude when monetdroid dies, including on SIGKILL where
+	// monetdroid gets no chance to clean up itself.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid:    true,
+		Pdeathsig: syscall.SIGKILL,
+	}
 	cmd.Env = append(os.Environ(),
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		// Tasks are on by default in interactive mode. We run Claude with -p
