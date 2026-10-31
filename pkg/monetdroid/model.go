@@ -361,12 +361,17 @@ func (m *SessionModel) Apply(msg ServerMsg) {
 		}
 
 	case "tool_result":
-		if msg.ToolUseID == "" || msg.AgentID != "" {
+		if msg.ToolUseID == "" {
+			break
+		}
+		// A permission request is keyed by tool_use ID whether the tool ran
+		// at the top level or inside a sub-agent, so resolve it for both.
+		delete(m.PendingPerms, msg.ToolUseID)
+		if msg.AgentID != "" {
 			break
 		}
 		m.ToolResults[msg.ToolUseID] = msg
 		m.ToolResultIndexes[msg.ToolUseID] = len(m.Messages) - 1
-		delete(m.PendingPerms, msg.ToolUseID)
 		if bgPath := ParseBgTaskPath(msg.Output); bgPath != "" {
 			m.BgTasks[msg.ToolUseID] = &BgTaskState{
 				Command:    m.pendingCommands[msg.ToolUseID],
