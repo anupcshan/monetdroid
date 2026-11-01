@@ -14,7 +14,7 @@
 
 Run tests with:
 
-  go test ./... -count=1 -timeout 600s
+  go test ./... -timeout 600s
 
 Invoke it bare: no pipes, redirects, or shell expansions, so the full output is
 captured for diagnosis.
@@ -31,7 +31,7 @@ state. To debug behavior, read the screenshots (`*.png`) and DOM snapshots
 (`*.html`) the test writes to `test/integration/testdata/screenshots/`, not the
 cassettes.
 
-Don't preflight-check for Docker or other prerequisites before running tests or
+Don't preflight-check for Podman or other prerequisites before running tests or
 recording. The test itself reports what's missing. Checking beforehand adds
 noise and guesses at causes.
 

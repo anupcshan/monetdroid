@@ -347,7 +347,7 @@ func TestFilesPageReviewComment(t *testing.T) {
 		// git init stamps wall-clock mtimes on .git and the workdir itself.
 		// Tool output listing those paths would then differ between record
 		// and replay. Re-pin the whole tree.
-		f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+		f.Exec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
 
 		page := f.Page()
 

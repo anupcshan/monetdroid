@@ -45,7 +45,7 @@ func TestKBEditReviewComment(t *testing.T) {
 
 		f.WriteFile(containerWorkdir+"/main.go", "package main\n\nfunc main() {}\n")
 		f.WriteFile(containerWorkdir+"/.claude/settings.json", kbReadAllowSettings)
-		f.DockerExec("git", "init", containerWorkdir)
+		f.Exec("git", "init", containerWorkdir)
 		f.RegisterKBMCP()
 		f.KBWithStdin(containerWorkdir, kbNotesFile, "write", "projects/notes.md")
 
@@ -114,7 +114,7 @@ func TestKBWriteReviewComment(t *testing.T) {
 
 		f.WriteFile(containerWorkdir+"/main.go", "package main\n\nfunc main() {}\n")
 		f.WriteFile(containerWorkdir+"/.claude/settings.json", kbReadAllowSettings)
-		f.DockerExec("git", "init", containerWorkdir)
+		f.Exec("git", "init", containerWorkdir)
 		f.RegisterKBMCP()
 
 		page := f.Page()
@@ -194,7 +194,7 @@ func TestKBOverwriteReviewComment(t *testing.T) {
 
 		f.WriteFile(containerWorkdir+"/main.go", "package main\n\nfunc main() {}\n")
 		f.WriteFile(containerWorkdir+"/.claude/settings.json", kbReadAllowSettings)
-		f.DockerExec("git", "init", containerWorkdir)
+		f.Exec("git", "init", containerWorkdir)
 		f.RegisterKBMCP()
 		f.KBWithStdin(containerWorkdir, kbSnippetFile, "write", "projects/snippet.md")
 

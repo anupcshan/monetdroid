@@ -1,6 +1,7 @@
 package kb_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -13,7 +14,11 @@ import (
 	"github.com/anupcshan/monetdroid/pkg/kbcli"
 )
 
-const dockerImage = "kb-test"
+// containerCLI is the container runtime the fixtures drive. Podman runs
+// rootless when the test binary is not executed as root.
+const containerCLI = "podman"
+
+const containerImage = "kb-test"
 const containerWorkdir = "/work"
 
 var buildOnce sync.Once
@@ -38,14 +43,14 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func buildDockerImage(t *testing.T) {
+func buildContainerImage(t *testing.T) {
 	t.Helper()
 	buildOnce.Do(func() {
-		cmd := exec.Command("docker", "build", "-t", dockerImage, "test/integration/kb")
+		cmd := exec.Command(containerCLI, "build", "-t", containerImage, "test/integration/kb")
 		cmd.Dir = repoRoot(t)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			buildErr = fmt.Errorf("docker build failed: %v\n%s", err, out)
+			buildErr = fmt.Errorf("%s build failed: %v\n%s", containerCLI, err, out)
 		}
 	})
 	if buildErr != nil {
@@ -70,24 +75,27 @@ type Fixture struct {
 func Setup(t *testing.T) *Fixture {
 	t.Helper()
 
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Fatal("docker not found")
+	if _, err := exec.LookPath(containerCLI); err != nil {
+		t.Fatalf("%s not found", containerCLI)
 	}
 
-	buildDockerImage(t)
+	buildContainerImage(t)
 
 	testBinary, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
 
-	out, err := exec.Command("docker", "run", "--rm", "-d",
+	runCmd := exec.Command(containerCLI, "run", "--rm", "-d",
 		"-v", testBinary+":/test:ro",
-		dockerImage,
+		containerImage,
 		"sleep", "300",
-	).CombinedOutput()
+	)
+	var runStderr bytes.Buffer
+	runCmd.Stderr = &runStderr
+	out, err := runCmd.Output()
 	if err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
+		t.Fatalf("%s run: %v\n%s", containerCLI, err, runStderr.String())
 	}
 	containerID := strings.TrimSpace(string(out))
 
@@ -99,7 +107,7 @@ func Setup(t *testing.T) *Fixture {
 	f.MustExec("git", "-C", containerWorkdir, "commit", "--allow-empty", "-m", "init")
 
 	t.Cleanup(func() {
-		exec.Command("docker", "stop", "-t", "2", containerID).Run()
+		exec.Command(containerCLI, "stop", "-t", "2", containerID).Run()
 	})
 
 	return f
@@ -109,7 +117,7 @@ func (f *Fixture) KB(args ...string) (string, error) {
 	f.T.Helper()
 	cmdArgs := []string{"exec", "-e", "KB_CLI_MODE=kb", "-w", containerWorkdir, f.containerID, "/test"}
 	cmdArgs = append(cmdArgs, args...)
-	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	out, err := exec.Command(containerCLI, cmdArgs...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -117,7 +125,7 @@ func (f *Fixture) KBAdmin(args ...string) (string, error) {
 	f.T.Helper()
 	cmdArgs := []string{"exec", "-e", "KB_CLI_MODE=kbadmin", "-w", containerWorkdir, f.containerID, "/test"}
 	cmdArgs = append(cmdArgs, args...)
-	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	out, err := exec.Command(containerCLI, cmdArgs...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -125,7 +133,7 @@ func (f *Fixture) KBWithStdin(stdin string, args ...string) (string, error) {
 	f.T.Helper()
 	cmdArgs := []string{"exec", "-i", "-e", "KB_CLI_MODE=kb", "-w", containerWorkdir, f.containerID, "/test"}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.Command("docker", cmdArgs...)
+	cmd := exec.Command(containerCLI, cmdArgs...)
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
@@ -134,7 +142,7 @@ func (f *Fixture) KBWithStdin(stdin string, args ...string) (string, error) {
 func (f *Fixture) MustExec(args ...string) string {
 	f.T.Helper()
 	cmdArgs := append([]string{"exec", f.containerID}, args...)
-	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	out, err := exec.Command(containerCLI, cmdArgs...).CombinedOutput()
 	if err != nil {
 		f.T.Fatalf("exec %v: %v\n%s", args, err, out)
 	}

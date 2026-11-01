@@ -7,6 +7,7 @@ package integration
 // real stdio transport with mcp-go's stdio client.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -26,26 +27,29 @@ import (
 // directly over stdio by mcpClient.
 func setupKBContainer(t *testing.T) *ContainerFixture {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not found; kb mcp integration tests require docker")
+	if _, err := exec.LookPath(containerCLI); err != nil {
+		t.Skipf("%s not found. The kb mcp integration tests require %s.", containerCLI, containerCLI)
 	}
-	buildDockerImage(t)
+	buildContainerImage(t)
 
 	testBinary, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
 
-	out, err := exec.Command("docker", "run", "--rm", "-d",
+	runCmd := exec.Command(containerCLI, "run", "--rm", "-d",
 		"-v", testBinary+":/test:ro",
-		dockerImage,
+		containerImage,
 		"timeout", fmt.Sprintf("%d", containerTimeout), "sleep", "infinity",
-	).CombinedOutput()
+	)
+	var runStderr bytes.Buffer
+	runCmd.Stderr = &runStderr
+	out, err := runCmd.Output()
 	if err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
+		t.Fatalf("%s run: %v\n%s", containerCLI, err, runStderr.String())
 	}
 	containerID := strings.TrimSpace(string(out))
-	t.Cleanup(func() { exec.Command("docker", "stop", "-t", "5", containerID).Run() })
+	t.Cleanup(func() { exec.Command(containerCLI, "stop", "-t", "5", containerID).Run() })
 
 	// kb commits each mutation in its own git repo under /root/.monetdroid/kb,
 	// so the container needs a git identity. Set it globally like the LLM
@@ -54,7 +58,7 @@ func setupKBContainer(t *testing.T) *ContainerFixture {
 		{"git", "config", "--global", "user.email", "test@test.com"},
 		{"git", "config", "--global", "user.name", "Test"},
 	} {
-		if out, err := exec.Command("docker", append([]string{"exec", containerID}, cfg...)...).CombinedOutput(); err != nil {
+		if out, err := exec.Command(containerCLI, append([]string{"exec", containerID}, cfg...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git config %v: %v\n%s", cfg, err, out)
 		}
 	}
@@ -69,7 +73,7 @@ func setupKBContainer(t *testing.T) *ContainerFixture {
 // the kb mcp process. The container itself is cleaned up by setupKBContainer.
 func mcpClient(t *testing.T, f *ContainerFixture, cwd string) *client.Client {
 	t.Helper()
-	c, err := client.NewStdioMCPClient("docker", nil,
+	c, err := client.NewStdioMCPClient(containerCLI, nil,
 		"exec", "-i", "-w", cwd, f.containerID, "kb", "mcp")
 	if err != nil {
 		t.Fatalf("NewStdioMCPClient: %v", err)

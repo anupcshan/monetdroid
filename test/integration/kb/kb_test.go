@@ -334,7 +334,7 @@ func TestGitCommonDirResolution(t *testing.T) {
 	f.MustExec("git", "-C", containerWorkdir, "worktree", "add", "/work2", "-b", "test-branch")
 
 	cmdArgs := []string{"exec", "-e", "KB_CLI_MODE=kb", "-w", "/work2", f.containerID, "/test", "read", "test.md"}
-	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	out, err := exec.Command(containerCLI, cmdArgs...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("read from worktree: %v\n%s", err, out)
 	}

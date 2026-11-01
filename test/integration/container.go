@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +20,11 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 )
 
-const dockerImage = "monetdroid-claude-test"
+// containerCLI is the container runtime the fixtures drive. Podman runs
+// rootless when the test binary is not executed as root.
+const containerCLI = "podman"
+
+const containerImage = "monetdroid-claude-test"
 
 const containerWorkdir = "/work"
 
@@ -77,7 +82,7 @@ var AllProviders = []ProviderConfig{
 
 // startServer starts the monetdroid server inside the container. The process
 // records its PID in /tmp/server.pid for killServer. Its output is redirected
-// to PID 1's stdout, which is the container log stream, so docker logs keeps
+// to PID 1's stdout, which is the container log stream, so podman logs keeps
 // capturing it. The process inherits the container's configured environment,
 // including MONETDROID_IN_CONTAINER and the replayer URL. claudeBin, when
 // non-empty, is passed as MONETDROID_CLAUDE_BIN.
@@ -89,7 +94,7 @@ func startServer(t *testing.T, containerID, claudeBin string) {
 		args = append(args, "-e", "MONETDROID_CLAUDE_BIN="+claudeBin)
 	}
 	args = append(args, containerID, "sh", "-c", script)
-	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(containerCLI, args...).CombinedOutput(); err != nil {
 		t.Fatalf("start server: %v\n%s", err, out)
 	}
 }
@@ -97,7 +102,7 @@ func startServer(t *testing.T, containerID, claudeBin string) {
 // killServer kills the server process started by startServer.
 func killServer(t *testing.T, containerID string) {
 	t.Helper()
-	if out, err := exec.Command("docker", "exec", containerID, "sh", "-c",
+	if out, err := exec.Command(containerCLI, "exec", containerID, "sh", "-c",
 		"kill $(cat /tmp/server.pid)").CombinedOutput(); err != nil {
 		t.Fatalf("kill server: %v\n%s", err, out)
 	}
@@ -128,7 +133,7 @@ sleep %v
 exec /usr/bin/git "$@"
 `, fastPaths, d.Seconds())
 	f.WriteFile("/usr/local/bin/git", script)
-	if out, err := f.DockerExec("chmod", "+x", "/usr/local/bin/git"); err != nil {
+	if out, err := f.Exec("chmod", "+x", "/usr/local/bin/git"); err != nil {
 		f.T.Fatalf("chmod git wrapper: %v\n%s", err, out)
 	}
 }
@@ -190,7 +195,7 @@ func (f *ContainerFixture) InstallModelWrappers() {
 	for _, name := range []string{"a", "b"} {
 		script := fmt.Sprintf("#!/bin/sh\necho %s >>/tmp/model-spawns\nexec claude \"$@\"\n", name)
 		f.WriteFile(modelsDir+"/claude-"+name, script)
-		if out, err := f.DockerExec("chmod", "+x", modelsDir+"/claude-"+name); err != nil {
+		if out, err := f.Exec("chmod", "+x", modelsDir+"/claude-"+name); err != nil {
 			f.T.Fatalf("chmod %s/claude-%s: %v\n%s", modelsDir, name, err, out)
 		}
 	}
@@ -221,22 +226,22 @@ func SetupWithSharedCassette(t *testing.T, p ProviderConfig, cassetteName, mode 
 	return SetupWithContainer(t, p, cassetteName, mode)
 }
 
-// buildDockerImage builds the docker image once per test run.
-func buildDockerImage(t *testing.T) {
+// buildContainerImage builds the container image once per test run.
+func buildContainerImage(t *testing.T) {
 	t.Helper()
 	buildOnce.Do(func() {
 		// Dockerfile is next to this source file
 		_, thisFile, _, _ := runtime.Caller(0)
 		dockerfileDir := filepath.Dir(thisFile)
 
-		cmd := exec.Command("docker", "build", "-t", dockerImage, dockerfileDir)
+		cmd := exec.Command(containerCLI, "build", "-t", containerImage, dockerfileDir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			buildErr = fmt.Errorf("docker build failed: %v\n%s", err, out)
+			buildErr = fmt.Errorf("%s build failed: %v\n%s", containerCLI, err, out)
 			return
 		}
 		// Log on first build only, to avoid noise.
-		t.Logf("built docker image %s", dockerImage)
+		t.Logf("built container image %s", containerImage)
 	})
 	if buildErr != nil {
 		t.Fatal(buildErr)
@@ -286,11 +291,11 @@ func (f *ContainerFixture) ReadFile(path string) string {
 	return string(data)
 }
 
-// DockerExec runs a command inside the test container.
-func (f *ContainerFixture) DockerExec(args ...string) (string, error) {
+// Exec runs a command inside the test container.
+func (f *ContainerFixture) Exec(args ...string) (string, error) {
 	f.T.Helper()
 	cmdArgs := append([]string{"exec", f.containerID}, args...)
-	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	out, err := exec.Command(containerCLI, cmdArgs...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -299,7 +304,7 @@ func (f *ContainerFixture) KB(cwd string, args ...string) string {
 	f.T.Helper()
 	cmdArgs := []string{"exec", "-e", "KB_CLI_MODE=kb", "-w", cwd, f.containerID, "/test"}
 	cmdArgs = append(cmdArgs, args...)
-	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	out, err := exec.Command(containerCLI, cmdArgs...).CombinedOutput()
 	if err != nil {
 		f.T.Fatalf("kb %v: %v\n%s", args, err, out)
 	}
@@ -311,7 +316,7 @@ func (f *ContainerFixture) KBWithStdin(cwd, stdin string, args ...string) string
 	f.T.Helper()
 	cmdArgs := []string{"exec", "-i", "-e", "KB_CLI_MODE=kb", "-w", cwd, f.containerID, "/test"}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.Command("docker", cmdArgs...)
+	cmd := exec.Command(containerCLI, cmdArgs...)
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -320,7 +325,7 @@ func (f *ContainerFixture) KBWithStdin(cwd, stdin string, args ...string) string
 	return strings.TrimSpace(string(out))
 }
 
-// SetupWithContainer starts a docker container running the monetdroid server
+// SetupWithContainer starts a podman container running the monetdroid server
 // (the test binary itself in server mode) with claude available as a subprocess,
 // and an API replayer intercepting API calls.
 //
@@ -330,13 +335,13 @@ func (f *ContainerFixture) KBWithStdin(cwd, stdin string, args ...string) string
 func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode string) *ContainerFixture {
 	t.Helper()
 
-	// Check docker is available
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Fatal("docker not found, integration tests require docker")
+	// Check podman is available
+	if _, err := exec.LookPath(containerCLI); err != nil {
+		t.Fatalf("%s not found, integration tests require %s", containerCLI, containerCLI)
 	}
 
-	// Build docker image (once per test run)
-	buildDockerImage(t)
+	// Build the container image (once per test run)
+	buildContainerImage(t)
 
 	cassettesDir := filepath.Join(TestdataDir(), "cassettes", p.Name)
 	os.MkdirAll(cassettesDir, 0o755)
@@ -373,10 +378,10 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 		t.Fatalf("os.Executable: %v", err)
 	}
 
-	dockerArgs := []string{
+	runArgs := []string{
 		"run", "--rm", "-d",
-		"--add-host=host.docker.internal:host-gateway",
-		"-p", "0:8222",
+		// A bare container port asks podman for a random host port.
+		"-p", "8222",
 		"-v", testBinary + ":/test:ro",
 		"-e", "MONETDROID_IN_CONTAINER=1",
 		"-e", "ANTHROPIC_BASE_URL=" + replayerURL,
@@ -392,7 +397,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 	}
 
 	for _, ev := range p.EnvVars {
-		dockerArgs = append(dockerArgs, "-e", ev)
+		runArgs = append(runArgs, "-e", ev)
 	}
 
 	if mode == "record" {
@@ -404,7 +409,7 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 			}
 			if s.MountPath != "" {
 				if _, err := os.Stat(hostPath); err == nil {
-					dockerArgs = append(dockerArgs,
+					runArgs = append(runArgs,
 						"-v", hostPath+":"+s.MountPath+":ro",
 					)
 				} else {
@@ -416,44 +421,50 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 				if err != nil {
 					t.Fatalf("secret file %s: %v", hostPath, err)
 				}
-				dockerArgs = append(dockerArgs, "-e", s.EnvVar+"="+strings.TrimSpace(string(data)))
+				runArgs = append(runArgs, "-e", s.EnvVar+"="+strings.TrimSpace(string(data)))
 			}
 		}
 	}
 	// Replay mode: set a dummy auth token so the CLI takes the same token
 	// code path as record mode, keeping request bodies aligned.
 	if mode == "replay" {
-		dockerArgs = append(dockerArgs, "-e", "ANTHROPIC_AUTH_TOKEN=dummy-replay-auth-token")
+		runArgs = append(runArgs, "-e", "ANTHROPIC_AUTH_TOKEN=dummy-replay-auth-token")
 	}
 
 	// The server is started and restarted explicitly via startServer. The
 	// sleep only keeps the container alive, and exits after containerTimeout
 	// to terminate abandoned containers.
-	dockerArgs = append(dockerArgs, dockerImage,
+	runArgs = append(runArgs, containerImage,
 		"sleep", fmt.Sprintf("%d", containerTimeout),
 	)
 
-	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
+	runCmd := exec.Command(containerCLI, runArgs...)
+	var runStderr bytes.Buffer
+	runCmd.Stderr = &runStderr
+	out, err := runCmd.Output()
 	if err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
+		t.Fatalf("%s run: %v\n%s", containerCLI, err, runStderr.String())
 	}
 	containerID := strings.TrimSpace(string(out))
 
 	// Stream container logs to test output
-	logCmd := exec.Command("docker", "logs", "-f", containerID)
+	logCmd := exec.Command(containerCLI, "logs", "-f", containerID)
 	logCmd.Stdout = t.Output()
 	logCmd.Stderr = t.Output()
 	logCmd.Start()
 
 	t.Cleanup(func() {
-		exec.Command("docker", "stop", "-t", "5", containerID).Run()
+		exec.Command(containerCLI, "stop", "-t", "5", containerID).Run()
 		logCmd.Wait()
 	})
 
 	// Discover the host port mapped to container port 8222
-	portOut, err := exec.Command("docker", "port", containerID, "8222").Output()
+	portCmd := exec.Command(containerCLI, "port", containerID, "8222")
+	var portStderr bytes.Buffer
+	portCmd.Stderr = &portStderr
+	portOut, err := portCmd.Output()
 	if err != nil {
-		t.Fatalf("docker port: %v", err)
+		t.Fatalf("%s port: %v\n%s", containerCLI, err, portStderr.String())
 	}
 	hostAddr := strings.TrimSpace(string(portOut))
 	// Output is like "0.0.0.0:32768\n[::]:32768". Take the first line.
@@ -479,10 +490,10 @@ func SetupWithContainer(t *testing.T, p ProviderConfig, cassetteName, mode strin
 		t.Fatalf("server not ready after 10s (check container output above)")
 	}
 
-	if out, err := exec.Command("docker", "exec", containerID, "git", "config", "--global", "user.email", "test@test.com").CombinedOutput(); err != nil {
+	if out, err := exec.Command(containerCLI, "exec", containerID, "git", "config", "--global", "user.email", "test@test.com").CombinedOutput(); err != nil {
 		t.Fatalf("git config user.email: %v\n%s", err, out)
 	}
-	if out, err := exec.Command("docker", "exec", containerID, "git", "config", "--global", "user.name", "Test").CombinedOutput(); err != nil {
+	if out, err := exec.Command(containerCLI, "exec", containerID, "git", "config", "--global", "user.name", "Test").CombinedOutput(); err != nil {
 		t.Fatalf("git config user.name: %v\n%s", err, out)
 	}
 

@@ -8,7 +8,7 @@ import (
 )
 
 // StartHookListener runs an HTTP server on a random port reachable from
-// inside the container via host.docker.internal. It returns the URL to
+// inside the container via host.containers.internal. It returns the URL to
 // place in settings.json (POSTs from Claude hit handler). The server is
 // stopped automatically when the test ends.
 //
@@ -25,5 +25,5 @@ func StartHookListener(t *testing.T, handler http.HandlerFunc) string {
 	server := &http.Server{Handler: handler}
 	go server.Serve(listener)
 	t.Cleanup(func() { server.Close() })
-	return fmt.Sprintf("http://host.docker.internal:%d/hook", port)
+	return fmt.Sprintf("http://host.containers.internal:%d/hook", port)
 }

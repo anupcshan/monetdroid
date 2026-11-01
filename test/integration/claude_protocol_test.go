@@ -45,7 +45,7 @@ func TestRewindConversation(t *testing.T) {
 	}
 
 	f := SetupWithContainer(t, AllProviders[0], "rewind.jsonl.zst", testMode())
-	cmd := exec.Command("docker", "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
+	cmd := exec.Command(containerCLI, "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
 		f.containerID, "/test", "-test.run=^TestRewindConversation$", "-test.v")
 	out, err := cmd.CombinedOutput()
 	t.Logf("rewind protocol test output:\n%s", out)
@@ -213,7 +213,7 @@ func TestBranchedSessionColdLoad(t *testing.T) {
 	}
 
 	f := SetupWithSharedCassette(t, AllProviders[0], "rewind.jsonl.zst", testMode())
-	cmd := exec.Command("docker", "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
+	cmd := exec.Command(containerCLI, "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
 		f.containerID, "/test", "-test.run=^TestBranchedSessionColdLoad$", "-test.v")
 	out, err := cmd.CombinedOutput()
 	t.Logf("branched-session protocol output:\n%s", out)
@@ -528,7 +528,7 @@ func TestNativeQueue(t *testing.T) {
 	}
 
 	f := SetupWithContainer(t, AllProviders[0], "native_queue.jsonl.zst", testMode())
-	cmd := exec.Command("docker", "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
+	cmd := exec.Command(containerCLI, "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
 		f.containerID, "/test", "-test.run=^TestNativeQueue$", "-test.v")
 	out, err := cmd.CombinedOutput()
 	t.Logf("native queue protocol test output:\n%s", out)
@@ -635,7 +635,7 @@ func TestNativeQueueInterrupt(t *testing.T) {
 	// changed text breaks the next request's cassette hash. The gap
 	// recreates the window during replay.
 	f.Replayer.ToolUseStreamGap = 500 * time.Millisecond
-	cmd := exec.Command("docker", "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
+	cmd := exec.Command(containerCLI, "exec", "-e", CLAUDE_PROTOCOL_IN_CONTAINER+"=1",
 		f.containerID, "/test", "-test.run=^TestNativeQueueInterrupt$", "-test.v")
 	out, err := cmd.CombinedOutput()
 	t.Logf("native queue interrupt protocol test output:\n%s", out)

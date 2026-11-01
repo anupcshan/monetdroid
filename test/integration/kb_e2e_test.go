@@ -116,7 +116,7 @@ func main() {
 }
 `)
 		f.WriteFile(containerWorkdir+"/.claude/settings.json", kbAllowSettings)
-		f.DockerExec("git", "init", containerWorkdir)
+		f.Exec("git", "init", containerWorkdir)
 		f.RegisterKBMCP()
 
 		f.KBWithStdin(containerWorkdir, `# Foo
@@ -179,7 +179,7 @@ func TestKBNewProject(t *testing.T) {
 		f.WriteFile(containerWorkdir+"/go.mod", "module calc\n\ngo 1.23\n")
 		f.WriteFile(containerWorkdir+"/.claude/settings.json", kbAllowSettings)
 		f.WriteFile(containerWorkdir+"/CLAUDE.md", testOnlyNoQuestionsAddendum)
-		f.DockerExec("git", "init", containerWorkdir)
+		f.Exec("git", "init", containerWorkdir)
 		f.RegisterKBMCP()
 
 		page := f.Page()

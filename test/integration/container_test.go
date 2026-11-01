@@ -388,7 +388,7 @@ func Add(a, b int) int {
 		}
 		transcript := ""
 		for range 10 {
-			transcript, err = f.DockerExec("sh", "-c", `cat "$HOME"/.claude/projects/*/`+sessionID+`.jsonl`)
+			transcript, err = f.Exec("sh", "-c", `cat "$HOME"/.claude/projects/*/`+sessionID+`.jsonl`)
 			if err == nil && transcript != "" {
 				break
 			}
@@ -1454,7 +1454,7 @@ func TestHomeSessionListSlowGit(t *testing.T) {
 		{"git", "-C", dir, "worktree", "add", wsPath, "ws"},
 		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "ws"},
 	} {
-		if out, err := f.DockerExec(args...); err != nil {
+		if out, err := f.Exec(args...); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)
 		}
 	}
@@ -1661,12 +1661,12 @@ func TestReadImage(t *testing.T) {
 		// Write a normal-sized PNG into the container. Some image processors
 		// reject very small images, so use a real fixture instead of a 1x1.
 		pngB64 := base64.StdEncoding.EncodeToString(sampleImage)
-		if out, err := f.DockerExec("sh", "-c", "echo '"+pngB64+"' | base64 -d > "+containerWorkdir+"/test.png"); err != nil {
+		if out, err := f.Exec("sh", "-c", "echo '"+pngB64+"' | base64 -d > "+containerWorkdir+"/test.png"); err != nil {
 			t.Fatalf("create test.png: %v\n%s", err, out)
 		}
 		// Pin mtime so Read tool output (which includes ls -l metadata) is
 		// deterministic between record and replay runs.
-		f.DockerExec("touch", "-d", "2020-01-01T00:00:00Z", containerWorkdir+"/test.png")
+		f.Exec("touch", "-d", "2020-01-01T00:00:00Z", containerWorkdir+"/test.png")
 
 		page := f.Page()
 
@@ -1722,7 +1722,7 @@ func initGitRepo(t *testing.T, f *ContainerFixture, dir string) {
 		{"git", "-C", dir, "config", "user.name", "Test"},
 		{"git", "-C", dir, "commit", "--allow-empty", "-m", "init"},
 	} {
-		if out, err := f.DockerExec(args...); err != nil {
+		if out, err := f.Exec(args...); err != nil {
 			t.Fatalf("initGitRepo %v: %v\n%s", args, err, out)
 		}
 	}
@@ -1739,7 +1739,7 @@ func initSecondRepo(t *testing.T, f *ContainerFixture) {
 		{"git", "-C", "/work2", "worktree", "add", wsPath, "other-feature"},
 		{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "other-feature"},
 	} {
-		if out, err := f.DockerExec(args...); err != nil {
+		if out, err := f.Exec(args...); err != nil {
 			t.Fatalf("initSecondRepo %v: %v\n%s", args, err, out)
 		}
 	}
@@ -1790,7 +1790,7 @@ func TestDrawerNewWorkstream(t *testing.T) {
 		}
 
 		// Verify the branch was created inside the container.
-		out, err := f.DockerExec("git", "-C", containerWorkdir, "branch", "--list", "test-ws")
+		out, err := f.Exec("git", "-C", containerWorkdir, "branch", "--list", "test-ws")
 		if err != nil {
 			t.Fatalf("git branch --list: %v\n%s", err, out)
 		}
@@ -2090,7 +2090,7 @@ func TestRebaseWorkstream(t *testing.T) {
 			{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-rebase"},
 			{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-rebase"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2099,7 +2099,7 @@ func TestRebaseWorkstream(t *testing.T) {
 		for _, args := range [][]string{
 			{"git", "-C", containerWorkdir, "commit", "--allow-empty", "-m", "main advance"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2157,7 +2157,7 @@ func TestPullMain(t *testing.T) {
 			{"git", "-C", containerWorkdir, "remote", "add", "origin", "/tmp/remote.git"},
 			{"git", "-C", containerWorkdir, "push", "-u", "origin", "main"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2169,7 +2169,7 @@ func TestPullMain(t *testing.T) {
 			{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-pull"},
 			{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-pull"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2182,7 +2182,7 @@ func TestPullMain(t *testing.T) {
 			{"git", "-C", "/tmp/remote-clone", "commit", "--allow-empty", "-m", "upstream change"},
 			{"git", "-C", "/tmp/remote-clone", "push"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2225,7 +2225,7 @@ func TestMassSync(t *testing.T) {
 			{"git", "-C", containerWorkdir, "worktree", "add", wsConflict, "ws-conflict"},
 			{"git", "-C", wsConflict, "branch", "--set-upstream-to", "main", "ws-conflict"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2236,7 +2236,7 @@ func TestMassSync(t *testing.T) {
 			{"git", "-C", wsConflict, "add", "file.txt"},
 			{"git", "-C", wsConflict, "commit", "-m", "conflicting change"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2247,7 +2247,7 @@ func TestMassSync(t *testing.T) {
 			{"git", "-C", containerWorkdir, "add", "file.txt"},
 			{"git", "-C", containerWorkdir, "commit", "-m", "main update"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2273,7 +2273,7 @@ func TestMassSync(t *testing.T) {
 		Screenshot(t, page, "mass_sync_done")
 
 		// Verify the conflicting worktree is not mid-rebase.
-		out, err := f.DockerExec("git", "-C", wsConflict, "status")
+		out, err := f.Exec("git", "-C", wsConflict, "status")
 		if err != nil {
 			t.Fatalf("git status: %v\n%s", err, out)
 		}
@@ -2301,7 +2301,7 @@ func TestArchiveWorkstream(t *testing.T) {
 			{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-archive"},
 			{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-archive"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2358,7 +2358,7 @@ func TestPruneWorkstream(t *testing.T) {
 			{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "test-prune"},
 			{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "test-prune"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2401,13 +2401,13 @@ func TestPruneWorkstream(t *testing.T) {
 		Screenshot(t, page, "prune_done")
 
 		// Verify the work repo's worktree directory is gone.
-		out, err := f.DockerExec("test", "-d", wsPath)
+		out, err := f.Exec("test", "-d", wsPath)
 		if err == nil {
 			t.Fatalf("worktree directory should be deleted, but still exists: %s", out)
 		}
 
 		// Verify the work repo's branch is deleted.
-		out, err = f.DockerExec("git", "-C", containerWorkdir, "branch", "--list", "test-prune")
+		out, err = f.Exec("git", "-C", containerWorkdir, "branch", "--list", "test-prune")
 		if err != nil {
 			t.Fatalf("git branch --list: %v\n%s", err, out)
 		}
@@ -2430,7 +2430,7 @@ func TestPruneWorkstream(t *testing.T) {
 		}
 
 		// Verify the second repo's workstream was NOT pruned.
-		if _, err = f.DockerExec("test", "-d", work2WsPath); err != nil {
+		if _, err = f.Exec("test", "-d", work2WsPath); err != nil {
 			t.Fatalf("work2 worktree should still exist after pruning work repo, but it's gone")
 		}
 		WaitForText(t, page, "#ws-panel-work2 .ws-archived-list .ws-branch-name", "other-feature", 5*time.Second)
@@ -2451,7 +2451,7 @@ func TestBranchTree(t *testing.T) {
 			{"git", "-C", containerWorkdir, "worktree", "add", wsPath, "feat"},
 			{"git", "-C", wsPath, "branch", "--set-upstream-to", "main", "feat"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2460,7 +2460,7 @@ func TestBranchTree(t *testing.T) {
 		for _, args := range [][]string{
 			{"git", "-C", wsPath, "commit", "--allow-empty", "-m", "feat work"},
 		} {
-			if out, err := f.DockerExec(args...); err != nil {
+			if out, err := f.Exec(args...); err != nil {
 				t.Fatalf("%v: %v\n%s", args, err, out)
 			}
 		}
@@ -2488,7 +2488,7 @@ func TestBranchTree(t *testing.T) {
 				{"git", "-C", wsPath, "config", fmt.Sprintf("branch.%s.remote", ch.name), "."},
 				{"git", "-C", wsPath, "config", fmt.Sprintf("branch.%s.merge", ch.name), "refs/heads/" + ch.upstream},
 			} {
-				if out, err := f.DockerExec(args...); err != nil {
+				if out, err := f.Exec(args...); err != nil {
 					t.Fatalf("%v: %v\n%s", args, err, out)
 				}
 			}
@@ -2498,14 +2498,14 @@ func TestBranchTree(t *testing.T) {
 					{"git", "-C", wsPath, "checkout", ch.name},
 					{"git", "-C", wsPath, "commit", "--allow-empty", "-m", fmt.Sprintf("%s commit %d", ch.name, i+1)},
 				} {
-					if out, err := f.DockerExec(args...); err != nil {
+					if out, err := f.Exec(args...); err != nil {
 						t.Fatalf("%v: %v\n%s", args, err, out)
 					}
 				}
 			}
 		}
 		// Switch back to feat (the worktree's primary branch).
-		if out, err := f.DockerExec("git", "-C", wsPath, "checkout", "feat"); err != nil {
+		if out, err := f.Exec("git", "-C", wsPath, "checkout", "feat"); err != nil {
 			t.Fatalf("checkout feat: %v\n%s", err, out)
 		}
 
@@ -3103,8 +3103,8 @@ func getEnv(key, fallback string) string {
 		// reach for Bash's `ls -la` despite the "no Bash" prompt instruction.
 		// `ls -la /work` includes a `..` entry for the parent directory
 		// Pin its mtime too for stable output.
-		f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
-		f.DockerExec("touch", "-d", "2020-01-01T00:00:00Z", "/")
+		f.Exec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+		f.Exec("touch", "-d", "2020-01-01T00:00:00Z", "/")
 
 		// No git init because this test's subagents scan source files, and a .git
 		// directory adds non-deterministic Glob results (object creation order
@@ -3162,7 +3162,7 @@ func getEnv(key, fallback string) string {
 		// directory and on /work itself, which leaks into any `ls -la /work`
 		// Bash output the model emits and breaks cassette match across runs.
 		// Re-pin after the write.
-		f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+		f.Exec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
 
 		// Send a prompt that explicitly requests Agent tool usage for parallel
 		// investigation. Every file is named in the prompt and Glob is banned
@@ -3350,7 +3350,7 @@ func handleUsers(db *sql.DB) http.HandlerFunc {
 			f.WriteFile(containerWorkdir+path, files[path])
 		}
 		// Pin mtimes in case the agent reaches for Bash despite the prompt.
-		f.DockerExec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
+		f.Exec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
 
 		page := f.Page()
 		CreatePlainSession(t, page, containerWorkdir)
@@ -3652,8 +3652,8 @@ func TestKBWebView(t *testing.T) {
 	WithProviders(t, "kb_web_view.jsonl.zst", func(t *testing.T, f *ContainerFixture) {
 
 		// KB needs a git repo (for git-common-dir resolution) with at least one commit (for git grep).
-		f.DockerExec("git", "init", containerWorkdir)
-		f.DockerExec("git", "-C", containerWorkdir, "commit", "--allow-empty", "-m", "init")
+		f.Exec("git", "init", containerWorkdir)
+		f.Exec("git", "-C", containerWorkdir, "commit", "--allow-empty", "-m", "init")
 		f.KBWithStdin(containerWorkdir, "# Test KB\n\n- [Details](details.md)\n- [External](https://example.com)\n", "write", "index.md")
 		f.KBWithStdin(containerWorkdir, "# Details Page\n\nSome details here.\n", "write", "details.md")
 
@@ -3949,8 +3949,8 @@ func TestDiffStatInCostBar(t *testing.T) {
 		initGitRepo(t, f, containerWorkdir)
 		// Create a tracked file and commit it so git diff HEAD can detect changes.
 		f.WriteFile(containerWorkdir+"/hello.txt", "original content\n")
-		f.DockerExec("git", "-C", containerWorkdir, "add", "hello.txt")
-		f.DockerExec("git", "-C", containerWorkdir, "commit", "-m", "add hello")
+		f.Exec("git", "-C", containerWorkdir, "add", "hello.txt")
+		f.Exec("git", "-C", containerWorkdir, "commit", "-m", "add hello")
 
 		page := f.Page()
 		CreatePlainSession(t, page, containerWorkdir)
@@ -4142,7 +4142,7 @@ func waitForFile(t *testing.T, f *ContainerFixture, path string, timeout time.Du
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
-		if _, err := f.DockerExec("test", "-f", path); err == nil {
+		if _, err := f.Exec("test", "-f", path); err == nil {
 			return
 		}
 		if time.Now().After(deadline) {
