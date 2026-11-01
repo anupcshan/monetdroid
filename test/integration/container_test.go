@@ -166,11 +166,14 @@ func TestMain(m *testing.M) {
 	if os.Getenv("MONETDROID_IN_CONTAINER") == "1" {
 		// Inside the container: run the monetdroid server.
 		os.MkdirAll(containerWorkdir, 0o755)
+		ensureWorkspaceTrust()
+		os.MkdirAll(modelsDir, 0o755)
+		// Pin after every top-level directory exists. Creating one updates
+		// its parent's mtime, which would otherwise leak into command output
+		// such as `ls -la /work`.
 		if err := pinFixtureMtimes(containerWorkdir); err != nil {
 			log.Fatalf("pin fixture mtimes: %v", err)
 		}
-		ensureWorkspaceTrust()
-		os.MkdirAll(modelsDir, 0o755)
 		claudeBin := os.Getenv("MONETDROID_CLAUDE_BIN")
 		if claudeBin == "" {
 			claudeBin = "claude"
@@ -565,7 +568,7 @@ func TestSubagentPermission(t *testing.T) {
 
 		// Delegate a file write to a sub-agent so the sub-agent's own Write tool
 		// is what requires permission, not the parent's.
-		prompt := "Use the Task tool to spawn a sub-agent. The sub-agent must create a new file named done.txt in the current working directory with the contents 'completed'. You must delegate this to the sub-agent and must not write the file yourself. DO NOT try to read the new file's timestamp, especially using ls"
+		prompt := "Use the Agent tool to spawn a sub-agent. The sub-agent must create a new file named done.txt in the current working directory with the contents 'completed'. You must delegate this to the sub-agent and must not write the file yourself. After launching the sub-agent, reply with one short sentence acknowledging the launch. DO NOT try to read the new file's timestamp, especially using ls"
 		page.MustElement(`textarea[name="text"]`).MustInput(prompt)
 		page.MustElement(`.send-btn`).MustClick()
 
@@ -636,7 +639,7 @@ func TestAskUserQuestion(t *testing.T) {
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
 		// Ask something that triggers AskUserQuestion
-		page.MustElement(`textarea[name="text"]`).MustInput("I want to set up a new project. Use the AskUserQuestion tool to ask me what programming language I prefer, with options: Go, Python, Rust, TypeScript")
+		page.MustElement(`textarea[name="text"]`).MustInput("Use the AskUserQuestion tool to ask me which programming language I prefer. Offer the options Go, Python, Rust, and TypeScript. After I answer, reply with one short sentence naming my choice. Do not use any tools after I answer.")
 		page.MustElement(`.send-btn`).MustClick()
 
 		// Wait for the ask-user prompt to appear (radio buttons)
@@ -2038,7 +2041,7 @@ func main() {
 
 		// Send a prompt that triggers plan mode.
 		page.MustElement(`textarea[name="text"]`).MustInput(
-			"I want to add a fibonacci function to main.go. Enter plan mode, make a brief plan, then call ExitPlanMode with it. Do not ask any questions. Do not use AskUserQuestion.")
+			"I want to add a fibonacci function to main.go. Enter plan mode, make a brief plan, then call ExitPlanMode with it. Do not ask any questions. Do not use AskUserQuestion. Do not launch sub-agents or background tasks. Explore the file yourself.")
 		page.MustElement(`.send-btn`).MustClick()
 
 		WaitForText(t, page, ".msg-user", "fibonacci", 30*time.Second)
@@ -3888,7 +3891,7 @@ func TestPermissionSuggestions(t *testing.T) {
 }
 
 var expectedModelName = map[string]string{
-	"mimo": "mimo-v2.5",
+	"mimo": "mimo-v2.6-flash",
 }
 
 func modelNameFromProvider(t *testing.T) string {
@@ -4067,6 +4070,9 @@ func runSkillTest(t *testing.T, v skillVariant) {
 		if v.subagent {
 			page.MustElement(scope + "summary").MustClick()
 		}
+		// Capture the assistant count before allowing the command. The
+		// turn-completion wait at the end detects the response that follows.
+		prevAssistants := len(page.MustElements(".msg-assistant"))
 		page.MustElement(scope + ".perm-allow").MustClick()
 		WaitForText(t, page, scope+".tool-name", "Allowed", 30*time.Second)
 		Screenshot(t, page, v.screenshot+"_allowed")
@@ -4078,11 +4084,17 @@ func runSkillTest(t *testing.T, v skillVariant) {
 		assertYesfileCreated(t, f)
 		Screenshot(t, page, v.screenshot+"_complete")
 
+		// Wait for the parent turn to complete so every API call is recorded.
+		// A finished turn implies any forked skill sub-agent has finished,
+		// either because the fork ran in the foreground or because its
+		// completion notification started the turn being awaited.
+		WaitForTurnComplete(t, page, prevAssistants)
+
 		// A resolved permission must not re-prompt when the session is
 		// re-rendered from the log.
 		sessionURL := page.MustEval(`() => window.location.href`).String()
 		page.MustNavigate(sessionURL).MustWaitStable()
-		WaitForElement(t, page, ".msg-assistant", 10*time.Second)
+		WaitForElement(t, page, ".msg-user", 10*time.Second)
 		reprompts := page.MustEval(`() => document.querySelectorAll('.perm-inline').length`).Int()
 		if reprompts != 0 {
 			Screenshot(t, page, v.screenshot+"_reprompts_after_reload")

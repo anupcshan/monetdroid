@@ -221,7 +221,7 @@ func TestKBOverwriteReviewComment(t *testing.T) {
 		// Inline comment while blocked.
 		WaitForElement(t, page, ".tool-chip[open] .diff-ins .diff-line-num", 5*time.Second).MustClick()
 		WaitForElement(t, page, ".review-form", 5*time.Second)
-		page.MustElement(".review-textarea").MustInput("Make Subtract return (int, error) to match a future error case")
+		page.MustElement(".review-textarea").MustInput("Change Subtract to return (int, error) and return a nil error")
 		page.MustElement(".review-submit").MustClick()
 		WaitForElement(t, page, ".review-comment", 5*time.Second)
 		WaitForText(t, page, ".review-bar", "1 comment", 5*time.Second)

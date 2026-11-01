@@ -67,8 +67,8 @@ var AllProviders = []ProviderConfig{
 	{
 		Name:     "mimo",
 		Upstream: "https://api.xiaomimimo.com/anthropic",
-		Model:    "mimo-v2.5",
-		EnvVars:  []string{"CLAUDE_CODE_SUBAGENT_MODEL=mimo-v2.5"},
+		Model:    "mimo-v2.6-flash",
+		EnvVars:  []string{"CLAUDE_CODE_SUBAGENT_MODEL=mimo-v2.6-flash"},
 		Secrets: []SecretSource{
 			{HostPath: "~/.mimo/api_key", EnvVar: "ANTHROPIC_AUTH_TOKEN"},
 		},
