@@ -133,10 +133,45 @@ type ProcessConfig struct {
 	// session-specific variables (e.g. bashstreamer URL).
 	ExtraEnv []string
 
+	// ExtraFiles are passed to the subprocess as fds 3 and up. They are
+	// closed in the parent once the process has started.
+	ExtraFiles []*os.File
+
+	// BeforeKill, when set, runs at the start of Kill before the process is
+	// terminated. A sandbox launcher uses it to close the pipe whose EOF
+	// stops the container.
+	BeforeKill func()
+
+	// KillTimeout bounds how long Kill waits for the process to exit after
+	// BeforeKill runs and stdin closes. Zero kills the process immediately.
+	KillTimeout time.Duration
+
+	// OnExit, when set, runs once when the process's output ends, whether it
+	// exited on its own or was killed. It runs before Dead is closed.
+	OnExit func()
+
 	// BashstreamerDir, when set, is removed in Kill().
 	// It contains the per-process CLAUDE_CODE_SHELL_PREFIX wrapper
 	// script and signal file. Set by NewBashstreamerEnv.
 	BashstreamerDir string
+}
+
+// BaseEnv returns the environment variables every claude process needs.
+// Callers that build the environment explicitly, such as a container
+// launcher, use this instead of inheriting the host environment.
+func BaseEnv() []string {
+	return []string{
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// Tasks are on by default in interactive mode. We run Claude with -p
+		// (non-interactive), so we need this opt-in to keep them.
+		"CLAUDE_CODE_ENABLE_TASKS=1",
+		// Strip the built-in git status snapshot and commit/PR workflow
+		// instructions from the system prompt. The snapshot is captured once
+		// at process start, so it goes stale the moment anything changes git
+		// state outside Claude (branch switch, shell edits). Claude can run
+		// `git` directly when it needs current state.
+		"CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1",
+	}
 }
 
 // ClaudeProcess owns a long-running claude CLI subprocess.
@@ -159,7 +194,13 @@ type ClaudeProcess struct {
 	onEvent            func(protocol.StreamEvent)
 	onRawEvent         func(protocol.RawStreamEvent)
 	onCommandLifecycle func(protocol.CommandLifecycleEvent)
+	beforeKill         func()
+	onExit             func()
+	killTimeout        time.Duration
 	bsDir              string // bashstreamer wrapper dir, removed in Kill()
+
+	killOnce sync.Once
+	killed   chan struct{}
 }
 
 // StartProcess starts a new claude CLI subprocess with default configuration.
@@ -212,20 +253,10 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		Setsid:    true,
 		Pdeathsig: syscall.SIGKILL,
 	}
-	cmd.Env = append(os.Environ(),
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-		// Tasks are on by default in interactive mode. We run Claude with -p
-		// (non-interactive), so we need this opt-in to keep them.
-		"CLAUDE_CODE_ENABLE_TASKS=1",
-		// Strip the built-in git status snapshot and commit/PR workflow
-		// instructions from the system prompt. The snapshot is captured once
-		// at process start, so it goes stale the moment anything changes git
-		// state outside Claude (branch switch, shell edits). Claude can run
-		// `git` directly when it needs current state.
-		"CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1",
-	)
+	cmd.Env = append(os.Environ(), BaseEnv()...)
 	if cfg != nil {
 		cmd.Env = append(cmd.Env, cfg.ExtraEnv...)
+		cmd.ExtraFiles = cfg.ExtraFiles
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -244,14 +275,16 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 	var permHandler PermissionHandler
 	var onRawEvent func(protocol.RawStreamEvent)
 	var onCommandLifecycle func(protocol.CommandLifecycleEvent)
+	var beforeKill, onExit func()
+	var killTimeout time.Duration
+	var bsDir string
 	if cfg != nil {
 		permHandler = cfg.PermissionHandler
 		onRawEvent = cfg.OnRawEvent
 		onCommandLifecycle = cfg.OnCommandLifecycle
-	}
-
-	var bsDir string
-	if cfg != nil {
+		beforeKill = cfg.BeforeKill
+		onExit = cfg.OnExit
+		killTimeout = cfg.KillTimeout
 		bsDir = cfg.BashstreamerDir
 	}
 	p := &ClaudeProcess{
@@ -265,10 +298,18 @@ func StartProcessWithConfig(cwd string, onEvent func(protocol.StreamEvent), resu
 		onEvent:            onEvent,
 		onRawEvent:         onRawEvent,
 		onCommandLifecycle: onCommandLifecycle,
+		beforeKill:         beforeKill,
+		onExit:             onExit,
+		killTimeout:        killTimeout,
 		bsDir:              bsDir,
+		killed:             make(chan struct{}),
 	}
 
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	for _, f := range cmd.ExtraFiles {
+		f.Close()
+	}
+	if err != nil {
 		return nil, fmt.Errorf("start: %w", err)
 	}
 
@@ -387,6 +428,9 @@ func (p *ClaudeProcess) scan(stdout io.Reader, logLabel string) {
 	}
 
 	log.Printf("[claude exit][%s] scanner ended", logLabel)
+	if p.onExit != nil {
+		p.onExit()
+	}
 	close(p.dead)
 }
 
@@ -672,12 +716,28 @@ func (p *ClaudeProcess) WaitForTurnDone(ctx context.Context) error {
 
 // Kill terminates the process and waits for exit.
 func (p *ClaudeProcess) Kill() {
-	p.stdin.Close()
-	p.cmd.Process.Kill()
-	p.cmd.Wait()
-	<-p.dead // wait for scanner to finish
+	p.killOnce.Do(func() {
+		if p.beforeKill != nil {
+			p.beforeKill()
+		}
+		p.stdin.Close()
+		if p.killTimeout > 0 {
+			select {
+			case <-p.dead:
+			case <-time.After(p.killTimeout):
+				p.cmd.Process.Kill()
+			}
+		} else {
+			p.cmd.Process.Kill()
+		}
+		// Wait closes the stdout pipe, so the scanner must finish first.
+		<-p.dead
+		p.cmd.Wait()
 
-	if p.bsDir != "" {
-		os.RemoveAll(p.bsDir)
-	}
+		if p.bsDir != "" {
+			os.RemoveAll(p.bsDir)
+		}
+		close(p.killed)
+	})
+	<-p.killed
 }

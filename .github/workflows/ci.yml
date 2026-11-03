@@ -29,6 +29,7 @@ jobs:
           fi
           grep -q "^$(id -un):" /etc/subuid || sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"
           podman info
+      - uses: cachix/install-nix-action@v31
       - run: go test -v ./... -count=1 -timeout 600s
       - uses: actions/upload-artifact@v4
         if: failure()
