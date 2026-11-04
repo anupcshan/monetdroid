@@ -46,6 +46,7 @@
             androidSdk
             pkgs.gradle
             pkgs.kotlin
+            pkgs.podman
           ];
 
           ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
