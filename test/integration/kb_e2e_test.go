@@ -22,8 +22,9 @@ type claudeProject struct {
 }
 
 type claudeMcpServer struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
+	Command    string   `json:"command"`
+	Args       []string `json:"args,omitempty"`
+	AlwaysLoad bool     `json:"alwaysLoad,omitempty"`
 }
 
 // kbAllowSettings is dropped at <cwd>/.claude/settings.json so Claude
@@ -71,7 +72,10 @@ func (f *ContainerFixture) RegisterKBMCP() {
 	if cfg.McpServers == nil {
 		cfg.McpServers = map[string]claudeMcpServer{}
 	}
-	cfg.McpServers["kb"] = claudeMcpServer{Command: "kb", Args: []string{"mcp"}}
+	// alwaysLoad keeps the tool descriptions in the prompt. Tool search
+	// defers MCP tools when it is enabled, and the descriptions carry the
+	// resume guidance this test checks.
+	cfg.McpServers["kb"] = claudeMcpServer{Command: "kb", Args: []string{"mcp"}, AlwaysLoad: true}
 	out, err := json.Marshal(cfg)
 	if err != nil {
 		f.T.Fatalf("RegisterKBMCP: marshal: %v", err)
@@ -157,7 +161,7 @@ func main() {
 		}
 
 		if kbCalls == 0 {
-			t.Fatalf("expected at least one mcp__kb__* call; tools seen:\n%s", strings.Join(toolNames, "\n"))
+			t.Fatalf("expected at least one mcp__kb__* call. Tools seen:\n%s", strings.Join(toolNames, "\n"))
 		}
 
 		text := assistantText.String()

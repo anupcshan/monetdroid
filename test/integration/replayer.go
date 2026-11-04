@@ -589,6 +589,7 @@ var (
 		"system":             true,
 		"tools":              true,
 		"stop_sequences":     true,
+		"safeguards":         true,
 	}
 
 	// deniedRequestKeys are stripped from the cassette silently. See file

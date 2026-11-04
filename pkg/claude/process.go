@@ -165,6 +165,11 @@ func BaseEnv() []string {
 		// Tasks are on by default in interactive mode. We run Claude with -p
 		// (non-interactive), so we need this opt-in to keep them.
 		"CLAUDE_CODE_ENABLE_TASKS=1",
+		// The CLI offers the task-tracking tools (TaskCreate/TaskUpdate) only
+		// on a fixed list of Anthropic models. The todo panel renders their
+		// events, so enable them for every model, including third-party
+		// model wrappers.
+		"CLAUDE_CODE_ENABLE_TODO_TOOLS=1",
 		// Strip the built-in git status snapshot and commit/PR workflow
 		// instructions from the system prompt. The snapshot is captured once
 		// at process start, so it goes stale the moment anything changes git
@@ -641,8 +646,9 @@ func (p *ClaudeProcess) SetPermissionMode(mode PermissionMode) error {
 // RewindResult holds the details claude reports for a rewind_conversation
 // control request.
 type RewindResult struct {
-	// PrecedingAssistantUUID is the target message's parent. After the rewind,
-	// the next message attaches there, becoming a sibling of the target.
+	// PrecedingAssistantUUID is the nearest assistant message before the
+	// target on the active branch. SetTip uses it to truncate the abandoned
+	// branch.
 	PrecedingAssistantUUID string
 	// PrefillText is the target message's text, suitable for prefilling an
 	// edit field.

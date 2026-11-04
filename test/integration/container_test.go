@@ -1504,6 +1504,11 @@ func TestBashSpinner(t *testing.T) {
 
 		// Command substitution ($()) triggers a permission prompt, so allow it.
 		WaitForElement(t, page, ".perm-allow", 10*time.Second)
+		// The background command runs for ten seconds. Replay serves
+		// responses immediately, so the CLI would send its next request
+		// before the command finishes, without the task notification the
+		// recording contains. Hold API requests until it finishes.
+		f.Replayer.Pause()
 		page.MustElement(`.perm-allow`).MustClick()
 
 		// Spinner should still be present because the bg command is still running.
@@ -1543,6 +1548,10 @@ func TestBashSpinner(t *testing.T) {
 
 		// Wait for all output to arrive
 		WaitForText(t, page, ".tool-bg-output", "step 10", 30*time.Second)
+
+		// The command has finished and the task notification is queued.
+		// Release the held request so the CLI's next request carries it.
+		f.Replayer.Unpause()
 
 		// Verify no duplicate output (each step should appear exactly once)
 		finalBgText := page.MustEval(`() => document.querySelector('.tool-bg-output').textContent`).String()
@@ -3165,10 +3174,11 @@ func getEnv(key, fallback string) string {
 		f.Exec("find", containerWorkdir, "-exec", "touch", "-d", "2020-01-01T00:00:00Z", "{}", "+")
 
 		// Send a prompt that explicitly requests Agent tool usage for parallel
-		// investigation. Every file is named in the prompt and Glob is banned
-		// because Glob's output ordering is non-deterministic across runs
-		// An explicit file list with no Glob/Bash eliminates that variance.
-		prompt := fmt.Sprintf("Launch three parallel foreground agents (run_in_background: false, Read/Grep only, no Bash, no Glob) to investigate these files: %s. Look for: 1) SQL injection vulnerabilities, 2) hardcoded secrets or credentials, 3) HTTP handler input validation. Report combined findings.", fileList)
+		// investigation. Every file is named in the prompt and search tools are
+		// banned because native CLI builds do not offer Grep and Glob's output
+		// ordering is non-deterministic across runs. An explicit file list with
+		// Read as the only tool eliminates that variance.
+		prompt := fmt.Sprintf("Launch three parallel foreground agents (run_in_background: false, Read only, no Bash, no Glob, no Grep) to investigate these files: %s. Look for: 1) SQL injection vulnerabilities, 2) hardcoded secrets or credentials, 3) HTTP handler input validation. Report combined findings.", fileList)
 		page.MustElement(`textarea[name="text"]`).MustInput(prompt)
 		page.MustElement(`.send-btn`).MustClick()
 
@@ -3224,7 +3234,7 @@ func getEnv(key, fallback string) string {
 		events := f.SessionLog()
 
 		// Verify each opened sub-agent section contains the sub-agent's internal
-		// tool calls (Read/Grep/Glob), not just the Agent's final summary.
+		// tool calls (Read), not just the Agent's final summary.
 		for i, slot := range slots {
 			slotID := slot.MustAttribute("id")
 			if slotID == nil || *slotID == "" {
@@ -4054,7 +4064,7 @@ func runSkillTest(t *testing.T, v skillVariant) {
 		CreatePlainSession(t, page, containerWorkdir)
 		WaitForText(t, page, "#session-label", containerWorkdir, 5*time.Second)
 
-		page.MustElement(`textarea[name="text"]`).MustInput("Invoke yesfile skill")
+		page.MustElement(`textarea[name="text"]`).MustInput("Invoke the yesfile skill. After it returns, reply with its result and stop. Do not run any tools yourself.")
 		page.MustElement(`.send-btn`).MustClick()
 
 		// A forked skill runs its Bash command in a subagent, so the prompt

@@ -77,11 +77,11 @@ func assertRewindContract(t *testing.T) {
 
 	sessionID, target, res := rewindAndResend(t, ctx, proc)
 
-	// The contract: the response names the branch point (the target's
-	// parent), and the next message attaches there.
-	if res.PrecedingAssistantUUID != target.ParentUUID {
-		t.Fatalf("precedingAssistantUuid %q != target parent %q",
-			res.PrecedingAssistantUUID, target.ParentUUID)
+	// The contract: the response names the assistant that precedes the
+	// target on the active branch.
+	if want := precedingAssistantUUID(readTranscript(sessionID), target.UUID); res.PrecedingAssistantUUID != want {
+		t.Fatalf("precedingAssistantUuid %q != nearest assistant ancestor %q",
+			res.PrecedingAssistantUUID, want)
 	}
 	if !strings.Contains(res.PrefillText, "22222") {
 		t.Fatalf("prefillText %q does not contain the target message text", res.PrefillText)
@@ -167,6 +167,27 @@ func rewindAndResend(t *testing.T, ctx context.Context, proc claude.Process) (st
 	}
 	send("Reply with just the number 33333.")
 	return sessionID, target, res
+}
+
+// precedingAssistantUUID walks the transcript's parent links from uuid and
+// returns the nearest assistant entry's uuid. It returns "" when the chain
+// leaves the transcript without finding one.
+func precedingAssistantUUID(entries []transcriptEntry, uuid string) string {
+	byUUID := make(map[string]transcriptEntry, len(entries))
+	for _, e := range entries {
+		byUUID[e.UUID] = e
+	}
+	for uuid != "" {
+		e, ok := byUUID[uuid]
+		if !ok {
+			return ""
+		}
+		if e.Type == "assistant" {
+			return e.UUID
+		}
+		uuid = e.ParentUUID
+	}
+	return ""
 }
 
 // waitForTranscriptFlush polls until the transcript holds the user line
